@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 /** Mirrors `fs::Entry` in src-tauri/src/fs/mod.rs. */
@@ -16,6 +16,18 @@ export const listDir = (path: string) => invoke<Entry[]>("list_dir", { path });
 export const homeDir = () => invoke<string>("home_dir");
 export const watchDir = (path: string) => invoke<void>("watch_dir", { path });
 export const openPath = (path: string) => invoke<void>("open_path", { path });
+
+/** Starts a native OS drag so files can be dropped into Explorer and other apps. */
+export const startDrag = (paths: string[]) => invoke<void>("start_drag", { paths });
+
+/** URL of the OS thumbnail (or icon) for `path`, served by the Rust `thumb://` protocol. */
+export const thumbUrl = (path: string, size: number) => `${convertFileSrc(path, "thumb")}?s=${size}`;
+
+/** Explorer's rule: dragging within a volume moves, across volumes copies. */
+export function sameVolume(a: string, b: string): boolean {
+  const root = (p: string) => (/^[a-zA-Z]:/.test(p) ? p.slice(0, 2).toLowerCase() : p.startsWith("\\\\") ? p.split("\\").slice(0, 4).join("\\").toLowerCase() : "/");
+  return root(a) === root(b);
+}
 
 export const trashPaths = (targets: string[]) => invoke<void>("trash_paths", { targets });
 export const renamePath = (path: string, newName: string) =>

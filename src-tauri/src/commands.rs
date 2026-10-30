@@ -57,6 +57,41 @@ pub fn open_path(path: String) -> CmdResult<()> {
     tauri_plugin_opener::open_path(&path, None::<&str>).map_err(|e| e.to_string())
 }
 
+/// Starts a native OS drag of `paths`, so files can be dropped into Explorer and other apps.
+/// Drops back onto Folio arrive through the webview's regular drag-drop events.
+#[tauri::command]
+pub async fn start_drag(window: tauri::WebviewWindow, paths: Vec<String>) -> CmdResult<()> {
+    #[cfg(not(target_os = "linux"))]
+    {
+        let files: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+        let first = files.first().cloned().ok_or("Nothing to drag")?;
+        let preview = blocking(move || {
+            crate::platform::thumbnail_png(&first, 64)
+                .or_else(|_| crate::platform::encode_png(1, 1, &[0, 0, 0, 0]))
+        })
+        .await?;
+        let target = window.clone();
+        window
+            .run_on_main_thread(move || {
+                if let Err(e) = drag::start_drag(
+                    &target,
+                    drag::DragItem::Files(files),
+                    drag::Image::Raw(preview),
+                    |_, _| {},
+                    drag::Options::default(),
+                ) {
+                    eprintln!("native drag failed: {e}");
+                }
+            })
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = (window, paths);
+        Err("Dragging to other apps is not supported on Linux yet".into())
+    }
+}
+
 #[tauri::command]
 pub async fn trash_paths(targets: Vec<String>) -> CmdResult<()> {
     blocking(move || ops::trash(&paths(targets)).map_err(|e| e.to_string())).await

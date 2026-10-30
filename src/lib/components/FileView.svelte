@@ -12,15 +12,15 @@
   const LIST_PAD_Y = 4;
   /** Extra rows rendered above and below the viewport. */
   const OVERSCAN = 3;
-
-  export const DRAG_MIME = "application/x-folio-paths";
+  /** Pointer travel (px) before a press turns into a native drag. */
+  const DRAG_THRESHOLD = 6;
 </script>
 
 <script lang="ts">
   import type { Entry } from "$lib/api/fs";
   import { formatDate, formatSize } from "$lib/format";
   import FolderIcon from "./FolderIcon.svelte";
-  import FileIcon from "./FileIcon.svelte";
+  import Thumbnail from "./Thumbnail.svelte";
   import type { View } from "./Toolbar.svelte";
 
   let {
@@ -34,7 +34,8 @@
     onopen,
     onrename,
     oncancelrename,
-    ondrop,
+    ondragout,
+    dropTarget,
   }: {
     entries: Entry[];
     view: View;
@@ -47,14 +48,17 @@
     onopen: (entry: Entry) => void;
     onrename: (entry: Entry, newName: string) => void;
     oncancelrename: () => void;
-    ondrop: (paths: string[], target: Entry, copy: boolean) => void;
+    /** Called once a press on an item moves far enough to become a drag. */
+    ondragout: (paths: string[]) => void;
+    /** Folder path currently under a native drag, highlighted as drop target. */
+    dropTarget: string | null;
   } = $props();
 
   let scroller: HTMLDivElement;
   let scrollTop = $state(0);
   let width = $state(0);
   let height = $state(0);
-  let dropTarget = $state<string | null>(null);
+  let press: { x: number; y: number; entry: Entry } | null = null;
 
   let grid = $derived(view === "grid");
   let padX = $derived(grid ? GRID_PAD_X : LIST_PAD_X);
@@ -94,26 +98,20 @@
       : `top:${padY + row * rowH}px;left:${padX}px;right:${padX}px;height:${ROW_H}px`;
   }
 
-  function dragStart(e: DragEvent, entry: Entry) {
-    const paths = selection.has(entry.path) ? [...selection] : [entry.path];
-    e.dataTransfer!.setData(DRAG_MIME, JSON.stringify(paths));
-    e.dataTransfer!.effectAllowed = "copyMove";
+  function pointerDown(e: PointerEvent, entry: Entry) {
+    if (e.button === 0 && renaming !== entry.path) press = { x: e.clientX, y: e.clientY, entry };
   }
 
-  function dragOver(e: DragEvent, entry: Entry) {
-    if (!entry.isDir || !e.dataTransfer?.types.includes(DRAG_MIME)) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = e.ctrlKey ? "copy" : "move";
-    dropTarget = entry.path;
-  }
-
-  function drop(e: DragEvent, entry: Entry) {
-    dropTarget = null;
-    const raw = e.dataTransfer?.getData(DRAG_MIME);
-    if (!raw || !entry.isDir) return;
-    e.preventDefault();
-    const paths: string[] = JSON.parse(raw);
-    if (!paths.includes(entry.path)) ondrop(paths, entry, e.ctrlKey);
+  function pointerMove(e: PointerEvent) {
+    if (!press) return;
+    if (!(e.buttons & 1)) {
+      press = null;
+      return;
+    }
+    if (Math.hypot(e.clientX - press.x, e.clientY - press.y) < DRAG_THRESHOLD) return;
+    const { entry } = press;
+    press = null;
+    ondragout(selection.has(entry.path) ? [...selection] : [entry.path]);
   }
 
   function renameInput(node: HTMLInputElement, entry: Entry) {
@@ -137,6 +135,8 @@
   </div>
 {/if}
 
+<svelte:window onpointermove={pointerMove} onpointerup={() => (press = null)} />
+
 <div
   class="scroller"
   bind:this={scroller}
@@ -157,23 +157,20 @@
         class:cut={cut.has(entry.path)}
         class:drop={dropTarget === entry.path}
         style={position(index)}
-        draggable={renaming !== entry.path}
+        data-drop-path={entry.isDir ? entry.path : undefined}
         role="option"
         tabindex="-1"
         aria-selected={selected}
         onclick={(e) => onitemclick(index, e)}
         ondblclick={() => onopen(entry)}
-        ondragstart={(e) => dragStart(e, entry)}
-        ondragover={(e) => dragOver(e, entry)}
-        ondragleave={() => (dropTarget = null)}
-        ondrop={(e) => drop(e, entry)}>
+        onpointerdown={(e) => pointerDown(e, entry)}>
         {#if grid}
           <span class="thumb">
-            {#if entry.isDir}<FolderIcon size={64} />{:else}<FileIcon name={entry.name} size={56} />{/if}
+            {#if entry.isDir}<FolderIcon size={64} />{:else}<Thumbnail path={entry.path} name={entry.name} size={72} />{/if}
           </span>
         {:else}
           <span class="icon">
-            {#if entry.isDir}<FolderIcon size={18} />{:else}<FileIcon name="" size={18} />{/if}
+            {#if entry.isDir}<FolderIcon size={18} />{:else}<Thumbnail path={entry.path} name="" size={18} />{/if}
           </span>
         {/if}
 

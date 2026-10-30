@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
+  import { getCurrentWebview } from "@tauri-apps/api/webview";
   import {
     copyPaths,
     createFolder,
@@ -11,6 +12,8 @@
     openPath,
     parentOf,
     renamePath,
+    sameVolume,
+    startDrag,
     trashPaths,
     watchDir,
     type Entry,
@@ -35,6 +38,9 @@
 
   let clipboard = $state<{ mode: "copy" | "cut"; paths: string[] } | null>(null);
   let cutSet = $derived(new Set(clipboard?.mode === "cut" ? clipboard.paths : []));
+
+  /** Folder under a native drag (from Folio itself or another app). */
+  let dropTarget = $state<string | null>(null);
 
   let toast = $state<{ text: string; error: boolean } | null>(null);
   let toastTimer: ReturnType<typeof setTimeout>;
@@ -209,6 +215,24 @@
     await transfer(paths, path, mode === "copy");
   }
 
+  // ---- Native drag & drop ----
+
+  /** Finds the folder element under a drag position (physical pixels). */
+  function folderAt(pos: { x: number; y: number }): string | null {
+    const el = document.elementFromPoint(pos.x / devicePixelRatio, pos.y / devicePixelRatio);
+    return el?.closest<HTMLElement>("[data-drop-path]")?.dataset.dropPath ?? null;
+  }
+
+  async function dropPaths(paths: string[], dest: string) {
+    // Dropping items back into the folder they came from is a no-op.
+    const sources = paths.filter((p) => p !== dest && parentOf(p) !== dest);
+    if (sources.length) await transfer(sources, dest, !sameVolume(sources[0], dest));
+  }
+
+  function dragOut(paths: string[]) {
+    startDrag(paths).catch((e) => notify(String(e), true));
+  }
+
   // ---- Keyboard ----
 
   function onkeydown(e: KeyboardEvent) {
@@ -245,18 +269,29 @@
     const unlisten = onDirChanged((changed) => {
       if (changed === path && !renaming) refresh();
     });
+    const unlistenDrop = getCurrentWebview().onDragDropEvent(({ payload }) => {
+      if (payload.type === "enter" || payload.type === "over") dropTarget = folderAt(payload.position);
+      else if (payload.type === "drop") {
+        const dest = folderAt(payload.position) ?? path;
+        dropTarget = null;
+        dropPaths(payload.paths, dest);
+      } else dropTarget = null;
+    });
     homeDir().then(async (h) => {
       home = h;
       await load(h);
     });
-    return () => unlisten.then((u) => u());
+    return () => {
+      unlisten.then((u) => u());
+      unlistenDrop.then((u) => u());
+    };
   });
 </script>
 
 <svelte:window {onkeydown} />
 
 <div class="app">
-  <Sidebar {home} current={path} onnavigate={navigate} ondrop={transfer} />
+  <Sidebar {home} current={path} onnavigate={navigate} {dropTarget} />
   <main class="main">
     <Toolbar
       {path}
@@ -278,7 +313,8 @@
       onopen={open}
       onrename={commitRename}
       oncancelrename={() => (renaming = null)}
-      ondrop={(paths, target, copy) => transfer(paths, target.path, copy)} />
+      ondragout={dragOut}
+      {dropTarget} />
     <footer class="status">
       <span>{plural(visible.length, "item")}{selection.size ? ` · ${selection.size} selected` : ""}</span>
       {#if clipboard}
