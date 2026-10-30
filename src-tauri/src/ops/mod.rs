@@ -267,3 +267,6 @@ mod tests {
         assert!(!f.exists() && moved[0].exists());
     }
 }
+
+#[cfg(test)]
+mod edge_tests;
