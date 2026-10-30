@@ -1,7 +1,7 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-/** Mirrors `fs::Entry` in src-tauri/src/fs/mod.rs. */
+/** A directory entry (decoded from `fs::Entry` in src-tauri/src/fs/mod.rs). */
 export interface Entry {
   name: string;
   path: string;
@@ -12,7 +12,23 @@ export interface Entry {
   hidden: boolean;
 }
 
-export const listDir = (path: string) => invoke<Entry[]>("list_dir", { path });
+/** Wire format from Rust (`fs::Entry`): `[name, flags, size, modified]`. */
+type WireEntry = [name: string, flags: number, size: number, modified: number | null];
+const FLAG_DIR = 1;
+const FLAG_HIDDEN = 2;
+
+export async function listDir(path: string): Promise<Entry[]> {
+  const wire = await invoke<WireEntry[]>("list_dir", { path });
+  const base = joinPath(path, "");
+  return wire.map(([name, flags, size, modified]) => ({
+    name,
+    path: base + name,
+    isDir: (flags & FLAG_DIR) !== 0,
+    size,
+    modified,
+    hidden: (flags & FLAG_HIDDEN) !== 0,
+  }));
+}
 export const homeDir = () => invoke<string>("home_dir");
 export const watchDir = (path: string) => invoke<void>("watch_dir", { path });
 export const openPath = (path: string) => invoke<void>("open_path", { path });

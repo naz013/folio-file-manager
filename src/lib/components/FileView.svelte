@@ -84,6 +84,10 @@
     else if (top + rowH > scroller.scrollTop + height) scroller.scrollTop = top + rowH - height + padY;
   }
 
+  export function scrollElement(): HTMLElement {
+    return scroller;
+  }
+
   export function scrollToTop() {
     scroller.scrollTop = 0;
   }

@@ -166,3 +166,13 @@ pub async fn move_paths(sources: Vec<String>, dest: String) -> CmdResult<Vec<Str
     })
     .await
 }
+
+#[tauri::command]
+pub fn perf_config() -> crate::perf::PerfConfig {
+    crate::perf::config()
+}
+
+#[tauri::command]
+pub fn perf_report(event: String) {
+    crate::perf::report(&event);
+}

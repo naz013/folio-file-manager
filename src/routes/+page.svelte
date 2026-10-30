@@ -22,10 +22,12 @@
   import Sidebar from "$lib/components/Sidebar.svelte";
   import Toolbar, { type View } from "$lib/components/Toolbar.svelte";
   import FileView from "$lib/components/FileView.svelte";
+  import { measureJumps, measureScroll, nextPaint, perfConfig, perfReport } from "$lib/perf";
 
   let home = $state("");
   let path = $state("");
-  let entries = $state<Entry[]>([]);
+  // Raw (not deeply proxied): listings are replaced wholesale, and proxying 50k objects is slow.
+  let entries = $state.raw<Entry[]>([]);
   let view = $state<View>("grid");
   let showHidden = $state(false);
 
@@ -246,6 +248,36 @@
     if ((e.target as HTMLElement).tagName !== "INPUT") e.preventDefault();
   }
 
+  // ---- Benchmarks (opt-in, see docs/PERFORMANCE.md) ----
+
+  async function runBench(dirs: string[]) {
+    for (const dir of dirs) {
+      let t = performance.now();
+      const count = (await listDir(dir)).length;
+      const listMs = (performance.now() - t).toFixed(1);
+      for (const v of ["grid", "list"] as View[]) {
+        await navigate(home);
+        view = v;
+        await nextPaint();
+        t = performance.now();
+        await navigate(dir);
+        await nextPaint();
+        const openMs = (performance.now() - t).toFixed(1);
+        const el = fileView.scrollElement();
+        const scroll = await measureScroll(el);
+        const jumpMs = await measureJumps(el);
+        await perfReport(
+          `bench\titems=${count}\tview=${v}\tlistMs=${listMs}\topenMs=${openMs}\tavgFps=${scroll.avgFps}` +
+            `\tp95Ms=${scroll.p95Ms}\tmaxMs=${scroll.maxMs}\tslow=${scroll.slow}/${scroll.frames}\tjumpMaxMs=${jumpMs}`,
+        );
+      }
+    }
+    view = "grid";
+    await navigate(home);
+    await nextPaint();
+    await perfReport("bench-done");
+  }
+
   // ---- Keyboard ----
 
   function onkeydown(e: KeyboardEvent) {
@@ -298,6 +330,14 @@
     homeDir().then(async (h) => {
       home = h;
       await load(h);
+      // Benchmarks are optional; never let them break startup.
+      const perf = await perfConfig().catch(() => null);
+      if (perf?.enabled) {
+        await nextPaint();
+        // webviewMs: time since the page started loading, to split host vs webview startup.
+        await perfReport(`first-paint\twebviewMs=${performance.now().toFixed(0)}`);
+        if (perf.benchDirs.length) await runBench(perf.benchDirs);
+      }
     });
     return () => {
       unlisten.then((u) => u());

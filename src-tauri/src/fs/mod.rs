@@ -1,22 +1,39 @@
 //! Directory listing and file metadata.
 
-use serde::Serialize;
+use serde::ser::{Serialize, SerializeTuple, Serializer};
 use std::fs;
 use std::io;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     pub name: String,
-    pub path: String,
     pub is_dir: bool,
     /// Size in bytes; 0 for directories (folder sizes come from the scanner later).
     pub size: u64,
     /// Last modification time in milliseconds since the Unix epoch.
     pub modified: Option<u64>,
     pub hidden: bool,
+}
+
+const FLAG_DIR: u8 = 1;
+const FLAG_HIDDEN: u8 = 2;
+
+/// Serialized as a compact tuple `[name, flags, size, modified]` to keep large
+/// listings small over IPC (decoded in src/lib/api/fs.ts). The UI rebuilds paths
+/// from the folder path, so they are not sent per entry.
+impl Serialize for Entry {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let flags =
+            if self.is_dir { FLAG_DIR } else { 0 } | if self.hidden { FLAG_HIDDEN } else { 0 };
+        let mut t = s.serialize_tuple(4)?;
+        t.serialize_element(&self.name)?;
+        t.serialize_element(&flags)?;
+        t.serialize_element(&self.size)?;
+        t.serialize_element(&self.modified)?;
+        t.end()
+    }
 }
 
 /// Lists a directory, folders first, then case-insensitive by name.
@@ -31,7 +48,6 @@ pub fn list_dir(dir: &Path) -> io::Result<Vec<Entry>> {
             let name = e.file_name().to_string_lossy().into_owned();
             Some(Entry {
                 hidden: is_hidden(&name, &meta),
-                path: e.path().to_string_lossy().into_owned(),
                 is_dir: meta.is_dir(),
                 size: if meta.is_dir() { 0 } else { meta.len() },
                 modified: meta
@@ -44,11 +60,8 @@ pub fn list_dir(dir: &Path) -> io::Result<Vec<Entry>> {
         })
         .collect();
 
-    entries.sort_by(|a, b| {
-        b.is_dir
-            .cmp(&a.is_dir)
-            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-    });
+    // Lowercase each name once instead of on every comparison.
+    entries.sort_by_cached_key(|e| (!e.is_dir, e.name.to_lowercase()));
     Ok(entries)
 }
 
@@ -97,5 +110,17 @@ mod tests {
     fn missing_directory_is_an_error() {
         let tmp = tempfile::tempdir().unwrap();
         assert!(list_dir(&tmp.path().join("nope")).is_err());
+    }
+
+    #[test]
+    fn serializes_as_compact_tuple() {
+        let e = Entry {
+            name: "a.txt".into(),
+            is_dir: false,
+            size: 5,
+            modified: Some(7),
+            hidden: true,
+        };
+        assert_eq!(serde_json::to_string(&e).unwrap(), r#"["a.txt",2,5,7]"#);
     }
 }

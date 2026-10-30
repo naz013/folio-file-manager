@@ -1,12 +1,14 @@
 mod commands;
 mod fs;
 mod ops;
+mod perf;
 mod platform;
 mod thumbs;
 mod watch;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    perf::mark_start();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(watch::DirWatcher::default())
@@ -27,6 +29,8 @@ pub fn run() {
             commands::create_folder,
             commands::copy_paths,
             commands::move_paths,
+            commands::perf_config,
+            commands::perf_report,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
