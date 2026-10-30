@@ -35,7 +35,8 @@ These are the tie-breakers for every decision.
 |---|---|
 | Open a 10,000-item folder (warm) | < 150 ms to first paint |
 | Scroll a 50,000-item folder | 60 fps |
-| Idle memory | < 80 MB |
+| Idle memory, Folio process | < 80 MB |
+| Idle memory, total private incl. WebView2 | < 150 MB |
 | Cold start | < 1 s |
 | Installer size | < 15 MB |
 
