@@ -35,6 +35,8 @@ pub fn thumbnail_png(path: &Path, size: u32) -> Result<Vec<u8>, String> {
 }
 
 /// Encodes straight (non-premultiplied) RGBA pixels as PNG.
+// Unused on Linux until thumbnails and drag-out are ported there (1.1).
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
     let mut encoder = png::Encoder::new(&mut out, width, height);
