@@ -13,6 +13,7 @@
     parentOf,
     renamePath,
     sameVolume,
+    showContextMenu,
     startDrag,
     trashPaths,
     watchDir,
@@ -233,6 +234,18 @@
     startDrag(paths).catch((e) => notify(String(e), true));
   }
 
+  // ---- Context menu ----
+
+  function itemContextMenu(index: number, e: MouseEvent) {
+    if (!selection.has(visible[index].path)) selectOnly(index);
+    showContextMenu([...selection], e.shiftKey).catch((err) => notify(String(err), true));
+  }
+
+  /** Suppress the webview's own menu everywhere except text fields. */
+  function oncontextmenu(e: MouseEvent) {
+    if ((e.target as HTMLElement).tagName !== "INPUT") e.preventDefault();
+  }
+
   // ---- Keyboard ----
 
   function onkeydown(e: KeyboardEvent) {
@@ -255,6 +268,11 @@
     else if (key === "End") (handled(), moveCursor(visible.length, e.shiftKey));
     else if (key === "Enter" && cursor >= 0) (handled(), open(visible[cursor]));
     else if (key === "Delete") (handled(), trashSelected());
+    else if ((e.shiftKey && key === "F10") || key === "ContextMenu") {
+      handled();
+      // Spike limitation: the menu opens at the mouse cursor, not at the focused item.
+      if (selection.size) showContextMenu([...selection], false).catch((err) => notify(String(err), true));
+    }
     else if (key === "F2" && cursor >= 0) (handled(), (renaming = visible[cursor].path));
     else if (key === "Escape") (handled(), selection.clear(), (clipboard = null));
     else if (ctrl && e.shiftKey && key.toLowerCase() === "n") (handled(), newFolder());
@@ -288,7 +306,7 @@
   });
 </script>
 
-<svelte:window {onkeydown} />
+<svelte:window {onkeydown} {oncontextmenu} />
 
 <div class="app">
   <Sidebar {home} current={path} onnavigate={navigate} {dropTarget} />
@@ -314,6 +332,7 @@
       onrename={commitRename}
       oncancelrename={() => (renaming = null)}
       ondragout={dragOut}
+      onitemcontextmenu={itemContextMenu}
       {dropTarget} />
     <footer class="status">
       <span>{plural(visible.length, "item")}{selection.size ? ` · ${selection.size} selected` : ""}</span>

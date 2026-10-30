@@ -20,6 +20,10 @@ export const openPath = (path: string) => invoke<void>("open_path", { path });
 /** Starts a native OS drag so files can be dropped into Explorer and other apps. */
 export const startDrag = (paths: string[]) => invoke<void>("start_drag", { paths });
 
+/** Shows the native OS context menu for `paths` at the cursor (Windows only for now). */
+export const showContextMenu = (paths: string[], extended: boolean) =>
+  invoke<void>("show_context_menu", { paths, extended });
+
 /** URL of the OS thumbnail (or icon) for `path`, served by the Rust `thumb://` protocol. */
 export const thumbUrl = (path: string, size: number) => `${convertFileSrc(path, "thumb")}?s=${size}`;
 

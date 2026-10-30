@@ -92,6 +92,36 @@ pub async fn start_drag(window: tauri::WebviewWindow, paths: Vec<String>) -> Cmd
     }
 }
 
+/// Shows the native OS context menu for `paths` at the cursor.
+/// `extended` adds the Shift+right-click verbs (e.g. "Copy as path").
+#[tauri::command]
+pub fn show_context_menu(
+    window: tauri::WebviewWindow,
+    paths: Vec<String>,
+    extended: bool,
+) -> CmdResult<()> {
+    #[cfg(windows)]
+    {
+        if paths.is_empty() {
+            return Ok(());
+        }
+        let hwnd = window.hwnd().map_err(|e| e.to_string())?.0 as isize;
+        let files: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+        window
+            .run_on_main_thread(move || {
+                if let Err(e) = crate::platform::show_context_menu(hwnd, &files, extended) {
+                    eprintln!("context menu failed: {e}");
+                }
+            })
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (window, paths, extended);
+        Err("The native context menu is only available on Windows for now".into())
+    }
+}
+
 #[tauri::command]
 pub async fn trash_paths(targets: Vec<String>) -> CmdResult<()> {
     blocking(move || ops::trash(&paths(targets)).map_err(|e| e.to_string())).await

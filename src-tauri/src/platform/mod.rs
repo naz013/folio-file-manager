@@ -5,6 +5,20 @@ use std::path::Path;
 
 #[cfg(windows)]
 mod win;
+#[cfg(windows)]
+mod win_menu;
+
+/// Shows the native shell context menu for `paths` at the cursor and runs the chosen entry.
+/// `hwnd` is the raw handle of the owning window; must run on that window's UI thread.
+#[cfg(windows)]
+pub fn show_context_menu(
+    hwnd: isize,
+    paths: &[std::path::PathBuf],
+    extended: bool,
+) -> Result<(), String> {
+    let hwnd = ::windows::Win32::Foundation::HWND(hwnd as *mut std::ffi::c_void);
+    win_menu::show(hwnd, paths, extended).map_err(|e| e.to_string())
+}
 
 /// Renders the OS thumbnail (or file icon when no thumbnail exists) as PNG,
 /// fitted into a `size`×`size` box.

@@ -21,6 +21,7 @@ pub fn run() {
             commands::watch_dir,
             commands::open_path,
             commands::start_drag,
+            commands::show_context_menu,
             commands::trash_paths,
             commands::rename_path,
             commands::create_folder,

@@ -35,6 +35,7 @@
     onrename,
     oncancelrename,
     ondragout,
+    onitemcontextmenu,
     dropTarget,
   }: {
     entries: Entry[];
@@ -50,6 +51,7 @@
     oncancelrename: () => void;
     /** Called once a press on an item moves far enough to become a drag. */
     ondragout: (paths: string[]) => void;
+    onitemcontextmenu: (index: number, e: MouseEvent) => void;
     /** Folder path currently under a native drag, highlighted as drop target. */
     dropTarget: string | null;
   } = $props();
@@ -163,7 +165,11 @@
         aria-selected={selected}
         onclick={(e) => onitemclick(index, e)}
         ondblclick={() => onopen(entry)}
-        onpointerdown={(e) => pointerDown(e, entry)}>
+        onpointerdown={(e) => pointerDown(e, entry)}
+        oncontextmenu={(e) => {
+          e.preventDefault();
+          onitemcontextmenu(index, e);
+        }}>
         {#if grid}
           <span class="thumb">
             {#if entry.isDir}<FolderIcon size={64} />{:else}<Thumbnail path={entry.path} name={entry.name} size={72} />{/if}
