@@ -1,0 +1,122 @@
+/*
+ * Design tokens — mirror of the Penpot token sets `core`, `mode/light`, `mode/dark`.
+ * Change Penpot first, then update this file. See docs/DESIGN.md.
+ */
+
+:root {
+  /* core: tag colors */
+  --tag-red: #ff5f57;
+  --tag-orange: #ff9f0a;
+  --tag-yellow: #ffcc00;
+  --tag-green: #34c759;
+  --tag-blue: #0a84ff;
+  --tag-purple: #af52de;
+  --tag-gray: #8e8e93;
+
+  /* core: status */
+  --status-success: #34c759;
+  --status-warning: #ff9f0a;
+  --status-danger: #ff453a;
+
+  /* core: spacing (4 pt grid) */
+  --space-2xs: 2px;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 20px;
+  --space-2xl: 24px;
+  --space-3xl: 32px;
+
+  /* core: radius */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 999px;
+
+  /* core: typography */
+  --font-sans: "Inter Variable", "Inter", system-ui, "Segoe UI", sans-serif;
+  --font-size-caption: 11px;
+  --font-size-body: 13px;
+  --font-size-title: 15px;
+  --font-size-heading: 20px;
+  --font-size-display: 28px;
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* mode/light */
+  --bg-window: #ffffff;
+  --bg-sidebar: #f4f4f7;
+  --bg-subtle: #f7f7fa;
+  --bg-hover: #ececf1;
+  --bg-selected: #e8eefe;
+  --bg-control: #efeff3;
+  --border-default: #e7e7ec;
+  --border-strong: #d6d6de;
+  --text-primary: #1d1d22;
+  --text-secondary: #6b6b76;
+  --text-tertiary: #a3a3ad;
+  --text-on-accent: #ffffff;
+  --accent-default: #4d6bfe;
+  --accent-hover: #3f5bea;
+  --accent-subtle: #e8eefe;
+  --folder-back: #7cb7f7;
+  --folder-front: #a3cdfb;
+
+  /* elevation */
+  --shadow-raised: 0 1px 2px rgb(0 0 0 / 0.06), 0 1px 1px rgb(0 0 0 / 0.04);
+  --shadow-popover: 0 8px 24px rgb(0 0 0 / 0.12), 0 0 1px rgb(0 0 0 / 0.08);
+
+  color-scheme: light;
+}
+
+/* mode/dark — follows the OS unless a theme is forced via data-theme */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg-window: #1c1c1f;
+    --bg-sidebar: #252529;
+    --bg-subtle: #222226;
+    --bg-hover: #2e2e33;
+    --bg-selected: #26315a;
+    --bg-control: #2c2c31;
+    --border-default: #34343a;
+    --border-strong: #44444c;
+    --text-primary: #f4f4f6;
+    --text-secondary: #a4a4ae;
+    --text-tertiary: #6e6e78;
+    --accent-default: #6c85ff;
+    --accent-hover: #7f95ff;
+    --accent-subtle: #26315a;
+    --folder-back: #4e8fd9;
+    --folder-front: #6fa8ea;
+    --shadow-raised: 0 1px 2px rgb(0 0 0 / 0.3), 0 1px 1px rgb(0 0 0 / 0.2);
+    --shadow-popover: 0 8px 24px rgb(0 0 0 / 0.45), 0 0 1px rgb(0 0 0 / 0.3);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg-window: #1c1c1f;
+  --bg-sidebar: #252529;
+  --bg-subtle: #222226;
+  --bg-hover: #2e2e33;
+  --bg-selected: #26315a;
+  --bg-control: #2c2c31;
+  --border-default: #34343a;
+  --border-strong: #44444c;
+  --text-primary: #f4f4f6;
+  --text-secondary: #a4a4ae;
+  --text-tertiary: #6e6e78;
+  --accent-default: #6c85ff;
+  --accent-hover: #7f95ff;
+  --accent-subtle: #26315a;
+  --folder-back: #4e8fd9;
+  --folder-front: #6fa8ea;
+  --shadow-raised: 0 1px 2px rgb(0 0 0 / 0.3), 0 1px 1px rgb(0 0 0 / 0.2);
+  --shadow-popover: 0 8px 24px rgb(0 0 0 / 0.45), 0 0 1px rgb(0 0 0 / 0.3);
+  color-scheme: dark;
+}
