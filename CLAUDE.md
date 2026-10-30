@@ -16,6 +16,13 @@ Cross-platform file manager (Windows first). Tauri 2 + Rust core + SvelteKit SPA
 - Rust commands return `Result<T, String>` (or a serializable error) and stay thin; logic lives in modules.
 - Respect performance budgets in PRODUCT.md; large lists must be virtualized.
 
+## Agents
+- Work is one GitHub issue at a time from the Folio Roadmap project: `/work-issue <n>`.
+- `docs/AGENTS.md` — lead vs specialist roles, routing by `area:` label, when to fan out.
+- Specialists in `.claude/agents/`: `reviewer` (every change), `safety-reviewer`, `test-writer`, `perf-auditor`.
+- Specialists never delegate further, commit, or write to GitHub; the lead does.
+- Before running several agents in parallel, list the phases and agent count and wait for a go-ahead.
+
 ## Commands
 - `npm run tauri dev` — run the app
 - `npm run check` — type-check frontend
