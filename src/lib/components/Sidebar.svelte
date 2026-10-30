@@ -1,9 +1,36 @@
 <script lang="ts">
   import Icon, { type IconName } from "./Icon.svelte";
   import { joinPath } from "$lib/api/fs";
+  import { DRAG_MIME } from "./FileView.svelte";
 
-  let { home, current, onnavigate }: { home: string; current: string; onnavigate: (path: string) => void } =
-    $props();
+  let {
+    home,
+    current,
+    onnavigate,
+    ondrop,
+  }: {
+    home: string;
+    current: string;
+    onnavigate: (path: string) => void;
+    ondrop: (paths: string[], dest: string, copy: boolean) => void;
+  } = $props();
+
+  let dropTarget = $state<string | null>(null);
+
+  function dragOver(e: DragEvent, path: string) {
+    if (!e.dataTransfer?.types.includes(DRAG_MIME)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = e.ctrlKey ? "copy" : "move";
+    dropTarget = path;
+  }
+
+  function drop(e: DragEvent, path: string) {
+    dropTarget = null;
+    const raw = e.dataTransfer?.getData(DRAG_MIME);
+    if (!raw) return;
+    e.preventDefault();
+    ondrop(JSON.parse(raw), path, e.ctrlKey);
+  }
 
   const favorites: { label: string; icon: IconName; sub: string | null }[] = [
     { label: "Home", icon: "home", sub: null },
@@ -32,7 +59,14 @@
   <div class="label">Favorites</div>
   {#each favorites as fav}
     {@const path = fav.sub ? joinPath(home, fav.sub) : home}
-    <button class="item" class:selected={path === current} onclick={() => onnavigate(path)}>
+    <button
+      class="item"
+      class:selected={path === current}
+      class:drop={dropTarget === path}
+      onclick={() => onnavigate(path)}
+      ondragover={(e) => dragOver(e, path)}
+      ondragleave={() => (dropTarget = null)}
+      ondrop={(e) => drop(e, path)}>
       <Icon name={fav.icon} />
       <span>{fav.label}</span>
     </button>
@@ -115,6 +149,11 @@
     background: var(--bg-hover);
     color: var(--accent-default);
     font-weight: var(--font-weight-medium);
+  }
+
+  .item.drop {
+    outline: 2px solid var(--accent-default);
+    outline-offset: -2px;
   }
 
   .tag {

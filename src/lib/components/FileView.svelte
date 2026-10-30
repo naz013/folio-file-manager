@@ -1,3 +1,21 @@
+<script lang="ts" module>
+  // Grid geometry (matches the Penpot "File Tile" component).
+  const TILE_W = 132;
+  const TILE_H = 150;
+  const GAP_X = 6;
+  const GAP_Y = 8;
+  const GRID_PAD_X = 24;
+  const GRID_PAD_Y = 20;
+  // List geometry (matches "File Row").
+  const ROW_H = 32;
+  const LIST_PAD_X = 16;
+  const LIST_PAD_Y = 4;
+  /** Extra rows rendered above and below the viewport. */
+  const OVERSCAN = 3;
+
+  export const DRAG_MIME = "application/x-folio-paths";
+</script>
+
 <script lang="ts">
   import type { Entry } from "$lib/api/fs";
   import { formatDate, formatSize } from "$lib/format";
@@ -5,61 +23,199 @@
   import FileIcon from "./FileIcon.svelte";
   import type { View } from "./Toolbar.svelte";
 
-  // TODO(0.1): virtualize rendering to meet the 50k-items @ 60 fps budget.
   let {
     entries,
     view,
-    selected = $bindable(),
+    selection,
+    cut,
+    renaming,
+    onitemclick,
+    onbackgroundclick,
     onopen,
-  }: { entries: Entry[]; view: View; selected: string | null; onopen: (entry: Entry) => void } = $props();
+    onrename,
+    oncancelrename,
+    ondrop,
+  }: {
+    entries: Entry[];
+    view: View;
+    selection: Set<string>;
+    /** Paths currently cut to the clipboard (rendered dimmed). */
+    cut: Set<string>;
+    renaming: string | null;
+    onitemclick: (index: number, e: MouseEvent) => void;
+    onbackgroundclick: () => void;
+    onopen: (entry: Entry) => void;
+    onrename: (entry: Entry, newName: string) => void;
+    oncancelrename: () => void;
+    ondrop: (paths: string[], target: Entry, copy: boolean) => void;
+  } = $props();
+
+  let scroller: HTMLDivElement;
+  let scrollTop = $state(0);
+  let width = $state(0);
+  let height = $state(0);
+  let dropTarget = $state<string | null>(null);
+
+  let grid = $derived(view === "grid");
+  let padX = $derived(grid ? GRID_PAD_X : LIST_PAD_X);
+  let padY = $derived(grid ? GRID_PAD_Y : LIST_PAD_Y);
+  let rowH = $derived(grid ? TILE_H + GAP_Y : ROW_H);
+  let cols = $derived(grid ? Math.max(1, Math.floor((width - padX * 2 + GAP_X) / (TILE_W + GAP_X))) : 1);
+  let rows = $derived(Math.ceil(entries.length / cols));
+  let firstRow = $derived(Math.max(0, Math.floor((scrollTop - padY) / rowH) - OVERSCAN));
+  let lastRow = $derived(Math.min(rows, Math.ceil((scrollTop + height - padY) / rowH) + OVERSCAN));
+  let visible = $derived(
+    entries.slice(firstRow * cols, lastRow * cols).map((entry, i) => ({ entry, index: firstRow * cols + i })),
+  );
+
+  export function columns(): number {
+    return cols;
+  }
+
+  export function scrollToIndex(index: number) {
+    const top = padY + Math.floor(index / cols) * rowH;
+    if (top < scroller.scrollTop) scroller.scrollTop = top - padY;
+    else if (top + rowH > scroller.scrollTop + height) scroller.scrollTop = top + rowH - height + padY;
+  }
+
+  export function scrollToTop() {
+    scroller.scrollTop = 0;
+  }
+
+  function backgroundClick(e: MouseEvent) {
+    if (!(e.target as HTMLElement).closest(".tile, .row")) onbackgroundclick();
+  }
+
+  function position(index: number) {
+    const row = Math.floor(index / cols);
+    const col = index % cols;
+    return grid
+      ? `top:${padY + row * rowH}px;left:${padX + col * (TILE_W + GAP_X)}px;width:${TILE_W}px;height:${TILE_H}px`
+      : `top:${padY + row * rowH}px;left:${padX}px;right:${padX}px;height:${ROW_H}px`;
+  }
+
+  function dragStart(e: DragEvent, entry: Entry) {
+    const paths = selection.has(entry.path) ? [...selection] : [entry.path];
+    e.dataTransfer!.setData(DRAG_MIME, JSON.stringify(paths));
+    e.dataTransfer!.effectAllowed = "copyMove";
+  }
+
+  function dragOver(e: DragEvent, entry: Entry) {
+    if (!entry.isDir || !e.dataTransfer?.types.includes(DRAG_MIME)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = e.ctrlKey ? "copy" : "move";
+    dropTarget = entry.path;
+  }
+
+  function drop(e: DragEvent, entry: Entry) {
+    dropTarget = null;
+    const raw = e.dataTransfer?.getData(DRAG_MIME);
+    if (!raw || !entry.isDir) return;
+    e.preventDefault();
+    const paths: string[] = JSON.parse(raw);
+    if (!paths.includes(entry.path)) ondrop(paths, entry, e.ctrlKey);
+  }
+
+  function renameInput(node: HTMLInputElement, entry: Entry) {
+    node.focus();
+    // Select the name without its extension, like Explorer and Finder.
+    const dot = entry.isDir ? -1 : entry.name.lastIndexOf(".");
+    node.setSelectionRange(0, dot > 0 ? dot : entry.name.length);
+  }
+
+  function renameKey(e: KeyboardEvent, entry: Entry) {
+    e.stopPropagation();
+    const input = e.currentTarget as HTMLInputElement;
+    if (e.key === "Enter") onrename(entry, input.value);
+    else if (e.key === "Escape") oncancelrename();
+  }
 </script>
 
-{#if view === "grid"}
-  <div class="grid">
-    {#each entries as entry (entry.path)}
-      <button
-        class="tile"
-        class:selected={selected === entry.path}
-        onclick={() => (selected = entry.path)}
-        ondblclick={() => onopen(entry)}>
-        <span class="thumb">
-          {#if entry.isDir}<FolderIcon size={64} />{:else}<FileIcon name={entry.name} size={56} />{/if}
-        </span>
-        <span class="name">{entry.name}</span>
-      </button>
-    {/each}
-  </div>
-{:else}
-  <div class="list">
-    <div class="row head">
-      <span>Name</span><span>Date modified</span><span class="num">Size</span>
-    </div>
-    {#each entries as entry, i (entry.path)}
-      <button
-        class="row"
-        class:zebra={i % 2 === 1}
-        class:selected={selected === entry.path}
-        onclick={() => (selected = entry.path)}
-        ondblclick={() => onopen(entry)}>
-        <span class="cell-name">
-          {#if entry.isDir}<FolderIcon size={18} />{:else}<FileIcon name="" size={18} />{/if}
-          <span class="ellipsis">{entry.name}</span>
-        </span>
-        <span class="muted">{formatDate(entry.modified)}</span>
-        <span class="muted num">{entry.isDir ? "—" : formatSize(entry.size)}</span>
-      </button>
-    {/each}
+{#if !grid}
+  <div class="list-head" style:padding="0 {LIST_PAD_X + 10}px">
+    <span>Name</span><span>Date modified</span><span class="num">Size</span>
   </div>
 {/if}
 
+<div
+  class="scroller"
+  bind:this={scroller}
+  bind:clientWidth={width}
+  bind:clientHeight={height}
+  onscroll={() => (scrollTop = scroller.scrollTop)}
+  onclick={backgroundClick}
+  role="presentation">
+  <div class="canvas" style:height="{padY * 2 + rows * rowH}px">
+    {#each visible as { entry, index } (entry.path)}
+      {@const selected = selection.has(entry.path)}
+      <!-- Keyboard navigation for items is handled at window level in +page.svelte. -->
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <div
+        class={grid ? "tile" : "row"}
+        class:zebra={!grid && index % 2 === 1}
+        class:selected
+        class:cut={cut.has(entry.path)}
+        class:drop={dropTarget === entry.path}
+        style={position(index)}
+        draggable={renaming !== entry.path}
+        role="option"
+        tabindex="-1"
+        aria-selected={selected}
+        onclick={(e) => onitemclick(index, e)}
+        ondblclick={() => onopen(entry)}
+        ondragstart={(e) => dragStart(e, entry)}
+        ondragover={(e) => dragOver(e, entry)}
+        ondragleave={() => (dropTarget = null)}
+        ondrop={(e) => drop(e, entry)}>
+        {#if grid}
+          <span class="thumb">
+            {#if entry.isDir}<FolderIcon size={64} />{:else}<FileIcon name={entry.name} size={56} />{/if}
+          </span>
+        {:else}
+          <span class="icon">
+            {#if entry.isDir}<FolderIcon size={18} />{:else}<FileIcon name="" size={18} />{/if}
+          </span>
+        {/if}
+
+        {#if renaming === entry.path}
+          <input
+            class="rename"
+            value={entry.name}
+            use:renameInput={entry}
+            onkeydown={(e) => renameKey(e, entry)}
+            onblur={(e) => onrename(entry, e.currentTarget.value)}
+            onclick={(e) => e.stopPropagation()}
+            ondblclick={(e) => e.stopPropagation()} />
+        {:else}
+          <span class="name">{entry.name}</span>
+        {/if}
+
+        {#if !grid}
+          <span class="muted">{formatDate(entry.modified)}</span>
+          <span class="muted num">{entry.isDir ? "—" : formatSize(entry.size)}</span>
+        {/if}
+      </div>
+    {/each}
+  </div>
+</div>
+
 <style>
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
-    gap: 10px 6px;
-    padding: 20px 24px;
+  .scroller {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
   }
 
+  .canvas {
+    position: relative;
+  }
+
+  .tile,
+  .row {
+    position: absolute;
+  }
+
+  /* Grid */
   .tile {
     display: flex;
     flex-direction: column;
@@ -72,16 +228,22 @@
   .thumb {
     display: grid;
     place-items: center;
+    flex-shrink: 0;
     width: 112px;
     height: 88px;
     border-radius: 10px;
   }
 
-  .tile.selected .thumb {
+  .tile.selected .thumb,
+  .tile.drop .thumb {
     background: var(--bg-hover);
   }
 
-  .name {
+  .tile.drop .thumb {
+    outline: 2px solid var(--accent-default);
+  }
+
+  .tile .name {
     max-width: 120px;
     padding: 2px 6px;
     border-radius: var(--radius-sm);
@@ -101,31 +263,69 @@
     color: var(--text-on-accent);
   }
 
-  .list {
-    padding: 8px 16px;
+  .cut {
+    opacity: 0.45;
   }
 
+  .rename {
+    width: 120px;
+    padding: 2px 4px;
+    border: 1px solid var(--accent-default);
+    border-radius: var(--radius-sm);
+    outline: 3px solid var(--accent-subtle);
+    font: inherit;
+    font-size: 12px;
+    color: var(--text-primary);
+    background: var(--bg-window);
+    user-select: text;
+  }
+
+  .tile .rename {
+    text-align: center;
+  }
+
+  /* List */
+  .list-head,
   .row {
     display: grid;
-    grid-template-columns: 1fr 190px 90px;
+    grid-template-columns: 26px 1fr 190px 90px;
     align-items: center;
-    gap: 12px;
-    width: 100%;
-    height: 32px;
-    padding: 0 10px;
-    border-radius: 7px;
-    text-align: left;
+    column-gap: 10px;
   }
 
-  .row.head {
-    height: 28px;
+  .list-head {
+    grid-template-columns: 1fr 190px 90px;
+    height: 30px;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--border-default);
     font-size: var(--font-size-caption);
     font-weight: var(--font-weight-semibold);
     color: var(--text-tertiary);
   }
 
+  .row {
+    padding: 0 10px;
+    border-radius: 7px;
+  }
+
+  .row .name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .row .rename {
+    width: 100%;
+    font-size: var(--font-size-body);
+  }
+
   .row.zebra {
     background: var(--bg-subtle);
+  }
+
+  .row.drop {
+    outline: 2px solid var(--accent-default);
+    outline-offset: -2px;
   }
 
   .row.selected {
@@ -137,17 +337,9 @@
     color: inherit;
   }
 
-  .cell-name {
+  .icon {
     display: flex;
     align-items: center;
-    gap: 10px;
-    min-width: 0;
-  }
-
-  .ellipsis {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .muted {
