@@ -39,6 +39,7 @@
     type Moved,
   } from "$lib/api/fs";
   import ConflictDialog from "$lib/components/ConflictDialog.svelte";
+  import ContextMenu, { type MenuItem } from "$lib/components/ContextMenu.svelte";
   import OpsPill from "$lib/components/OpsPill.svelte";
   import Sidebar from "$lib/components/Sidebar.svelte";
   import TabBar from "$lib/components/TabBar.svelte";
@@ -568,9 +569,60 @@
 
   // ---- Context menu ----
 
+  /** Folio's own menu, while one is open. */
+  let menu = $state<{ items: MenuItem[]; x: number; y: number } | null>(null);
+
+  /** The OS menu for `paths`: everything the shell offers, e.g. "Open with". */
+  function nativeMenu(paths: string[], extended = false) {
+    showContextMenu(paths, extended).catch((err) => notify(String(err), true));
+  }
+
   function itemContextMenu(index: number, e: MouseEvent) {
     if (!selection.has(visible[index].path)) selectOnly(index);
-    showContextMenu([...selection], e.shiftKey).catch((err) => notify(String(err), true));
+    // Shift+right-click goes straight to the OS menu, as in Explorer.
+    if (e.shiftKey) nativeMenu([...selection], true);
+    else menu = { items: itemMenu(), x: e.clientX, y: e.clientY };
+  }
+
+  function backgroundContextMenu(e: MouseEvent) {
+    selection.clear();
+    anchor = cursor = -1;
+    if (e.shiftKey) nativeMenu([path], true);
+    else menu = { items: backgroundMenu(), x: e.clientX, y: e.clientY };
+  }
+
+  function itemMenu(): MenuItem[] {
+    const picked = selected();
+    const one = picked.length === 1 ? picked[0] : null;
+    return [
+      ...(one
+        ? [
+            { label: "Open", hint: "Enter", run: () => open(one) },
+            ...(one.isDir
+              ? [{ label: "Open in new tab", run: () => openTab(one.path, true) }]
+              : []),
+            "separator" as const,
+          ]
+        : []),
+      { label: "Cut", hint: "Ctrl+X", run: cutSelection },
+      { label: "Copy", hint: "Ctrl+C", run: copySelection },
+      ...(one ? [{ label: "Rename", hint: "F2", run: () => (renaming = one.path) }] : []),
+      { label: "Move to Recycle Bin", hint: "Del", danger: true, run: trashSelected },
+      "separator",
+      { label: "More options", run: () => nativeMenu([...selection]) },
+    ];
+  }
+
+  function backgroundMenu(): MenuItem[] {
+    return [
+      { label: "New folder", hint: "Ctrl+Shift+N", run: newFolder },
+      { label: "Paste", hint: "Ctrl+V", disabled: !clipboard, run: paste },
+      "separator",
+      { label: "Refresh", run: () => refresh() },
+      { label: "Select all", hint: "Ctrl+A", run: () => selectRange(0, visible.length - 1) },
+      "separator",
+      { label: "More options", run: () => nativeMenu([path]) },
+    ];
   }
 
   /** Suppress the webview's own menu everywhere except text fields. */
@@ -632,11 +684,26 @@
     clipboard = null;
   }
 
-  function selectionContextMenu() {
-    // Spike limitation: the menu opens at the mouse cursor, not at the focused item.
-    if (selection.size) {
-      showContextMenu([...selection], false).catch((err) => notify(String(err), true));
+  /** The menu key and Shift+F10: opens at the selected item, else the folder background. */
+  async function keyboardContextMenu(shift: boolean) {
+    if (!selection.size) {
+      const pane = document.querySelector(".scroller")?.getBoundingClientRect();
+      menu = { items: backgroundMenu(), x: (pane?.left ?? 0) + 16, y: (pane?.top ?? 0) + 16 };
+      return;
     }
+    if (shift) {
+      nativeMenu([...selection], true);
+      return;
+    }
+    // Open at the cursor row; the list is virtualized, so bring it into view first.
+    const row = cursor >= 0 && selection.has(visible[cursor]?.path) ? cursor : -1;
+    if (row >= 0) {
+      fileView.scrollToIndex(row);
+      await tick();
+    }
+    const at = document.querySelector<HTMLElement>("[role=option][aria-selected=true]");
+    const box = at?.getBoundingClientRect();
+    menu = { items: itemMenu(), x: (box?.left ?? 0) + 16, y: (box?.bottom ?? 0) - 8 };
   }
 
   /** Tab shortcuts. They work everywhere, including while a text field has focus. */
@@ -715,9 +782,9 @@
       case "Delete":
         return trashSelected;
       case "F10":
-        return shift ? selectionContextMenu : null;
+        return shift ? () => keyboardContextMenu(false) : null;
       case "ContextMenu":
-        return selectionContextMenu;
+        return () => keyboardContextMenu(shift);
       case "Escape":
         return clearSelectionAndClipboard;
     }
@@ -726,7 +793,7 @@
 
   function onkeydown(e: KeyboardEvent) {
     // A dialog handles its own keys; nothing behind it may act on them.
-    if (asking) return;
+    if (asking || menu) return;
     const ctrl = e.ctrlKey || e.metaKey;
     const target = e.target as HTMLElement;
     // File shortcuts don't apply while renaming or typing, or on a keyboard-focused tab
@@ -837,6 +904,7 @@
       oncancelrename={() => (renaming = null)}
       ondragout={dragOut}
       onitemcontextmenu={itemContextMenu}
+      onbackgroundcontextmenu={backgroundContextMenu}
       onopentab={(p) => openTab(p, true)}
       {dropTarget}
     />
@@ -861,6 +929,10 @@
       />
     </footer>
   </main>
+
+  {#if menu}
+    <ContextMenu items={menu.items} x={menu.x} y={menu.y} onclose={() => (menu = null)} />
+  {/if}
 
   {#if asking}
     <!-- Keyed, so each conflict gets a fresh dialog with focus on Keep both. -->
