@@ -70,6 +70,9 @@ pub struct CopyLog {
     skipped: Vec<PathBuf>,
     /// Everything created at the destination, for removing a failed copy.
     made: super::Created,
+    /// Set by `built` for `renamed`: whether the finished top-level file was untouched
+    /// before its final rename.
+    untouched: bool,
 }
 
 /// Moves `src` into `dest_dir` as `name` (or the next free name) across volumes.
@@ -85,58 +88,72 @@ pub fn move_by_copy(
 }
 
 /// Copies `src` into `dest_dir` as `name` (or the next free name), recording each
-/// file's stamp before it is read. Like a plain copy it is built under a
-/// `.folio-partial` name and renamed once complete, and a failure removes what it
-/// created. Links are recreated, never followed (see [`super::copy_link`]).
+/// file's stamp before it is read. It is the plain tree copy ([`super::copy_tree`]):
+/// built under a `.folio-partial` name, renamed once complete, and a failure removes
+/// what it created. Links are recreated, never followed (see [`super::copy_link`]).
 pub fn copy_tracked(
     src: &Path,
     dest_dir: &Path,
     name: &str,
 ) -> io::Result<(Option<PathBuf>, CopyLog)> {
     let mut log = CopyLog::default();
-    let kind = fs::symlink_metadata(src)?.file_type();
-    if kind.is_symlink() {
-        let link = fs::read_link(src)?;
-        let placed = noclobber::place(dest_dir, name, |t| super::copy_link(&link, t));
-        let placed = super::skip_unsupported(placed, src, &mut log.skipped)?;
-        if placed.is_some() {
-            log.links.push(CopiedLink {
-                path: src.to_path_buf(),
-                target: link,
-            });
-        }
-        return Ok((placed, log));
+    let target = super::copy_tree(src, dest_dir, name, &mut log)?;
+    Ok((target, log))
+}
+
+impl super::Observe for CopyLog {
+    fn made(&mut self) -> &mut super::Created {
+        &mut self.made
     }
-    let partial = super::partial_name(name);
-    let temp = if kind.is_dir() {
-        noclobber::place(dest_dir, &partial, |t| fs::create_dir(t)).and_then(|temp| {
-            log.made.dir(&temp);
-            copy_contents(src, &temp, &mut log).map(|()| temp)
-        })
-    } else {
-        noclobber::place(dest_dir, &partial, |t| copy_file(src, t, &mut log))
-    };
-    let temp = match temp {
-        Ok(temp) => temp,
-        Err(e) => return Err(std::mem::take(&mut log.made).fail(e)),
-    };
-    // A copied file is restamped after its rename only if nothing touched it in
-    // between, so a stranger's write is never taken for ours.
-    let untouched = log
-        .files
-        .iter()
-        .find(|f| f.dst == temp)
-        .is_some_and(|f| Stamp::of(&temp).is_ok_and(|s| s == f.dst_stamp));
-    let target = super::finish_copy(&temp, dest_dir, name)?;
-    log.renamed(&temp, &target, untouched);
-    Ok((Some(target), log))
+
+    fn skipped(&mut self) -> &mut Vec<PathBuf> {
+        &mut self.skipped
+    }
+
+    fn copy_file(&mut self, src: &Path, dst: &Path) -> io::Result<()> {
+        let src_stamp = Stamp::of(src)?;
+        noclobber::copy_file(src, dst)?;
+        self.made.file(dst)?;
+        self.files.push(CopiedFile {
+            src: src.to_path_buf(),
+            dst: dst.to_path_buf(),
+            src_stamp,
+            dst_stamp: Stamp::of(dst)?,
+        });
+        Ok(())
+    }
+
+    fn link(&mut self, src: &Path, target: PathBuf) {
+        self.links.push(CopiedLink {
+            path: src.to_path_buf(),
+            target,
+        });
+    }
+
+    fn folder(&mut self, src: &Path) {
+        self.dirs.push(src.to_path_buf());
+    }
+
+    fn built(&mut self, temp: &Path) {
+        // A copied file is restamped after its rename only if nothing touched it in
+        // between, so a stranger's write is never taken for ours.
+        self.untouched = self
+            .files
+            .iter()
+            .find(|f| f.dst == temp)
+            .is_some_and(|f| Stamp::of(temp).is_ok_and(|s| s == f.dst_stamp));
+    }
+
+    fn renamed(&mut self, temp: &Path, target: &Path) {
+        self.repoint(temp, target, self.untouched);
+    }
 }
 
 impl CopyLog {
     /// Points the record at the copy's final name. Renaming a file can change its own
     /// stamp (NTFS updates the change time), so a renamed top-level file is restamped
     /// when `restamp`; otherwise the old stamp stays and the copy is never taken back.
-    fn renamed(&mut self, temp: &Path, target: &Path, restamp: bool) {
+    fn repoint(&mut self, temp: &Path, target: &Path, restamp: bool) {
         for file in &mut self.files {
             if let Ok(rest) = file.dst.strip_prefix(temp) {
                 if rest.as_os_str().is_empty() {
@@ -150,52 +167,6 @@ impl CopyLog {
             }
         }
     }
-}
-
-fn copy_entry(src: &Path, dst: &Path, log: &mut CopyLog) -> io::Result<()> {
-    let kind = fs::symlink_metadata(src)?.file_type();
-    if kind.is_symlink() {
-        // Read once: the recorded target is what was recreated.
-        let link = fs::read_link(src)?;
-        let copied = super::copy_link(&link, dst);
-        if super::skip_unsupported(copied, src, &mut log.skipped)?.is_some() {
-            log.made.file(dst)?;
-            log.links.push(CopiedLink {
-                path: src.to_path_buf(),
-                target: link,
-            });
-        }
-        Ok(())
-    } else if kind.is_dir() {
-        fs::create_dir(dst)?;
-        log.made.dir(dst);
-        copy_contents(src, dst, log)
-    } else {
-        copy_file(src, dst, log)
-    }
-}
-
-fn copy_contents(src: &Path, dst: &Path, log: &mut CopyLog) -> io::Result<()> {
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        copy_entry(&entry.path(), &dst.join(entry.file_name()), log)?;
-    }
-    log.dirs.push(src.to_path_buf());
-    Ok(())
-}
-
-/// Copies one file without replacing `dst`; nothing is recorded if that fails.
-fn copy_file(src: &Path, dst: &Path, log: &mut CopyLog) -> io::Result<()> {
-    let src_stamp = Stamp::of(src)?;
-    noclobber::copy_file(src, dst)?;
-    log.made.file(dst)?;
-    log.files.push(CopiedFile {
-        src: src.to_path_buf(),
-        dst: dst.to_path_buf(),
-        src_stamp,
-        dst_stamp: Stamp::of(dst)?,
-    });
-    Ok(())
 }
 
 /// Removes the copied sources that are unchanged since the copy, then the links and

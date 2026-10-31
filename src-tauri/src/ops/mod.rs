@@ -118,8 +118,13 @@ pub fn create_folder(parent: &Path, name: &str) -> io::Result<PathBuf> {
 pub fn copy_into(sources: &[PathBuf], dest_dir: &Path) -> io::Result<Copied> {
     let mut copied = Copied::default();
     for src in sources {
-        let copy = ensure_not_into_itself(src, dest_dir)
-            .and_then(|()| copy_new(src, dest_dir, &mut copied.skipped));
+        let copy = ensure_not_into_itself(src, dest_dir).and_then(|()| {
+            let mut walk = Plain {
+                made: Created::default(),
+                skipped: &mut copied.skipped,
+            };
+            copy_tree(src, dest_dir, &file_name(src)?, &mut walk)
+        });
         match copy {
             Ok(Some(target)) => copied.paths.push(target),
             Ok(None) => {}
@@ -320,36 +325,89 @@ fn comparable(path: &Path) -> io::Result<PathBuf> {
 /// a failed or interrupted one never looks like a finished copy.
 const PARTIAL: &str = ".folio-partial";
 
-/// Copies `src` into `dest_dir` under its own name, or the next free one. The copy is
-/// built under a temporary `name.folio-partial` and renamed, without replacing
-/// anything, once complete; a failure removes what it created. Returns `None` for a
-/// link that can't be recreated.
-fn copy_new(
+/// What a tree copy reports to its caller. The walk itself lives in [`copy_tree`]; a
+/// caller that needs more than the copy (a move between drives records what it copied)
+/// adds to the hooks, which do nothing by default.
+trait Observe {
+    /// What the copy has created so far, for removing it if the copy fails.
+    fn made(&mut self) -> &mut Created;
+
+    /// Links that couldn't be recreated here.
+    fn skipped(&mut self) -> &mut Vec<PathBuf>;
+
+    /// Copies one file without replacing `dst`; nothing is recorded if that fails.
+    fn copy_file(&mut self, src: &Path, dst: &Path) -> io::Result<()> {
+        noclobber::copy_file(src, dst)?;
+        self.made().file(dst)
+    }
+
+    /// A link was recreated; `target` is what it points at.
+    fn link(&mut self, _src: &Path, _target: PathBuf) {}
+
+    /// Everything inside the folder `src` was copied.
+    fn folder(&mut self, _src: &Path) {}
+
+    /// The copy is complete at `temp`, just before it is renamed.
+    fn built(&mut self, _temp: &Path) {}
+
+    /// The copy at `temp` now has its final name `target`.
+    fn renamed(&mut self, _temp: &Path, _target: &Path) {}
+}
+
+/// A plain copy: it only needs to be undone on failure and to report skipped links.
+struct Plain<'a> {
+    made: Created,
+    skipped: &'a mut Vec<PathBuf>,
+}
+
+impl Observe for Plain<'_> {
+    fn made(&mut self) -> &mut Created {
+        &mut self.made
+    }
+
+    fn skipped(&mut self) -> &mut Vec<PathBuf> {
+        self.skipped
+    }
+}
+
+/// Copies `src` into `dest_dir` as `name`, or the next free name. The copy is built
+/// under a temporary `name.folio-partial` and renamed, without replacing anything,
+/// once complete; a failure removes what it created. Returns `None` for a link that
+/// can't be recreated.
+fn copy_tree(
     src: &Path,
     dest_dir: &Path,
-    skipped: &mut Vec<PathBuf>,
+    name: &str,
+    obs: &mut dyn Observe,
 ) -> io::Result<Option<PathBuf>> {
-    let name = file_name(src)?;
     let kind = fs::symlink_metadata(src)?.file_type();
     if kind.is_symlink() {
         // A single link is created in one step: nothing partial to hide.
         let target = fs::read_link(src)?;
-        let placed = noclobber::place(dest_dir, &name, |t| copy_link(&target, t));
-        return skip_unsupported(placed, src, skipped);
+        let placed = noclobber::place(dest_dir, name, |t| copy_link(&target, t));
+        let placed = skip_unsupported(placed, src, obs.skipped())?;
+        if placed.is_some() {
+            obs.link(src, target);
+        }
+        return Ok(placed);
     }
-    let mut created = Created::default();
-    let partial = partial_name(&name);
+    let partial = partial_name(name);
     let temp = if kind.is_dir() {
         noclobber::place(dest_dir, &partial, |t| fs::create_dir(t)).and_then(|temp| {
-            created.dir(&temp);
-            copy_contents(src, &temp, skipped, &mut created).map(|()| temp)
+            obs.made().dir(&temp);
+            copy_contents(src, &temp, obs).map(|()| temp)
         })
     } else {
-        noclobber::place(dest_dir, &partial, |t| noclobber::copy_file(src, t))
-            .and_then(|temp| created.file(&temp).map(|()| temp))
+        noclobber::place(dest_dir, &partial, |t| obs.copy_file(src, t))
     };
-    let temp = temp.map_err(|e| created.fail(e))?;
-    finish_copy(&temp, dest_dir, &name).map(Some)
+    let temp = match temp {
+        Ok(temp) => temp,
+        Err(e) => return Err(std::mem::take(obs.made()).fail(e)),
+    };
+    obs.built(&temp);
+    let target = finish_copy(&temp, dest_dir, name)?;
+    obs.renamed(&temp, &target);
+    Ok(Some(target))
 }
 
 /// The temporary name for a copy of `name`: `name.folio-partial`, or just
@@ -402,46 +460,34 @@ fn is_held_open(e: &io::Error) -> bool {
     e.kind() == ErrorKind::PermissionDenied || (cfg!(windows) && e.raw_os_error() == Some(32))
 }
 
-fn copy_contents(
-    src: &Path,
-    dst: &Path,
-    skipped: &mut Vec<PathBuf>,
-    created: &mut Created,
-) -> io::Result<()> {
+fn copy_contents(src: &Path, dst: &Path, obs: &mut dyn Observe) -> io::Result<()> {
     for entry in fs::read_dir(src)? {
         let entry = entry?;
-        copy_recursive(
-            &entry.path(),
-            &dst.join(entry.file_name()),
-            skipped,
-            created,
-        )?;
+        copy_recursive(&entry.path(), &dst.join(entry.file_name()), obs)?;
     }
+    obs.folder(src);
     Ok(())
 }
 
 /// Copies a tree without following links, so a link to an ancestor can't loop and a
 /// link to elsewhere can't pull in data from outside the selection.
-fn copy_recursive(
-    src: &Path,
-    dst: &Path,
-    skipped: &mut Vec<PathBuf>,
-    created: &mut Created,
-) -> io::Result<()> {
+fn copy_recursive(src: &Path, dst: &Path, obs: &mut dyn Observe) -> io::Result<()> {
     let kind = fs::symlink_metadata(src)?.file_type();
     if kind.is_symlink() {
-        let copied = copy_link(&fs::read_link(src)?, dst);
-        if skip_unsupported(copied, src, skipped)?.is_some() {
-            created.file(dst)?;
+        // Read once: the recorded target is what was recreated.
+        let target = fs::read_link(src)?;
+        let copied = copy_link(&target, dst);
+        if skip_unsupported(copied, src, obs.skipped())?.is_some() {
+            obs.made().file(dst)?;
+            obs.link(src, target);
         }
         Ok(())
     } else if kind.is_dir() {
         fs::create_dir(dst)?;
-        created.dir(dst);
-        copy_contents(src, dst, skipped, created)
+        obs.made().dir(dst);
+        copy_contents(src, dst, obs)
     } else {
-        noclobber::copy_file(src, dst)?;
-        created.file(dst)
+        obs.copy_file(src, dst)
     }
 }
 
