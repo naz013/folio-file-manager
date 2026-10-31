@@ -986,3 +986,74 @@ fn move_into_folder_into_itself_with_different_letter_case_fails_and_keeps_sourc
 // Cross-volume move_into (copy then delete source) cannot be tested on one volume;
 // the `disk_full_cross_volume_move_into_*` test above covers it when
 // FOLIO_SMALL_VOLUME points at a second volume.
+
+// ------------------------------------------------- 6. Concurrent writers (#60)
+
+#[test]
+fn concurrent_copies_of_one_name_produce_distinct_files() {
+    let t = tmp();
+    let dest = dir(t.path().join("dest"));
+    let sources: Vec<PathBuf> = (0..8)
+        .map(|i| {
+            let d = dir(t.path().join(format!("src{i}")));
+            write(d.join("f.txt"), &format!("copy {i}"));
+            d.join("f.txt")
+        })
+        .collect();
+
+    let barrier = std::sync::Barrier::new(sources.len());
+    let mut out: Vec<PathBuf> = std::thread::scope(|s| {
+        let handles: Vec<_> = sources
+            .iter()
+            .map(|src| {
+                let (barrier, dest) = (&barrier, &dest);
+                s.spawn(move || {
+                    barrier.wait();
+                    copy_into(&one(src), dest).unwrap().remove(0)
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+
+    out.sort();
+    out.dedup();
+    assert_eq!(out.len(), 8, "every copy got its own name");
+    let mut contents: Vec<String> = out.iter().map(read).collect();
+    contents.sort();
+    let expected: Vec<String> = (0..8).map(|i| format!("copy {i}")).collect();
+    assert_eq!(contents, expected, "no copy overwrote another");
+}
+
+#[test]
+fn concurrent_moves_of_one_name_produce_distinct_files() {
+    let t = tmp();
+    let dest = dir(t.path().join("dest"));
+    let sources: Vec<PathBuf> = (0..8)
+        .map(|i| {
+            let d = dir(t.path().join(format!("src{i}")));
+            write(d.join("f.txt"), &format!("move {i}"));
+            d.join("f.txt")
+        })
+        .collect();
+
+    let barrier = std::sync::Barrier::new(sources.len());
+    std::thread::scope(|s| {
+        for src in &sources {
+            let (barrier, dest) = (&barrier, &dest);
+            s.spawn(move || {
+                barrier.wait();
+                move_into(&one(src), dest).unwrap();
+            });
+        }
+    });
+
+    let mut contents: Vec<String> = fs::read_dir(&dest)
+        .unwrap()
+        .map(|e| read(e.unwrap().path()))
+        .collect();
+    contents.sort();
+    let expected: Vec<String> = (0..8).map(|i| format!("move {i}")).collect();
+    assert_eq!(contents, expected);
+    assert!(sources.iter().all(|s| !s.exists()));
+}

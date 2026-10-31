@@ -8,6 +8,7 @@ use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 
 mod cross_volume;
+mod noclobber;
 
 pub fn trash(paths: &[PathBuf]) -> Result<(), trash::Error> {
     trash::delete_all(paths)
@@ -27,21 +28,27 @@ pub fn rename(path: &Path, new_name: &str) -> io::Result<PathBuf> {
     let case_only =
         target.to_string_lossy().to_lowercase() == path.to_string_lossy().to_lowercase();
     if target.exists() && !case_only {
-        return Err(io::Error::new(
-            ErrorKind::AlreadyExists,
-            format!("\"{new_name}\" already exists"),
-        ));
+        return Err(already_exists(new_name));
     }
-    fs::rename(path, &target)?;
+    noclobber::rename(path, &target).map_err(|e| match e.kind() {
+        // Taken after the check above.
+        ErrorKind::AlreadyExists => already_exists(new_name),
+        _ => e,
+    })?;
     Ok(target)
+}
+
+fn already_exists(name: &str) -> io::Error {
+    io::Error::new(
+        ErrorKind::AlreadyExists,
+        format!("\"{name}\" already exists"),
+    )
 }
 
 /// Creates a new folder with a unique name based on `name` inside `parent`.
 pub fn create_folder(parent: &Path, name: &str) -> io::Result<PathBuf> {
     validate_name(name)?;
-    let target = unique_destination(parent, name);
-    fs::create_dir(&target)?;
-    Ok(target)
+    noclobber::place(parent, name, |t| fs::create_dir(t))
 }
 
 /// Copies each source into `dest_dir`. Returns the created paths.
@@ -49,9 +56,7 @@ pub fn copy_into(sources: &[PathBuf], dest_dir: &Path) -> io::Result<Vec<PathBuf
     let mut created = Vec::with_capacity(sources.len());
     for src in sources {
         ensure_not_into_itself(src, dest_dir)?;
-        let target = unique_destination(dest_dir, &file_name(src)?);
-        copy_recursive(src, &target)?;
-        created.push(target);
+        created.push(copy_new(src, dest_dir)?);
     }
     Ok(created)
 }
@@ -93,29 +98,33 @@ fn move_one(src: &Path, dest_dir: &Path, moved: &mut Moved) -> io::Result<()> {
         return Ok(());
     }
     ensure_not_into_itself(src, dest_dir)?;
-    let target = unique_destination(dest_dir, &file_name(src)?);
-    match fs::rename(src, &target) {
-        Ok(()) => {}
+    let name = file_name(src)?;
+    let target = match noclobber::place(dest_dir, &name, |t| noclobber::rename(src, t)) {
+        Ok(target) => target,
         Err(e) if is_cross_device(&e) => {
-            let left = cross_volume::move_by_copy(src, &target)?;
+            let (target, left) = cross_volume::move_by_copy(src, dest_dir, &name)?;
             moved.left_behind.extend(left);
+            target
         }
         Err(e) => return Err(e),
-    }
+    };
     moved.paths.push(target);
     Ok(())
 }
 
-/// Returns `dir/name`, or `dir/name (2).ext`, `(3)`… if it already exists.
+/// Returns `dir/name`, or `dir/name (2).ext`, `(3)`… if it already exists. The name can
+/// be taken before it's used, so writers go through [`noclobber::place`].
 pub fn unique_destination(dir: &Path, name: &str) -> PathBuf {
+    // Not `exists()`: it follows links, so a dangling link would look free.
+    let free = |p: &Path| fs::symlink_metadata(p).is_err();
     let candidate = dir.join(name);
-    if !candidate.exists() {
+    if free(&candidate) {
         return candidate;
     }
     let (stem, ext) = split_name(name);
     (2..=u64::MAX)
         .map(|n| dir.join(format!("{stem} ({n}){ext}")))
-        .find(|p| !p.exists())
+        .find(|p| free(p))
         .expect("a folder cannot hold u64::MAX entries")
 }
 
@@ -156,17 +165,35 @@ fn ensure_not_into_itself(src: &Path, dest_dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Copies `src` into `dest_dir` under its own name, or the next free one. The name is
+/// claimed first (the folder, or the file itself), so nothing is written to a name
+/// someone else took meanwhile.
+fn copy_new(src: &Path, dest_dir: &Path) -> io::Result<PathBuf> {
+    let name = file_name(src)?;
+    if src.is_dir() {
+        let target = noclobber::place(dest_dir, &name, |t| fs::create_dir(t))?;
+        copy_contents(src, &target)?;
+        Ok(target)
+    } else {
+        noclobber::place(dest_dir, &name, |t| noclobber::copy_file(src, t))
+    }
+}
+
+fn copy_contents(src: &Path, dst: &Path) -> io::Result<()> {
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        copy_recursive(&entry.path(), &dst.join(entry.file_name()))?;
+    }
+    Ok(())
+}
+
 fn copy_recursive(src: &Path, dst: &Path) -> io::Result<()> {
     if src.is_dir() {
         fs::create_dir(dst)?;
-        for entry in fs::read_dir(src)? {
-            let entry = entry?;
-            copy_recursive(&entry.path(), &dst.join(entry.file_name()))?;
-        }
+        copy_contents(src, dst)
     } else {
-        fs::copy(src, dst)?;
+        noclobber::copy_file(src, dst)
     }
-    Ok(())
 }
 
 fn is_cross_device(e: &io::Error) -> bool {

@@ -14,6 +14,8 @@ use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use super::noclobber;
+
 /// What a file looked like when it was copied. A file that no longer matches was
 /// written to after the copy started, so its source must not be removed.
 ///
@@ -65,20 +67,36 @@ pub struct Copied {
     links: Vec<CopiedLink>,
 }
 
-/// Moves `src` to `dst` across volumes. Returns the source paths that were left behind.
-pub fn move_by_copy(src: &Path, dst: &Path) -> io::Result<Vec<PathBuf>> {
-    let copied = copy_tracked(src, dst)?;
-    Ok(remove_copied(copied))
+/// Moves `src` into `dest_dir` as `name` (or the next free name) across volumes.
+/// Returns where it went and the source paths that were left behind.
+pub fn move_by_copy(
+    src: &Path,
+    dest_dir: &Path,
+    name: &str,
+) -> io::Result<(PathBuf, Vec<PathBuf>)> {
+    let (target, copied) = copy_tracked(src, dest_dir, name)?;
+    Ok((target, remove_copied(copied)))
 }
 
-/// Copies `src` to `dst`, recording each file's stamp before it is read.
-pub fn copy_tracked(src: &Path, dst: &Path) -> io::Result<Copied> {
+/// Copies `src` into `dest_dir` as `name` (or the next free name), recording each
+/// file's stamp before it is read. The name is claimed before anything is written.
+pub fn copy_tracked(src: &Path, dest_dir: &Path, name: &str) -> io::Result<(PathBuf, Copied)> {
     let mut copied = Copied::default();
-    copy_entry(src, dst, true, &mut copied)?;
-    Ok(copied)
+    let removable = note_link(src, true, &mut copied)?;
+    let target = if src.is_dir() {
+        let target = noclobber::place(dest_dir, name, |t| fs::create_dir(t))?;
+        copy_contents(src, &target, removable, &mut copied)?;
+        target
+    } else {
+        noclobber::place(dest_dir, name, |t| {
+            copy_file(src, t, removable, &mut copied)
+        })?
+    };
+    Ok((target, copied))
 }
 
-fn copy_entry(src: &Path, dst: &Path, removable: bool, copied: &mut Copied) -> io::Result<()> {
+/// Records `src` if it's a link. Returns whether what's below it may be removed.
+fn note_link(src: &Path, removable: bool, copied: &mut Copied) -> io::Result<bool> {
     let is_link = fs::symlink_metadata(src)?.file_type().is_symlink();
     if is_link && removable {
         copied.links.push(CopiedLink {
@@ -86,33 +104,48 @@ fn copy_entry(src: &Path, dst: &Path, removable: bool, copied: &mut Copied) -> i
             target: fs::read_link(src)?,
         });
     }
-    let removable = removable && !is_link;
+    Ok(removable && !is_link)
+}
+
+fn copy_entry(src: &Path, dst: &Path, removable: bool, copied: &mut Copied) -> io::Result<()> {
+    let removable = note_link(src, removable, copied)?;
     if src.is_dir() {
         fs::create_dir(dst)?;
-        for entry in fs::read_dir(src)? {
-            let entry = entry?;
-            copy_entry(
-                &entry.path(),
-                &dst.join(entry.file_name()),
-                removable,
-                copied,
-            )?;
-        }
-        if removable {
-            copied.dirs.push(src.to_path_buf());
-        }
-    } else if removable {
-        let src_stamp = Stamp::of(src)?;
-        fs::copy(src, dst)?;
-        copied.files.push(CopiedFile {
-            src: src.to_path_buf(),
-            dst: dst.to_path_buf(),
-            src_stamp,
-            dst_stamp: Stamp::of(dst)?,
-        });
+        copy_contents(src, dst, removable, copied)
     } else {
-        fs::copy(src, dst)?;
+        copy_file(src, dst, removable, copied)
     }
+}
+
+fn copy_contents(src: &Path, dst: &Path, removable: bool, copied: &mut Copied) -> io::Result<()> {
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        copy_entry(
+            &entry.path(),
+            &dst.join(entry.file_name()),
+            removable,
+            copied,
+        )?;
+    }
+    if removable {
+        copied.dirs.push(src.to_path_buf());
+    }
+    Ok(())
+}
+
+/// Copies one file without replacing `dst`; nothing is recorded if that fails.
+fn copy_file(src: &Path, dst: &Path, removable: bool, copied: &mut Copied) -> io::Result<()> {
+    if !removable {
+        return noclobber::copy_file(src, dst);
+    }
+    let src_stamp = Stamp::of(src)?;
+    noclobber::copy_file(src, dst)?;
+    copied.files.push(CopiedFile {
+        src: src.to_path_buf(),
+        dst: dst.to_path_buf(),
+        src_stamp,
+        dst_stamp: Stamp::of(dst)?,
+    });
     Ok(())
 }
 
@@ -337,11 +370,16 @@ mod platform {
 
     impl Change {
         /// Every Unix file system, FAT drivers included, keeps a ctime and an inode.
+        #[expect(clippy::unused_self, reason = "same signature as the Windows version")]
         pub fn is_strong(self) -> bool {
             true
         }
     }
 
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "same signature as the Windows version, which can fail"
+    )]
     pub fn change(_path: &Path, meta: &Metadata) -> io::Result<Change> {
         Ok(Change {
             ctime: (meta.ctime(), meta.ctime_nsec()),
@@ -374,6 +412,22 @@ mod tests {
         let mut perms = fs::metadata(p).unwrap().permissions();
         perms.set_readonly(ro);
         fs::set_permissions(p, perms).unwrap();
+    }
+
+    /// `copy_tracked` to an exact path, which must be free.
+    fn copy_tracked(src: &Path, dst: &Path) -> io::Result<Copied> {
+        let name = dst.file_name().unwrap().to_str().unwrap();
+        let (target, copied) = super::copy_tracked(src, dst.parent().unwrap(), name)?;
+        assert_eq!(target, dst);
+        Ok(copied)
+    }
+
+    /// `move_by_copy` to an exact path, which must be free.
+    fn move_by_copy(src: &Path, dst: &Path) -> io::Result<Vec<PathBuf>> {
+        let name = dst.file_name().unwrap().to_str().unwrap();
+        let (target, left) = super::move_by_copy(src, dst.parent().unwrap(), name)?;
+        assert_eq!(target, dst);
+        Ok(left)
     }
 
     fn set_modified(p: &Path, time: SystemTime) {
