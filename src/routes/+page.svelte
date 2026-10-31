@@ -11,9 +11,15 @@
     movePaths,
     onDirChanged,
     openPath,
+    onCloseBlocked,
+    onQueueUpdate,
     openWindow,
     parentOf,
     pathSegments,
+    queueCancel,
+    queueDismiss,
+    queuePause,
+    queueResume,
     renamePath,
     sameVolume,
     saveTabs,
@@ -26,8 +32,10 @@
     windowTabs,
     type Copied,
     type Entry,
+    type Job,
     type Moved,
   } from "$lib/api/fs";
+  import OpsPill from "$lib/components/OpsPill.svelte";
   import Sidebar from "$lib/components/Sidebar.svelte";
   import TabBar from "$lib/components/TabBar.svelte";
   import Toolbar, { type View } from "$lib/components/Toolbar.svelte";
@@ -362,11 +370,8 @@
   async function trashSelected() {
     const items = selected();
     if (!items.length) return;
-    await run(
-      () => trashPaths(items.map((e) => e.path)),
-      () => `Moved ${plural(items.length, "item")} to Recycle Bin`,
-    );
-    await refresh([]);
+    // Runs in the background; `onJobUpdate` reports and refreshes when it is done.
+    await run(() => trashPaths(items.map((e) => e.path)));
   }
 
   async function newFolder() {
@@ -387,10 +392,56 @@
   }
 
   async function transfer(paths: string[], dest: string, copy: boolean) {
-    const result = await run<Copied | Moved>(() =>
-      copy ? copyPaths(paths, dest) : movePaths(paths, dest),
-    );
+    await run(() => (copy ? copyPaths(paths, dest) : movePaths(paths, dest)));
+  }
+
+  // ---- Operations queue ----
+
+  let jobs = $state<Job[]>([]);
+  /** Jobs whose end has been reported, so each is reported once. */
+  const reported = new SvelteSet<number>();
+
+  function onJobUpdate(job: Job) {
+    const at = jobs.findIndex((j) => j.id === job.id);
+    if (at < 0) jobs.push(job);
+    else jobs[at] = job;
+    if (reported.has(job.id)) return;
+    if (job.state === "done") {
+      reported.add(job.id);
+      reportDone(job);
+    } else if (job.state === "failed" || job.state === "cancelled") {
+      reported.add(job.id);
+      notify(job.error ?? "Failed", job.state === "failed");
+      // What was done before it stopped shows too.
+      refresh([]);
+    }
+  }
+
+  /** Dismissed by the user, or by itself once it has been seen. */
+  function dismissJob(id: number) {
+    jobs = jobs.filter((j) => j.id !== id);
+    queueDismiss(id).catch(() => {});
+  }
+
+  function reportDone(job: Job) {
+    if (job.kind === "trash") {
+      const { count, leftAlone } = (job.result as { count: number; leftAlone: number } | null) ?? {
+        count: 0,
+        leftAlone: 0,
+      };
+      const note = leftAlone
+        ? ` ${plural(leftAlone, "item")} changed before it could be deleted and was left alone.`
+        : "";
+      notify(`Moved ${plural(count, "item")} to Recycle Bin.${note}`, leftAlone > 0);
+      // Finished and quiet: no need to keep the row around.
+      if (!leftAlone) dismissJob(job.id);
+      refresh([]);
+      return;
+    }
+    const result = job.result as Copied | Moved | null;
     if (!result) return;
+    const copy = job.kind === "copy";
+    const dest = result.dest;
     const created = result.paths;
     const verb = copy ? "Copied" : "Moved";
     const done = created.length ? `${verb} ${plural(created.length, "item")}. ` : "";
@@ -415,8 +466,9 @@
       notify(`${done}${notes.join(" ")}`, true);
     } else {
       notify(`${verb} ${plural(created.length, "item")}`);
+      dismissJob(job.id);
     }
-    await refresh(dest === path ? created : []);
+    refresh(dest === path ? created : []);
   }
 
   async function paste() {
@@ -614,6 +666,10 @@
   }
 
   onMount(() => {
+    const unlistenQueue = onQueueUpdate(onJobUpdate);
+    const unlistenBlocked = onCloseBlocked(() =>
+      notify("Operations are still running. Wait for them, or cancel them, before closing.", true),
+    );
     const unlisten = onDirChanged((changed) => {
       if (changed === path && !renaming) refresh();
     });
@@ -645,6 +701,8 @@
     });
     return () => {
       unlisten.then((u) => u());
+      unlistenQueue.then((u) => u());
+      unlistenBlocked.then((u) => u());
       unlistenDrop.then((u) => u());
       unlistenClose.then((u) => u());
     };
@@ -709,6 +767,13 @@
           {clipboard.mode === "cut" ? "to move" : "to copy"} · Ctrl+V to paste</span
         >
       {/if}
+      <OpsPill
+        {jobs}
+        onpause={queuePause}
+        onresume={queueResume}
+        oncancel={queueCancel}
+        ondismiss={dismissJob}
+      />
     </footer>
   </main>
 

@@ -1967,3 +1967,97 @@ fn a_link_to_a_sibling_sharing_the_old_prefix_is_left_alone() {
     assert!(same_place(&at.join("to_sibling"), &sibling));
     assert_eq!(moved.not_repointed, Vec::<PathBuf>::new());
 }
+
+// ------------------------------------- 13. Progress, pause and cancel (#14)
+
+use std::sync::Arc;
+
+fn big_file(path: &Path, bytes: usize) {
+    fs::write(path, vec![7_u8; bytes]).unwrap();
+}
+
+#[test]
+fn a_copy_counts_its_bytes() {
+    let t = tmp();
+    let src = dir(t.path().join("src"));
+    big_file(&src.join("a.bin"), 3_000_000);
+    big_file(&src.join("b.bin"), 1_000_000);
+    let dest = dir(t.path().join("dest"));
+    let progress = Arc::new(progress::Progress::default());
+    progress.set_totals(total_bytes(&one(&src)), 1);
+
+    let copied = progress::scope(&progress, || copy_into(&one(&src), &dest)).unwrap();
+
+    assert_eq!(copied.paths.len(), 1);
+    assert_eq!(progress.total_bytes(), 4_000_000);
+    assert_eq!(progress.bytes(), 4_000_000);
+    assert_eq!(progress.items(), 1);
+}
+
+#[test]
+fn a_cancelled_copy_creates_nothing() {
+    let t = tmp();
+    let src = dir(t.path().join("src"));
+    big_file(&src.join("a.bin"), 1_000_000);
+    let dest = dir(t.path().join("dest"));
+    let progress = Arc::new(progress::Progress::default());
+    progress.cancel();
+
+    let err = progress::scope(&progress, || copy_into(&one(&src), &dest)).unwrap_err();
+
+    assert!(progress::is_cancelled_error(&err));
+    assert_eq!(names_in(&dest), Vec::<String>::new());
+    assert_eq!(read_len(&src.join("a.bin")), 1_000_000);
+}
+
+fn read_len(path: &Path) -> u64 {
+    fs::metadata(path).unwrap().len()
+}
+
+#[test]
+fn a_paused_copy_waits_and_finishes_after_resume() {
+    let t = tmp();
+    let src = dir(t.path().join("src"));
+    big_file(&src.join("a.bin"), 1_000_000);
+    let dest = dir(t.path().join("dest"));
+    let progress = Arc::new(progress::Progress::default());
+    progress.pause(true);
+
+    let (p, sources, to) = (Arc::clone(&progress), one(&src), dest.clone());
+    let worker = std::thread::spawn(move || progress::scope(&p, || copy_into(&sources, &to)));
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!(
+        names_in(&dest),
+        Vec::<String>::new(),
+        "nothing starts while paused"
+    );
+    assert_eq!(progress.bytes(), 0);
+
+    progress.pause(false);
+    let copied = worker.join().unwrap().unwrap();
+
+    assert_eq!(read_len(&copied.paths[0].join("a.bin")), 1_000_000);
+    assert_eq!(progress.bytes(), 1_000_000);
+}
+
+#[test]
+fn a_cancelled_move_between_items_stops_and_reports_what_was_moved() {
+    let t = tmp();
+    let (a, b) = (t.path().join("a.txt"), t.path().join("b.txt"));
+    write(&a, "a");
+    write(&b, "b");
+    let dest = dir(t.path().join("dest"));
+    let progress = Arc::new(progress::Progress::default());
+
+    let mut moved = Moved::default();
+    // Cancelled after the first item: the second never starts.
+    let result = progress::scope(&progress, || {
+        move_into_with(std::slice::from_ref(&a), &dest, &mut moved)?;
+        progress.cancel();
+        move_into_with(std::slice::from_ref(&b), &dest, &mut moved)
+    });
+
+    assert!(result.unwrap_err().to_string().starts_with("Cancelled"));
+    assert_eq!(moved.paths, [dest.join("a.txt")]);
+    assert!(b.exists());
+}

@@ -46,6 +46,8 @@ pub fn same_file(a: &Path, b: &Path) -> io::Result<bool> {
 
 #[cfg(windows)]
 mod platform {
+    use std::cell::Cell;
+    use std::ffi::c_void;
     use std::fs;
     use std::io::{self, ErrorKind};
     use std::os::windows::ffi::OsStrExt;
@@ -54,20 +56,67 @@ mod platform {
     use std::path::Path;
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, COPY_FILE_FAIL_IF_EXISTS, CopyFileExW,
-        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO, FileIdInfo,
-        GetFileInformationByHandle, GetFileInformationByHandleEx, MOVE_FILE_FLAGS, MoveFileExW,
+        BY_HANDLE_FILE_INFORMATION, COPY_FILE_FAIL_IF_EXISTS, COPYPROGRESSROUTINE_PROGRESS,
+        CopyFileExW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO,
+        FileIdInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
+        LPPROGRESS_ROUTINE_CALLBACK_REASON, MOVE_FILE_FLAGS, MoveFileExW, PROGRESS_CANCEL,
+        PROGRESS_CONTINUE,
     };
     use windows::core::HSTRING;
+
+    /// Called by `CopyFileExW` as chunks are copied. `data` points at the `Cell` holding
+    /// the bytes already counted for this file.
+    unsafe extern "system" fn progress_routine(
+        _total_size: i64,
+        transferred: i64,
+        _stream_size: i64,
+        _stream_transferred: i64,
+        _stream_number: u32,
+        _reason: LPPROGRESS_ROUTINE_CALLBACK_REASON,
+        _source: HANDLE,
+        _destination: HANDLE,
+        data: *const c_void,
+    ) -> COPYPROGRESSROUTINE_PROGRESS {
+        // SAFETY: `data` is the address of the `Cell<i64>` that `copy_file` keeps alive
+        // for the whole `CopyFileExW` call, and the routine runs on that same thread.
+        let counted = unsafe { &*data.cast::<Cell<i64>>() };
+        let new = u64::try_from(transferred - counted.get()).unwrap_or(0);
+        counted.set(transferred);
+        super::super::progress::add_bytes(new);
+        // Waits here while paused; a cancel stops the copy and removes the partial file.
+        match super::super::progress::checkpoint() {
+            Ok(()) => PROGRESS_CONTINUE,
+            Err(_) => PROGRESS_CANCEL,
+        }
+    }
 
     /// Copies a file (data, attributes, timestamps, alternate streams, like
     /// `fs::copy`) to `dst`, failing if `dst` exists.
     pub fn copy_file(src: &Path, dst: &Path) -> io::Result<()> {
+        super::super::progress::checkpoint()?;
         let (src, dst) = (verbatim(src)?, verbatim(dst)?);
-        // SAFETY: both strings are NUL-terminated and outlive the call; no progress
-        // routine, data or cancel flag is passed.
-        unsafe { CopyFileExW(&src, &dst, None, None, None, COPY_FILE_FAIL_IF_EXISTS) }
-            .map_err(io_error)
+        let counted = Cell::new(0_i64);
+        // SAFETY: both strings are NUL-terminated and outlive the call, and `counted`
+        // outlives it too and is only touched by the routine, on this thread. No cancel
+        // flag is passed; the routine cancels.
+        let result = unsafe {
+            CopyFileExW(
+                &src,
+                &dst,
+                Some(progress_routine),
+                Some((&raw const counted).cast()),
+                None,
+                COPY_FILE_FAIL_IF_EXISTS,
+            )
+        };
+        match result {
+            Ok(()) => Ok(()),
+            // The routine stopped it, and the system removed the partial copy.
+            Err(_) if super::super::progress::current().is_some_and(|p| p.is_cancelled()) => {
+                Err(super::super::progress::cancelled())
+            }
+            Err(e) => Err(io_error(e)),
+        }
     }
 
     /// Renames a file or folder, failing if `dst` exists. Across volumes it fails with
@@ -165,6 +214,7 @@ mod platform {
     /// Copies a file to `dst`, failing if `dst` exists. Writes only through the handle
     /// that created `dst`: reopening by path could hit a file someone renamed onto it.
     pub fn copy_file(src: &Path, dst: &Path) -> io::Result<()> {
+        super::super::progress::checkpoint()?;
         // Refuse FIFOs and devices before opening one blocks or never ends.
         if !fs::metadata(src)?.is_file() {
             return Err(not_a_file());
@@ -209,16 +259,29 @@ mod platform {
             )
         };
         if status == 0 {
+            // One call copies the file, so it counts when it is done.
+            super::super::progress::add_bytes(from.metadata().map_or(0, |m| m.len()));
             Ok(())
         } else {
             Err(io::Error::last_os_error())
         }
     }
 
-    /// Data and mode, as `fs::copy` does on Linux (`io::copy` uses `copy_file_range`).
+    /// Data and mode, as `fs::copy` does on Linux, in chunks so progress, pause and
+    /// cancel are noticed on big files.
     #[cfg(not(target_os = "macos"))]
     fn fill(from: &mut File, to: &mut File, perms: fs::Permissions) -> io::Result<()> {
-        io::copy(from, to)?;
+        use std::io::{Read, Write};
+        let mut buffer = vec![0_u8; 1024 * 1024];
+        loop {
+            super::super::progress::checkpoint()?;
+            let n = from.read(&mut buffer)?;
+            if n == 0 {
+                break;
+            }
+            to.write_all(&buffer[..n])?;
+            super::super::progress::add_bytes(n as u64);
+        }
         to.set_permissions(perms)
     }
 

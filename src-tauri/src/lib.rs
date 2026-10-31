@@ -4,12 +4,14 @@ mod journal;
 mod ops;
 mod perf;
 mod platform;
+mod queue;
 mod session;
 mod thumbs;
 mod watch;
 mod window;
 
-use tauri::{Manager, WindowEvent};
+use std::sync::Arc;
+use tauri::{Emitter, Manager, WindowEvent};
 
 /// Opens the undo journal. A file that can't be opened (damaged, say) is put aside and a
 /// new journal started, so one bad file doesn't stop the app from starting.
@@ -56,6 +58,7 @@ pub fn run() {
                 .map(|d| d.join("session.json"));
             let (session, extra) = session::Session::load(file);
             app.manage(session);
+            app.manage(queue::Queue::start(app.handle()));
             let journal_file = app
                 .path()
                 .app_data_dir()
@@ -89,7 +92,16 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| match event {
-            WindowEvent::CloseRequested { .. } => {
+            WindowEvent::CloseRequested { api, .. } => {
+                // Closing would stop the window's copies and moves half way.
+                let working = window
+                    .try_state::<Arc<queue::Queue>>()
+                    .is_some_and(|q| q.has_active(window.label()));
+                if working {
+                    api.prevent_close();
+                    let _ = window.emit("queue-close-blocked", ());
+                    return;
+                }
                 let session = window.state::<session::Session>();
                 window::settle(window);
                 session.close(window.label());
@@ -120,6 +132,11 @@ pub fn run() {
             commands::create_folder,
             commands::copy_paths,
             commands::move_paths,
+            commands::queue_pause,
+            commands::queue_resume,
+            commands::queue_cancel,
+            commands::queue_dismiss,
+            commands::queue_jobs,
             commands::undo,
             commands::redo,
             commands::undo_state,

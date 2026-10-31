@@ -60,13 +60,16 @@ export function sameVolume(a: string, b: string): boolean {
 export const undoOperation = () => invoke<string>("undo");
 /** Redoes the latest undone file operation. */
 export const redoOperation = () => invoke<string>("redo");
-export const trashPaths = (targets: string[]) => invoke<void>("trash_paths", { targets });
+/** Starts moving to the Recycle Bin in the background; resolves to the job id. */
+export const trashPaths = (targets: string[]) => invoke<number>("trash_paths", { targets });
 export const renamePath = (path: string, newName: string) =>
   invoke<string>("rename_path", { path, newName });
 export const createFolder = (parent: string, name: string) =>
   invoke<string>("create_folder", { parent, name });
 /** Result of `copy_paths` (`commands::Copied`). */
 export interface Copied {
+  /** The folder copied into. */
+  dest: string;
   /** The copy of each source. */
   paths: string[];
   /** Links that weren't copied because they can't be recreated on this system. */
@@ -74,10 +77,13 @@ export interface Copied {
   /** Links in the copy that should point into it but still lead to the original. */
   notRepointed: string[];
 }
+/** Starts copying in the background; resolves to the id of the job in the queue. */
 export const copyPaths = (sources: string[], dest: string) =>
-  invoke<Copied>("copy_paths", { sources, dest });
+  invoke<number>("copy_paths", { sources, dest });
 /** Result of `move_paths` (`commands::Moved`). */
 export interface Moved {
+  /** The folder moved into. */
+  dest: string;
   /** Where each source ended up. */
   paths: string[];
   /** Sources a move to another drive had to leave: changed, in use, or links. */
@@ -85,8 +91,37 @@ export interface Moved {
   /** Links in the moved folder that should point into it but dangle or are missing. */
   notRepointed: string[];
 }
+/** Starts moving in the background; resolves to the id of the job in the queue. */
 export const movePaths = (sources: string[], dest: string) =>
-  invoke<Moved>("move_paths", { sources, dest });
+  invoke<number>("move_paths", { sources, dest });
+
+/** A copy, move or delete in the operations queue (`queue::JobView`). */
+export interface Job {
+  id: number;
+  kind: "copy" | "move" | "trash";
+  label: string;
+  state: "queued" | "running" | "paused" | "done" | "failed" | "cancelled";
+  bytesDone: number;
+  bytesTotal: number;
+  itemsDone: number;
+  itemsTotal: number;
+  /** Bytes per second, smoothed. */
+  speed: number;
+  etaSecs: number | null;
+  error: string | null;
+  /** `Copied`, `Moved` or `{ count, leftAlone }` once the job is done. */
+  result: Copied | Moved | { count: number; leftAlone: number } | null;
+}
+/** Fires whenever a job started from this window changes. */
+export const onQueueUpdate = (cb: (job: Job) => void): Promise<UnlistenFn> =>
+  getCurrentWebviewWindow().listen<Job>("queue-update", (e) => cb(e.payload));
+/** Fires when closing this window was refused because its operations are still going. */
+export const onCloseBlocked = (cb: () => void): Promise<UnlistenFn> =>
+  getCurrentWebviewWindow().listen("queue-close-blocked", () => cb());
+export const queuePause = (id: number) => invoke<void>("queue_pause", { id });
+export const queueResume = (id: number) => invoke<void>("queue_resume", { id });
+export const queueCancel = (id: number) => invoke<void>("queue_cancel", { id });
+export const queueDismiss = (id: number) => invoke<void>("queue_dismiss", { id });
 
 /** Fires (debounced) when the folder this window watches changes on disk. */
 export const onDirChanged = (cb: (path: string) => void): Promise<UnlistenFn> =>

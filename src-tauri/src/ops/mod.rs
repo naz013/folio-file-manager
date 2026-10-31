@@ -11,6 +11,7 @@ mod cross_volume;
 #[cfg(windows)]
 mod links;
 mod noclobber;
+pub mod progress;
 
 pub fn trash(paths: &[PathBuf]) -> Result<(), trash::Error> {
     trash::delete_all(paths)
@@ -138,6 +139,9 @@ pub fn copy_into(sources: &[PathBuf], dest_dir: &Path) -> io::Result<Copied> {
 /// still known to the caller.
 pub fn copy_into_with(sources: &[PathBuf], dest_dir: &Path, copied: &mut Copied) -> io::Result<()> {
     for src in sources {
+        if let Err(e) = progress::checkpoint() {
+            return Err(batch_error(e, "copied", &copied.paths));
+        }
         let copy = ensure_not_into_itself(src, dest_dir).and_then(|()| {
             let mut walk = Plain {
                 made: Created::default(),
@@ -157,6 +161,7 @@ pub fn copy_into_with(sources: &[PathBuf], dest_dir: &Path, copied: &mut Copied)
                 return Err(batch_error(e, "copied", &copied.paths));
             }
         }
+        progress::add_item();
     }
     Ok(())
 }
@@ -207,6 +212,9 @@ pub fn move_into(sources: &[PathBuf], dest_dir: &Path) -> io::Result<Moved> {
 /// still known to the caller.
 pub fn move_into_with(sources: &[PathBuf], dest_dir: &Path, moved: &mut Moved) -> io::Result<()> {
     for src in sources {
+        if let Err(e) = progress::checkpoint() {
+            return Err(batch_error(e, "moved", &moved.paths));
+        }
         if let Err(e) = move_one(src, dest_dir, moved) {
             let e = match moved.left_behind.len() {
                 0 => e,
@@ -218,8 +226,41 @@ pub fn move_into_with(sources: &[PathBuf], dest_dir: &Path, moved: &mut Moved) -
             let e = with_dangling(e, moved.not_repointed.len());
             return Err(batch_error(e, "moved", &moved.paths));
         }
+        progress::add_item();
     }
     Ok(())
+}
+
+/// The drive `path` is on, as a key: jobs on one drive run one after another.
+pub fn volume_key(path: &Path) -> String {
+    noclobber::file_id(path).map_or_else(|_| String::new(), |(volume, _)| format!("{volume:x}"))
+}
+
+/// Total size in bytes of the files in `sources`, for showing progress. Links are not
+/// followed and count for nothing; what can't be read counts for nothing too.
+pub fn total_bytes(sources: &[PathBuf]) -> u64 {
+    let mut total = 0_u64;
+    let mut folders = Vec::new();
+    for src in sources {
+        match fs::symlink_metadata(src) {
+            Ok(m) if m.is_dir() => folders.push(src.clone()),
+            Ok(m) if m.is_file() => total += m.len(),
+            _ => {}
+        }
+    }
+    while let Some(folder) = folders.pop() {
+        let Ok(entries) = fs::read_dir(&folder) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            match entry.file_type() {
+                Ok(kind) if kind.is_dir() => folders.push(entry.path()),
+                Ok(kind) if kind.is_file() => total += entry.metadata().map_or(0, |m| m.len()),
+                _ => {}
+            }
+        }
+    }
+    total
 }
 
 /// The identity of the item at `path` as text (volume and file id), which stays the same

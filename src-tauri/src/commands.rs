@@ -9,10 +9,12 @@
 use crate::fs::{self, Entry};
 use crate::journal::{self, Journal, Step};
 use crate::ops;
+use crate::queue::{self, Kind, Queue};
 use crate::session::{Session, WindowTabs};
 use crate::watch::DirWatcher;
 use serde::Serialize;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tauri::Manager;
 
 type CmdResult<T> = Result<T, String>;
@@ -210,14 +212,35 @@ fn begin(journal: &Journal, label: &str) -> Result<journal::Pending, String> {
     journal.begin(label).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-pub async fn trash_paths(app: tauri::AppHandle, targets: Vec<String>) -> CmdResult<()> {
-    blocking(move || {
-        let journal = app.state::<Journal>();
-        let targets = paths(targets);
-        let pending = begin(&journal, &describe("Move to Recycle Bin:", &targets))?;
+/// Starts moving `targets` to the Recycle Bin in the background; returns the job id.
+#[tauri::command(async)]
+pub fn trash_paths(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    queue: tauri::State<'_, Arc<Queue>>,
+    targets: Vec<String>,
+) -> u64 {
+    let targets = paths(targets);
+    let label = describe("Move to Recycle Bin:", &targets);
+    let lane = targets
+        .first()
+        .map_or_else(String::new, |p| ops::volume_key(p.parent().unwrap_or(p)));
+    let title = label.clone();
+    // What each item was when it was chosen: the job may run much later.
+    let chosen: Vec<Option<String>> = targets.iter().map(|p| ops::identity(p)).collect();
+    let handle = app.clone();
+    let work: queue::Work = Box::new(move |progress| {
+        let journal = handle.state::<Journal>();
+        progress.set_totals(0, targets.len() as u64);
+        let pending = begin(&journal, &label)?;
         let started = journal::unix_now() - 2;
-        // Only what is there to trash can end up in the bin.
+        // Only what is still there, and still the same item, is trashed.
+        let (targets, changed): (Vec<_>, Vec<_>) = targets
+            .into_iter()
+            .zip(chosen)
+            .partition(|(path, was)| was.is_none() || ops::identity(path).as_ref() == was.as_ref());
+        let targets: Vec<PathBuf> = targets.into_iter().map(|(path, _)| path).collect();
+        let left_alone = changed.len();
         let existing: Vec<PathBuf> = targets
             .iter()
             .filter(|p| std::fs::symlink_metadata(p).is_ok())
@@ -236,9 +259,12 @@ pub async fn trash_paths(app: tauri::AppHandle, targets: Vec<String>) -> CmdResu
             .map(|(original, id)| Step::Trash { original, id })
             .collect();
         journal.finish(pending, &steps);
-        result
-    })
-    .await
+        for _ in &steps {
+            ops::progress::add_item();
+        }
+        result.map(|()| serde_json::json!({ "count": steps.len(), "leftAlone": left_alone }))
+    });
+    queue.submit(&app, window.label(), Kind::Trash, title, &lane, work)
 }
 
 #[tauri::command]
@@ -288,18 +314,27 @@ pub async fn create_folder(
     .await
 }
 
-#[tauri::command]
-pub async fn copy_paths(
+/// Starts copying `sources` into `dest` in the background; returns the job id.
+#[tauri::command(async)]
+pub fn copy_paths(
     app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    queue: tauri::State<'_, Arc<Queue>>,
     sources: Vec<String>,
     dest: String,
-) -> CmdResult<Copied> {
-    blocking(move || {
-        let journal = app.state::<Journal>();
-        let sources = paths(sources);
-        let pending = begin(&journal, &describe("Copy", &sources))?;
+) -> u64 {
+    let sources = paths(sources);
+    let dest = PathBuf::from(dest);
+    let label = describe("Copy", &sources);
+    let lane = ops::volume_key(&dest);
+    let title = label.clone();
+    let handle = app.clone();
+    let work: queue::Work = Box::new(move |progress| {
+        let journal = handle.state::<Journal>();
+        progress.set_totals(ops::total_bytes(&sources), sources.len() as u64);
+        let pending = begin(&journal, &label)?;
         let mut done = ops::Copied::default();
-        let result = ops::copy_into_with(&sources, &PathBuf::from(dest), &mut done);
+        let result = ops::copy_into_with(&sources, &dest, &mut done);
         let steps: Vec<Step> = done
             .pairs
             .iter()
@@ -307,20 +342,25 @@ pub async fn copy_paths(
             .collect();
         journal.finish(pending, &steps);
         result
-            .map(|()| Copied {
-                paths: strings(done.paths),
-                skipped: strings(done.skipped),
-                not_repointed: strings(done.not_repointed),
+            .map(|()| {
+                serde_json::to_value(Copied {
+                    dest: dest.to_string_lossy().into_owned(),
+                    paths: strings(done.paths),
+                    skipped: strings(done.skipped),
+                    not_repointed: strings(done.not_repointed),
+                })
+                .unwrap_or_default()
             })
             .map_err(|e| e.to_string())
-    })
-    .await
+    });
+    queue.submit(&app, window.label(), Kind::Copy, title, &lane, work)
 }
 
 /// `ops::Copied` for the UI.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Copied {
+    dest: String,
     paths: Vec<String>,
     skipped: Vec<String>,
     not_repointed: Vec<String>,
@@ -330,23 +370,43 @@ pub struct Copied {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Moved {
+    dest: String,
     paths: Vec<String>,
     left_behind: Vec<String>,
     not_repointed: Vec<String>,
 }
 
-#[tauri::command]
-pub async fn move_paths(
+/// Starts moving `sources` into `dest` in the background; returns the job id.
+#[tauri::command(async)]
+pub fn move_paths(
     app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    queue: tauri::State<'_, Arc<Queue>>,
     sources: Vec<String>,
     dest: String,
-) -> CmdResult<Moved> {
-    blocking(move || {
-        let journal = app.state::<Journal>();
-        let sources = paths(sources);
-        let pending = begin(&journal, &describe("Move", &sources))?;
+) -> u64 {
+    let sources = paths(sources);
+    let dest = PathBuf::from(dest);
+    let label = describe("Move", &sources);
+    let lane = ops::volume_key(&dest);
+    let title = label.clone();
+    let dest_volume = lane.clone();
+    let handle = app.clone();
+    let work: queue::Work = Box::new(move |progress| {
+        let journal = handle.state::<Journal>();
+        // On one drive a move is a rename, which takes no time to show progress for.
+        let same_drive = sources
+            .iter()
+            .all(|s| ops::volume_key(s.parent().unwrap_or(s)) == dest_volume);
+        let bytes = if same_drive {
+            0
+        } else {
+            ops::total_bytes(&sources)
+        };
+        progress.set_totals(bytes, sources.len() as u64);
+        let pending = begin(&journal, &label)?;
         let mut done = ops::Moved::default();
-        let result = ops::move_into_with(&sources, &PathBuf::from(dest), &mut done);
+        let result = ops::move_into_with(&sources, &dest, &mut done);
         let steps: Vec<Step> = done
             .pairs
             .iter()
@@ -354,14 +414,44 @@ pub async fn move_paths(
             .collect();
         journal.finish(pending, &steps);
         result
-            .map(|()| Moved {
-                paths: strings(done.paths),
-                left_behind: strings(done.left_behind),
-                not_repointed: strings(done.not_repointed),
+            .map(|()| {
+                serde_json::to_value(Moved {
+                    dest: dest.to_string_lossy().into_owned(),
+                    paths: strings(done.paths),
+                    left_behind: strings(done.left_behind),
+                    not_repointed: strings(done.not_repointed),
+                })
+                .unwrap_or_default()
             })
             .map_err(|e| e.to_string())
-    })
-    .await
+    });
+    queue.submit(&app, window.label(), Kind::Move, title, &lane, work)
+}
+
+#[tauri::command]
+pub fn queue_pause(app: tauri::AppHandle, queue: tauri::State<'_, Arc<Queue>>, id: u64) {
+    queue.pause(&app, id);
+}
+
+#[tauri::command]
+pub fn queue_resume(app: tauri::AppHandle, queue: tauri::State<'_, Arc<Queue>>, id: u64) {
+    queue.resume(&app, id);
+}
+
+#[tauri::command]
+pub fn queue_cancel(app: tauri::AppHandle, queue: tauri::State<'_, Arc<Queue>>, id: u64) {
+    queue.cancel(&app, id);
+}
+
+#[tauri::command]
+pub fn queue_dismiss(queue: tauri::State<'_, Arc<Queue>>, id: u64) {
+    queue.dismiss(id);
+}
+
+/// Every job in the queue, for a window that opens while operations are running.
+#[tauri::command]
+pub fn queue_jobs(queue: tauri::State<'_, Arc<Queue>>) -> Vec<queue::JobView> {
+    queue.list()
 }
 
 /// What Ctrl+Z and Ctrl+Y would do now, for the UI to show.
@@ -383,13 +473,30 @@ pub async fn undo_state(app: tauri::AppHandle) -> CmdResult<UndoState> {
 /// Undoes the latest operation; returns its name.
 #[tauri::command]
 pub async fn undo(app: tauri::AppHandle) -> CmdResult<String> {
-    blocking(move || app.state::<Journal>().undo()).await
+    blocking(move || {
+        wait_for_queue(&app)?;
+        app.state::<Journal>().undo()
+    })
+    .await
+}
+
+/// Undo and redo act on what the queue's jobs are about to change, so they wait.
+fn wait_for_queue(app: &tauri::AppHandle) -> CmdResult<()> {
+    if app.state::<Arc<Queue>>().is_busy() {
+        Err("Wait for the running operations to finish first".into())
+    } else {
+        Ok(())
+    }
 }
 
 /// Redoes the latest undone operation; returns its name.
 #[tauri::command]
 pub async fn redo(app: tauri::AppHandle) -> CmdResult<String> {
-    blocking(move || app.state::<Journal>().redo()).await
+    blocking(move || {
+        wait_for_queue(&app)?;
+        app.state::<Journal>().redo()
+    })
+    .await
 }
 
 #[tauri::command]
