@@ -63,8 +63,15 @@ export const createFolder = (parent: string, name: string) =>
   invoke<string>("create_folder", { parent, name });
 export const copyPaths = (sources: string[], dest: string) =>
   invoke<string[]>("copy_paths", { sources, dest });
+/** Result of `move_paths` (`commands::Moved`). */
+export interface Moved {
+  /** Where each source ended up. */
+  paths: string[];
+  /** Sources a move to another drive had to leave because they changed or are in use. */
+  leftBehind: string[];
+}
 export const movePaths = (sources: string[], dest: string) =>
-  invoke<string[]>("move_paths", { sources, dest });
+  invoke<Moved>("move_paths", { sources, dest });
 
 /** Fires (debounced) when the folder this window watches changes on disk. */
 export const onDirChanged = (cb: (path: string) => void): Promise<UnlistenFn> =>

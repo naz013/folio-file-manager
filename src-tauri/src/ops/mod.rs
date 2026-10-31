@@ -7,6 +7,8 @@ use std::fs;
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 
+mod cross_volume;
+
 pub fn trash(paths: &[PathBuf]) -> Result<(), trash::Error> {
     trash::delete_all(paths)
 }
@@ -54,33 +56,54 @@ pub fn copy_into(sources: &[PathBuf], dest_dir: &Path) -> io::Result<Vec<PathBuf
     Ok(created)
 }
 
-/// Moves each source into `dest_dir`. Returns the new paths.
-/// Items already in `dest_dir` are left untouched.
-pub fn move_into(sources: &[PathBuf], dest_dir: &Path) -> io::Result<Vec<PathBuf>> {
-    let mut moved = Vec::with_capacity(sources.len());
+/// The result of [`move_into`].
+#[derive(Debug, Default)]
+pub struct Moved {
+    /// Where each source ended up.
+    pub paths: Vec<PathBuf>,
+    /// Source paths a cross-volume move had to leave: they changed during the move, or
+    /// couldn't be removed. Each one still has a complete copy.
+    pub left_behind: Vec<PathBuf>,
+}
+
+/// Moves each source into `dest_dir`. Items already in `dest_dir` are left untouched.
+///
+/// # Errors
+/// Stops at the first source that fails. The error also mentions anything earlier
+/// sources had to leave behind, so it isn't lost.
+pub fn move_into(sources: &[PathBuf], dest_dir: &Path) -> io::Result<Moved> {
+    let mut moved = Moved::default();
     for src in sources {
-        if src.parent() == Some(dest_dir) {
-            moved.push(src.clone());
-            continue;
+        if let Err(e) = move_one(src, dest_dir, &mut moved) {
+            return Err(match moved.left_behind.len() {
+                0 => e,
+                n => io::Error::new(
+                    e.kind(),
+                    format!("{e}. Earlier, {n} item(s) stayed in the original folder"),
+                ),
+            });
         }
-        ensure_not_into_itself(src, dest_dir)?;
-        let target = unique_destination(dest_dir, &file_name(src)?);
-        match fs::rename(src, &target) {
-            Ok(()) => {}
-            // Different volume: copy, then remove the source only after the copy succeeded.
-            Err(e) if is_cross_device(&e) => {
-                copy_recursive(src, &target)?;
-                if src.is_dir() {
-                    fs::remove_dir_all(src)?;
-                } else {
-                    fs::remove_file(src)?;
-                }
-            }
-            Err(e) => return Err(e),
-        }
-        moved.push(target);
     }
     Ok(moved)
+}
+
+fn move_one(src: &Path, dest_dir: &Path, moved: &mut Moved) -> io::Result<()> {
+    if src.parent() == Some(dest_dir) {
+        moved.paths.push(src.to_path_buf());
+        return Ok(());
+    }
+    ensure_not_into_itself(src, dest_dir)?;
+    let target = unique_destination(dest_dir, &file_name(src)?);
+    match fs::rename(src, &target) {
+        Ok(()) => {}
+        Err(e) if is_cross_device(&e) => {
+            let left = cross_volume::move_by_copy(src, &target)?;
+            moved.left_behind.extend(left);
+        }
+        Err(e) => return Err(e),
+    }
+    moved.paths.push(target);
+    Ok(())
 }
 
 /// Returns `dir/name`, or `dir/name (2).ext`, `(3)`… if it already exists.
@@ -258,11 +281,13 @@ mod tests {
         let dest = dir.path().join("dest");
         fs::create_dir(&dest).unwrap();
 
-        let same = move_into(std::slice::from_ref(&f), dir.path()).unwrap();
+        let same = move_into(std::slice::from_ref(&f), dir.path())
+            .unwrap()
+            .paths;
         assert_eq!(same[0], f);
         assert!(f.exists());
 
-        let moved = move_into(std::slice::from_ref(&f), &dest).unwrap();
+        let moved = move_into(std::slice::from_ref(&f), &dest).unwrap().paths;
         assert_eq!(moved[0], dest.join("f.txt"));
         assert!(!f.exists() && moved[0].exists());
     }

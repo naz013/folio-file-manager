@@ -375,11 +375,23 @@
   }
 
   async function transfer(paths: string[], dest: string, copy: boolean) {
-    const result = await run(
-      () => (copy ? copyPaths(paths, dest) : movePaths(paths, dest)),
-      (r) => `${copy ? "Copied" : "Moved"} ${plural(r.length, "item")}`,
-    );
-    if (result) await refresh(dest === path ? result : []);
+    const result = await run(async () => {
+      if (copy) return { paths: await copyPaths(paths, dest), leftBehind: [] };
+      return movePaths(paths, dest);
+    });
+    if (!result) return;
+    const { paths: created, leftBehind } = result;
+    if (leftBehind.length) {
+      // Shown in the error style so it's noticed; nothing is lost, every item has a complete copy.
+      notify(
+        `Moved ${plural(created.length, "item")}. ${plural(leftBehind.length, "item")} stayed in ` +
+          `the original folder because they changed during the move or are in use.`,
+        true,
+      );
+    } else {
+      notify(`${copy ? "Copied" : "Moved"} ${plural(created.length, "item")}`);
+    }
+    await refresh(dest === path ? created : []);
   }
 
   async function paste() {

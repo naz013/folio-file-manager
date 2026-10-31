@@ -10,6 +10,7 @@ use crate::fs::{self, Entry};
 use crate::ops;
 use crate::session::{Session, WindowTabs};
 use crate::watch::DirWatcher;
+use serde::Serialize;
 use std::path::PathBuf;
 use tauri::Manager;
 
@@ -207,11 +208,22 @@ pub async fn copy_paths(sources: Vec<String>, dest: String) -> CmdResult<Vec<Str
     .await
 }
 
+/// `ops::Moved` for the UI.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Moved {
+    paths: Vec<String>,
+    left_behind: Vec<String>,
+}
+
 #[tauri::command]
-pub async fn move_paths(sources: Vec<String>, dest: String) -> CmdResult<Vec<String>> {
+pub async fn move_paths(sources: Vec<String>, dest: String) -> CmdResult<Moved> {
     blocking(move || {
         ops::move_into(&paths(sources), &PathBuf::from(dest))
-            .map(strings)
+            .map(|m| Moved {
+                paths: strings(m.paths),
+                left_behind: strings(m.left_behind),
+            })
             .map_err(|e| e.to_string())
     })
     .await

@@ -70,7 +70,7 @@ fn move_into_keeps_both_and_never_overwrites_existing_file() {
     write(src.join("f.txt"), "new");
     write(dest.join("f.txt"), "old");
 
-    let out = move_into(&one(&src.join("f.txt")), &dest).unwrap();
+    let out = move_into(&one(&src.join("f.txt")), &dest).unwrap().paths;
 
     assert_eq!(out[0], dest.join("f (2).txt"));
     assert_eq!(read(dest.join("f.txt")), "old");
@@ -113,7 +113,9 @@ fn move_into_multiple_sources_with_same_name_get_distinct_targets() {
     write(a.join("f.txt"), "A");
     write(b.join("f.txt"), "B");
 
-    let out = move_into(&[a.join("f.txt"), b.join("f.txt")], &dest).unwrap();
+    let out = move_into(&[a.join("f.txt"), b.join("f.txt")], &dest)
+        .unwrap()
+        .paths;
 
     assert_eq!(out, vec![dest.join("f.txt"), dest.join("f (2).txt")]);
     assert_eq!(read(&out[0]), "A");
@@ -163,7 +165,7 @@ fn move_into_folder_does_not_merge_into_file_with_same_name() {
     write(src.join("item").join("inner.txt"), "inner");
     write(dest.join("item"), "i am a file");
 
-    let out = move_into(&one(&src.join("item")), &dest).unwrap();
+    let out = move_into(&one(&src.join("item")), &dest).unwrap().paths;
 
     assert_eq!(out[0], dest.join("item (2)"));
     assert_eq!(read(dest.join("item")), "i am a file");
@@ -183,7 +185,7 @@ fn move_into_folder_with_same_named_folder_keeps_both_without_merging() {
     write(dest.join("docs").join("clash.txt"), "dest clash");
     write(dest.join("docs").join("keep.txt"), "keep");
 
-    let out = move_into(&one(&src.join("docs")), &dest).unwrap();
+    let out = move_into(&one(&src.join("docs")), &dest).unwrap().paths;
 
     assert_eq!(out[0], dest.join("docs (2)"));
     // Existing folder is untouched: no merge, no overwrite.
@@ -224,7 +226,7 @@ fn conflict_resolution_handles_non_ascii_names() {
     write(dest.join(name), "old");
 
     let copied = copy_into(&one(&src.join(name)), &dest).unwrap();
-    let moved = move_into(&one(&src.join(name)), &dest).unwrap();
+    let moved = move_into(&one(&src.join(name)), &dest).unwrap().paths;
 
     assert_eq!(copied[0], dest.join("отчёт 日本語 ñ (2).txt"));
     assert_eq!(moved[0], dest.join("отчёт 日本語 ñ (3).txt"));
@@ -456,7 +458,7 @@ fn move_into_folder_tree_deeper_than_260_chars_preserves_contents() {
     let rel = deep.strip_prefix(&root).unwrap().to_path_buf();
     let dest = dir(t.path().join("dest"));
 
-    let out = move_into(&one(&root), &dest).unwrap();
+    let out = move_into(&one(&root), &dest).unwrap().paths;
 
     let moved_leaf = out[0].join(&rel).join("leaf.txt");
     assert!(path_len(&moved_leaf) > 260);
@@ -472,7 +474,7 @@ fn move_into_single_file_with_path_over_260_chars_succeeds() {
     write(&file, "long");
     let dest_long = long_chain(&t.path().join("dest"));
 
-    let out = move_into(&one(&file), &dest_long).unwrap();
+    let out = move_into(&one(&file), &dest_long).unwrap().paths;
 
     assert!(path_len(&out[0]) > 260);
     assert_eq!(read(&out[0]), "long");
@@ -715,7 +717,7 @@ fn move_into_read_only_file_succeeds_and_keeps_attribute() {
     let _g1 = RoGuard(src.join("ro.txt"));
     let _g2 = RoGuard(dest.join("ro.txt"));
 
-    let out = move_into(&one(&src.join("ro.txt")), &dest).unwrap();
+    let out = move_into(&one(&src.join("ro.txt")), &dest).unwrap().paths;
 
     assert_eq!(read(&out[0]), "ro");
     assert!(is_readonly(&out[0]));
@@ -781,7 +783,7 @@ fn move_into_dest_with_read_only_file_of_same_name_keeps_both_untouched() {
     set_readonly(&dest.join("f.txt"), true);
     let _g1 = RoGuard(dest.join("f.txt"));
 
-    let out = move_into(&one(&src.join("f.txt")), &dest).unwrap();
+    let out = move_into(&one(&src.join("f.txt")), &dest).unwrap().paths;
 
     assert_eq!(out[0], dest.join("f (2).txt"));
     assert_eq!(read(dest.join("f.txt")), "old");
