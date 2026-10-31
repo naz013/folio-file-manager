@@ -460,18 +460,50 @@ fn is_held_open(e: &io::Error) -> bool {
     e.kind() == ErrorKind::PermissionDenied || (cfg!(windows) && e.raw_os_error() == Some(32))
 }
 
-fn copy_contents(src: &Path, dst: &Path, obs: &mut dyn Observe) -> io::Result<()> {
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        copy_recursive(&entry.path(), &dst.join(entry.file_name()), obs)?;
+/// A folder being copied: its entries are read up front so no directory handle stays
+/// open per level (a deep tree would run out of them).
+struct Frame {
+    src: PathBuf,
+    dst: PathBuf,
+    entries: std::vec::IntoIter<std::ffi::OsString>,
+}
+
+impl Frame {
+    fn open(src: &Path, dst: &Path) -> io::Result<Self> {
+        let entries = fs::read_dir(src)?
+            .map(|e| e.map(|e| e.file_name()))
+            .collect::<io::Result<Vec<_>>>()?;
+        Ok(Self {
+            src: src.to_path_buf(),
+            dst: dst.to_path_buf(),
+            entries: entries.into_iter(),
+        })
     }
-    obs.folder(src);
+}
+
+/// Copies what is inside the folder `src` into the new folder `dst`. The walk keeps its
+/// place on an explicit stack, not the call stack, so a tree as deep as the path length
+/// limit allows can't overflow the thread's stack.
+fn copy_contents(src: &Path, dst: &Path, obs: &mut dyn Observe) -> io::Result<()> {
+    let mut open = vec![Frame::open(src, dst)?];
+    while let Some(top) = open.last_mut() {
+        let Some(name) = top.entries.next() else {
+            obs.folder(&top.src);
+            open.pop();
+            continue;
+        };
+        let (from, to) = (top.src.join(&name), top.dst.join(&name));
+        if let Some(child) = copy_entry(&from, &to, obs)? {
+            open.push(child);
+        }
+    }
     Ok(())
 }
 
-/// Copies a tree without following links, so a link to an ancestor can't loop and a
-/// link to elsewhere can't pull in data from outside the selection.
-fn copy_recursive(src: &Path, dst: &Path, obs: &mut dyn Observe) -> io::Result<()> {
+/// Copies one entry without following links, so a link to an ancestor can't loop and a
+/// link to elsewhere can't pull in data from outside the selection. A folder is created
+/// empty and returned for the caller to fill.
+fn copy_entry(src: &Path, dst: &Path, obs: &mut dyn Observe) -> io::Result<Option<Frame>> {
     let kind = fs::symlink_metadata(src)?.file_type();
     if kind.is_symlink() {
         // Read once: the recorded target is what was recreated.
@@ -481,13 +513,13 @@ fn copy_recursive(src: &Path, dst: &Path, obs: &mut dyn Observe) -> io::Result<(
             obs.made().file(dst)?;
             obs.link(src, target);
         }
-        Ok(())
+        Ok(None)
     } else if kind.is_dir() {
         fs::create_dir(dst)?;
         obs.made().dir(dst);
-        copy_contents(src, dst, obs)
+        Frame::open(src, dst).map(Some)
     } else {
-        obs.copy_file(src, dst)
+        obs.copy_file(src, dst).map(|()| None)
     }
 }
 

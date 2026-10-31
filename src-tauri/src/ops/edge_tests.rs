@@ -1470,3 +1470,74 @@ fn with_unknown_ids_a_changed_file_is_not_taken_for_ours() {
 
     assert!(!record.is_still_ours());
 }
+
+// ---------------------------------------------------------------------------
+// 10. Very deep trees (issue #75)
+// ---------------------------------------------------------------------------
+
+/// Builds `levels` nested one-letter folders under `root`, with a file at the bottom.
+/// Returns the deepest folder.
+fn deep_tree(root: &Path, levels: usize) -> PathBuf {
+    let mut at = root.to_path_buf();
+    for _ in 0..levels {
+        at.push("d");
+        fs::create_dir(&at).unwrap();
+    }
+    write(at.join("leaf.txt"), "bottom");
+    at
+}
+
+fn depth_of(root: &Path) -> usize {
+    let mut at = root.to_path_buf();
+    let mut levels = 0;
+    while at.join("d").is_dir() {
+        at.push("d");
+        levels += 1;
+    }
+    assert_eq!(read(at.join("leaf.txt")), "bottom");
+    levels
+}
+
+/// Levels in the deep trees. Building and deleting a tree this deep is slow (the OS
+/// resolves the whole path each time), so the walk runs on a thread with a small stack
+/// instead: a recursive walk would overflow it long before the bottom.
+const DEEP: usize = 1_000;
+const SMALL_STACK: usize = 128 * 1024;
+
+fn on_small_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    std::thread::Builder::new()
+        .stack_size(SMALL_STACK)
+        .spawn(f)
+        .unwrap()
+        .join()
+        .unwrap()
+}
+
+#[test]
+fn a_very_deep_tree_is_copied() {
+    let t = tmp();
+    let src = dir(t.path().join("src"));
+    deep_tree(&src, DEEP);
+    let dest = dir(t.path().join("dest"));
+
+    let (from, to) = (src.clone(), dest.clone());
+    let copied = on_small_stack(move || copy_into(&[from], &to).unwrap());
+
+    assert_eq!(depth_of(&copied.paths[0]), DEEP);
+}
+
+#[test]
+fn a_very_deep_tree_is_moved_between_volumes() {
+    let t = tmp();
+    let src = dir(t.path().join("src"));
+    deep_tree(&src, DEEP);
+    let dest = dir(t.path().join("dest"));
+
+    let (from, to) = (src.clone(), dest.clone());
+    let (target, left) =
+        on_small_stack(move || cross_volume::move_by_copy(&from, &to, "src").unwrap());
+
+    assert_eq!(left, Vec::<PathBuf>::new());
+    assert_eq!(depth_of(&target.unwrap()), DEEP);
+    assert!(!src.exists());
+}
