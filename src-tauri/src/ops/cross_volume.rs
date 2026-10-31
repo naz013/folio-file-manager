@@ -249,6 +249,11 @@ fn same_content(a: &Path, b: &Path) -> io::Result<bool> {
     }
 }
 
+/// Removes a link itself (a symlink or junction); what it points to is kept.
+pub(super) fn remove_link(path: &Path) -> io::Result<()> {
+    platform::remove_link(path)
+}
+
 /// Runs `remove`, and on Windows retries with the read-only attribute cleared if that
 /// is what blocks it. The attribute is restored when the remove still fails.
 pub(super) fn remove_even_read_only(
@@ -262,7 +267,12 @@ pub(super) fn remove_even_read_only(
     };
     // On Unix a denied remove is about the folder, not the file's mode, so clearing
     // the attribute (making the file world-writable) could never help.
-    let mut perms = fs::metadata(path)?.permissions();
+    // Never through a link: the attribute to clear would be its target's.
+    let meta = fs::symlink_metadata(path)?;
+    if meta.file_type().is_symlink() {
+        return Err(err);
+    }
+    let mut perms = meta.permissions();
     if !perms.readonly() {
         return Err(err);
     }
@@ -755,58 +765,88 @@ mod tests {
     }
 
     #[cfg(windows)]
-    #[test]
-    fn a_top_level_junction_stays_and_reports_no_target() {
-        let (t, src, _dst) = tree();
-        let outside = t.path().join("outside");
-        fs::create_dir(&outside).unwrap();
-        let link = src.join("door");
+    fn junction(link: &Path, target: &Path) {
         let made = std::process::Command::new("cmd")
             .args(["/C", "mklink", "/J"])
-            .arg(&link)
-            .arg(&outside)
+            .arg(link)
+            .arg(target)
             .output()
             .unwrap();
         assert!(made.status.success());
+    }
 
-        let (target, left) = super::move_by_copy(&link, t.path(), "door").unwrap();
-
-        assert_eq!(target, None);
-        assert_eq!(left, vec![link.clone()]);
-        assert!(fs::symlink_metadata(&link).is_ok());
+    #[cfg(windows)]
+    fn is_link(path: &Path) -> bool {
+        fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
     }
 
     #[cfg(windows)]
     #[test]
-    fn junction_stays_in_the_source_and_its_target_is_never_copied() {
+    fn a_top_level_junction_moves_without_touching_its_target() {
+        let (t, src, _dst) = tree();
+        let outside = t.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("keep.txt"), "keep").unwrap();
+        let link = src.join("door");
+        junction(&link, &outside);
+
+        let (target, left) = super::move_by_copy(&link, t.path(), "moved").unwrap();
+
+        assert_eq!(target, Some(t.path().join("moved")));
+        assert!(left.is_empty(), "{left:?}");
+        assert!(fs::symlink_metadata(&link).is_err(), "source link gone");
+        assert!(is_link(&t.path().join("moved")));
+        assert_eq!(
+            fs::read_to_string(outside.join("keep.txt")).unwrap(),
+            "keep"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_tree_with_a_junction_moves_and_leaves_nothing_behind() {
         let (t, src, dst) = tree();
         let outside = t.path().join("outside");
         fs::create_dir(&outside).unwrap();
         fs::write(outside.join("keep.txt"), "keep").unwrap();
-        let status = std::process::Command::new("cmd")
-            .args(["/C", "mklink", "/J"])
-            .arg(src.join("link"))
-            .arg(&outside)
-            .output()
-            .unwrap()
-            .status;
-        assert!(status.success());
+        junction(&src.join("link"), &outside);
 
         let left = move_by_copy(&src, &dst).unwrap();
 
-        assert_eq!(left, vec![src.join("link")]);
-        assert!(
-            fs::symlink_metadata(src.join("link")).is_ok(),
-            "junction kept"
-        );
-        assert!(
-            fs::symlink_metadata(dst.join("link")).is_err(),
-            "not followed"
+        assert!(left.is_empty(), "{left:?}");
+        assert!(!src.exists(), "the whole source folder is gone");
+        assert!(is_link(&dst.join("link")));
+        assert_eq!(
+            fs::read_to_string(dst.join("link").join("keep.txt")).unwrap(),
+            "keep"
         );
         assert_eq!(fs::read_to_string(dst.join("a.txt")).unwrap(), "a");
         assert_eq!(
             fs::read_to_string(outside.join("keep.txt")).unwrap(),
             "keep"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn removing_a_link_never_clears_its_targets_read_only_flag() {
+        use std::cell::Cell;
+        let t = tempfile::tempdir().unwrap();
+        let folder = t.path().join("folder");
+        fs::create_dir(&folder).unwrap();
+        set_readonly(&folder, true);
+        let link = t.path().join("link");
+        junction(&link, &folder);
+        let calls = Cell::new(0);
+
+        let res = remove_even_read_only(&link, |_| {
+            calls.set(calls.get() + 1);
+            Err(ErrorKind::PermissionDenied.into())
+        });
+
+        assert!(res.is_err());
+        assert_eq!(calls.get(), 1, "no retry through the link");
+        assert!(fs::metadata(&folder).unwrap().permissions().readonly());
+        set_readonly(&folder, false);
     }
 }

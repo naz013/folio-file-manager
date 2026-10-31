@@ -8,6 +8,8 @@ use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 
 mod cross_volume;
+#[cfg(windows)]
+mod links;
 mod noclobber;
 
 pub fn trash(paths: &[PathBuf]) -> Result<(), trash::Error> {
@@ -382,9 +384,10 @@ fn copy_tree(
 ) -> io::Result<Option<PathBuf>> {
     let kind = fs::symlink_metadata(src)?.file_type();
     if kind.is_symlink() {
-        // A single link is created in one step: nothing partial to hide.
+        // Created under its real name: a link has no contents to leave half-built
+        // (a junction is an empty folder for the instant before its reparse data).
         let target = fs::read_link(src)?;
-        let placed = noclobber::place(dest_dir, name, |t| copy_link(&target, t));
+        let placed = noclobber::place(dest_dir, name, |t| copy_link(src, &target, t));
         let placed = skip_unsupported(placed, src, obs.skipped())?;
         if placed.is_some() {
             obs.link(src, target);
@@ -508,9 +511,13 @@ fn copy_entry(src: &Path, dst: &Path, obs: &mut dyn Observe) -> io::Result<Optio
     if kind.is_symlink() {
         // Read once: the recorded target is what was recreated.
         let target = fs::read_link(src)?;
-        let copied = copy_link(&target, dst);
+        let copied = copy_link(src, &target, dst);
         if skip_unsupported(copied, src, obs.skipped())?.is_some() {
-            obs.made().file(dst)?;
+            if let Err(e) = obs.made().file(dst) {
+                // Not recorded, so the failure cleanup can't remove it: do it here.
+                let _ = cross_volume::remove_link(dst);
+                return Err(e);
+            }
             obs.link(src, target);
         }
         Ok(None)
@@ -537,6 +544,7 @@ impl Created {
     fn file(&mut self, path: &Path) -> io::Result<()> {
         let meta = fs::symlink_metadata(path)?;
         self.files.push(CreatedFile {
+            is_link: meta.file_type().is_symlink(),
             path: path.to_path_buf(),
             id: noclobber::file_id(path)?,
             len: meta.len(),
@@ -561,7 +569,12 @@ impl Created {
         // error below names the copy so it can be found.
         for file in self.files.into_iter().rev() {
             if file.is_still_ours() {
-                let _ = cross_volume::remove_even_read_only(&file.path, |p| fs::remove_file(p));
+                let _ = if file.is_link {
+                    // A folder link goes with remove_dir; either way only the link.
+                    cross_volume::remove_link(&file.path)
+                } else {
+                    cross_volume::remove_even_read_only(&file.path, |p| fs::remove_file(p))
+                };
             }
         }
         for dir in self.dirs.into_iter().rev() {
@@ -580,6 +593,8 @@ impl Created {
 /// A file or link one copy created, and what it looked like then.
 struct CreatedFile {
     path: PathBuf,
+    /// A symlink or junction: removed as a link, never followed.
+    is_link: bool,
     id: (u64, u128),
     len: u64,
     modified: Option<std::time::SystemTime>,
@@ -616,10 +631,11 @@ fn skip_unsupported<T>(
     }
 }
 
-/// Creates at `dst` a link to `target`, failing if `dst` exists. Reports `Unsupported`
-/// where the volume can't hold links (FAT and exFAT refuse with EPERM).
+/// Creates at `dst` a link to `target` (what `read_link` returned for the link `src`),
+/// failing if `dst` exists. Reports `Unsupported` where the volume can't hold links
+/// (FAT and exFAT refuse with EPERM).
 #[cfg(unix)]
-fn copy_link(target: &Path, dst: &Path) -> io::Result<()> {
+fn copy_link(_src: &Path, target: &Path, dst: &Path) -> io::Result<()> {
     std::os::unix::fs::symlink(target, dst).map_err(|e| {
         let codes = [libc::EPERM, libc::ENOTSUP, libc::EOPNOTSUPP, libc::ENOSYS];
         if e.raw_os_error().is_some_and(|c| codes.contains(&c)) {
@@ -630,14 +646,11 @@ fn copy_link(target: &Path, dst: &Path) -> io::Result<()> {
     })
 }
 
-/// Windows can't recreate junctions through std, and symlinks need Developer Mode or
-/// admin rights, so links are reported as `Unsupported` and skipped.
+/// Junctions are recreated as junctions. Symlinks need Developer Mode or admin rights;
+/// without them the link is `Unsupported` and skipped (see [`links`]).
 #[cfg(windows)]
-fn copy_link(_target: &Path, _dst: &Path) -> io::Result<()> {
-    Err(io::Error::new(
-        ErrorKind::Unsupported,
-        "Links can't be copied on Windows yet",
-    ))
+fn copy_link(src: &Path, target: &Path, dst: &Path) -> io::Result<()> {
+    links::copy(src, target, dst)
 }
 
 fn is_cross_device(e: &io::Error) -> bool {

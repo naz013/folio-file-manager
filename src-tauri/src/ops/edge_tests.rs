@@ -1248,7 +1248,7 @@ fn folder_into_itself_is_refused_through_a_junction() {
 
 #[cfg(windows)]
 #[test]
-fn copy_skips_a_junction_loop_instead_of_recursing() {
+fn copy_recreates_a_junction_loop_instead_of_recursing() {
     let t = tmp();
     let src = dir(t.path().join("src"));
     write(src.join("f.txt"), "f");
@@ -1257,14 +1257,24 @@ fn copy_skips_a_junction_loop_instead_of_recursing() {
 
     let out = copy_into(&one(&src), &dest).unwrap();
 
-    assert_eq!(out.skipped, [src.join("loop")]);
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
     assert_eq!(read(dest.join("src").join("f.txt")), "f");
-    assert!(fs::symlink_metadata(dest.join("src").join("loop")).is_err());
+    let copy = dest.join("src").join("loop");
+    assert!(
+        fs::symlink_metadata(&copy)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        fs::read_link(&copy).unwrap(),
+        fs::read_link(src.join("loop")).unwrap()
+    );
 }
 
 #[cfg(windows)]
 #[test]
-fn copy_never_pulls_in_data_through_a_junction_to_outside() {
+fn copy_recreates_a_junction_to_outside_without_pulling_in_its_data() {
     let t = tmp();
     let outside = dir(t.path().join("outside"));
     write(outside.join("secret.txt"), "outside");
@@ -1275,8 +1285,96 @@ fn copy_never_pulls_in_data_through_a_junction_to_outside() {
 
     let out = copy_into(&one(&src), &dest).unwrap();
 
-    assert_eq!(out.skipped, [src.join("door")]);
-    assert!(!dest.join("src").join("door").exists());
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    let copy = dest.join("src").join("door");
+    assert!(
+        fs::symlink_metadata(&copy)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        read(copy.join("secret.txt")),
+        "outside",
+        "points at the same folder"
+    );
+    // Removing the copy of the link must leave its target alone.
+    fs::remove_dir(&copy).unwrap();
+    assert_eq!(read(outside.join("secret.txt")), "outside");
+}
+
+#[cfg(windows)]
+#[test]
+fn a_top_level_junction_is_copied_as_a_junction() {
+    let t = tmp();
+    let outside = dir(t.path().join("outside"));
+    write(outside.join("secret.txt"), "outside");
+    junction(&t.path().join("door"), &outside);
+    let dest = dir(t.path().join("dest"));
+
+    let out = copy_into(&one(&t.path().join("door")), &dest).unwrap();
+
+    assert_eq!(out.paths, [dest.join("door")]);
+    assert!(
+        fs::symlink_metadata(dest.join("door"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(read(dest.join("door").join("secret.txt")), "outside");
+}
+
+/// Directory and file symlinks, where this account may create them (Developer Mode or
+/// administrator); otherwise there is nothing to copy and the test returns early.
+#[cfg(windows)]
+#[test]
+fn symlinks_are_copied_as_links() {
+    use std::os::windows::fs::{symlink_dir, symlink_file};
+    let t = tmp();
+    let outside = dir(t.path().join("outside"));
+    write(outside.join("secret.txt"), "outside");
+    let src = dir(t.path().join("src"));
+    let made = symlink_dir(&outside, src.join("dir_link"))
+        .and_then(|()| symlink_file(outside.join("secret.txt"), src.join("file_link")));
+    if made.is_err() {
+        eprintln!("skipped: this account can not create symbolic links");
+        return;
+    }
+    let dest = dir(t.path().join("dest"));
+
+    let out = copy_into(&one(&src), &dest).unwrap();
+
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    let copy = dest.join("src");
+    assert_eq!(read(copy.join("dir_link").join("secret.txt")), "outside");
+    assert_eq!(read(copy.join("file_link")), "outside");
+    for name in ["dir_link", "file_link"] {
+        let kind = fs::symlink_metadata(copy.join(name)).unwrap().file_type();
+        assert!(kind.is_symlink(), "{name}");
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn a_failed_copy_removes_the_junction_it_made_and_never_its_target() {
+    let t = tmp();
+    let outside = dir(t.path().join("outside"));
+    write(outside.join("secret.txt"), "outside");
+    let src = dir(t.path().join("src"));
+    junction(&src.join("a_door"), &outside);
+    write(src.join("z_locked.bin"), "payload");
+    let guard = locked::lock(&src.join("z_locked.bin"));
+    let dest = dir(t.path().join("dest"));
+
+    let res = copy_into(&one(&src), &dest);
+
+    drop(guard);
+    assert!(res.is_err());
+    assert_eq!(
+        names_in(&dest),
+        Vec::<String>::new(),
+        "no junction left behind"
+    );
     assert_eq!(read(outside.join("secret.txt")), "outside");
 }
 
@@ -1461,6 +1559,7 @@ fn with_unknown_ids_a_changed_file_is_not_taken_for_ours() {
     let meta = fs::metadata(&f).unwrap();
     // As a network share reporting 0 ids would record it.
     let record = CreatedFile {
+        is_link: false,
         path: f.clone(),
         id: noclobber::file_id(&f).map(|(v, _)| (v, 0)).unwrap(),
         len: meta.len(),
