@@ -28,12 +28,23 @@ pub fn run() {
                 .map(|d| d.join("session.json"));
             let (session, extra) = session::Session::load(file);
             app.manage(session);
-            // The main window comes from tauri.conf.json. Other saved windows open in the
-            // background so they don't hold up the main window's start.
+            // The main window comes from tauri.conf.json, hidden until it is back where
+            // it was. Other saved windows open in the background so they don't hold up
+            // the main window's start.
+            if let Some(main) = app.get_webview_window(session::MAIN_LABEL) {
+                let saved = app
+                    .state::<session::Session>()
+                    .geometry(session::MAIN_LABEL);
+                window::restore(&main, saved)?;
+            }
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 for label in extra {
-                    if let Err(e) = window::open(&handle, &label, None) {
+                    let place = handle
+                        .state::<session::Session>()
+                        .geometry(&label)
+                        .map_or(window::Place::Default, window::Place::Saved);
+                    if let Err(e) = window::open(&handle, &label, &place) {
                         eprintln!("restoring window {label} failed: {e}");
                         handle.state::<session::Session>().close(&label);
                     }
@@ -43,8 +54,13 @@ pub fn run() {
         })
         .on_window_event(|window, event| match event {
             WindowEvent::CloseRequested { .. } => {
-                window.state::<session::Session>().close(window.label());
+                let session = window.state::<session::Session>();
+                window::settle(window);
+                session.close(window.label());
+                // The last window's place is kept, and may still be waiting to be saved.
+                session.flush();
             }
+            WindowEvent::Moved(_) | WindowEvent::Resized(_) => window::track(window),
             WindowEvent::Destroyed => window.state::<watch::DirWatcher>().unwatch(window.label()),
             _ => {}
         })

@@ -90,14 +90,31 @@ pub async fn save_tabs(
 #[tauri::command]
 pub async fn open_window(
     app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     session: tauri::State<'_, Session>,
     tabs: Vec<String>,
     x: f64,
     y: f64,
 ) -> CmdResult<()> {
+    // The new window is as big as the one the tab came from.
+    // A maximized window is as big as the screen: use the size it returns to.
+    let size = match session.geometry(window.label()).filter(|g| g.maximized) {
+        Some(g) if window.is_maximized().unwrap_or(false) => {
+            tauri::PhysicalSize::new(g.width, g.height)
+        }
+        _ => window.inner_size().map_err(|e| e.to_string())?,
+    };
+    let scale = window.scale_factor().map_err(|e| e.to_string())?;
+    let size = size.to_logical::<f64>(scale);
+    let place = crate::window::Place::TornOff {
+        x,
+        y,
+        width: size.width,
+        height: size.height,
+    };
     let label = session.next_label();
     session.open(&label, WindowTabs { tabs, active: 0 });
-    crate::window::open(&app, &label, Some((x, y))).map_err(|e| {
+    crate::window::open(&app, &label, &place).map_err(|e| {
         session.close(&label);
         e.to_string()
     })
