@@ -21,7 +21,8 @@
   <path
     d="M7 1.5h31L54.5 18v48A4.5 4.5 0 0 1 50 70.5H7A4.5 4.5 0 0 1 2.5 66V6A4.5 4.5 0 0 1 7 1.5z"
     fill="#fff"
-    stroke="#D9D9E1" />
+    stroke="#D9D9E1"
+  />
   <path d="M38 1.5V14a4 4 0 0 0 4 4h12.5" fill="#F2F2F6" stroke="#D9D9E1" />
   <rect x="10" y="24" width="28" height="2.5" rx="1.25" fill="#E3E3EA" />
   <rect x="10" y="30" width="36" height="2.5" rx="1.25" fill="#E3E3EA" />
@@ -34,6 +35,7 @@
       text-anchor="middle"
       font-size="9"
       font-weight="700"
-      fill="#fff">{badge}</text>
+      fill="#fff">{badge}</text
+    >
   {/if}
 </svg>

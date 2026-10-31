@@ -21,6 +21,7 @@ Priorities (P0/P1/P2) refer to [PRODUCT.md](PRODUCT.md).
 - **Spikes:** native drag-out to Explorer, native shell context menu, Windows thumbnails
 
 **Exit criteria**
+
 - 50,000-file folder scrolls at 60 fps
 - Idle memory and cold-start budgets met
 - Drag-out spike works with Explorer
@@ -38,6 +39,7 @@ Priorities (P0/P1/P2) refer to [PRODUCT.md](PRODUCT.md).
 - Light / dark / system theme
 
 **Exit criteria**
+
 - You use it as your main file manager for one week
 - File-operation engine passes the integration test suite (conflicts, locked files,
   long paths, disk full)
@@ -54,6 +56,7 @@ Priorities (P0/P1/P2) refer to [PRODUCT.md](PRODUCT.md).
 - Opt-in crash reporting
 
 **Exit criteria**
+
 - Zero known data-loss bugs
 - Crash-free sessions > 99%
 
@@ -67,6 +70,7 @@ Priorities (P0/P1/P2) refer to [PRODUCT.md](PRODUCT.md).
 - Onboarding, accessibility pass, landing page
 
 **Exit criteria**
+
 - Cleanup safety review passed: trash-only, review step everywhere, validated against a
   known test corpus with no false positives in protected paths
 
@@ -101,10 +105,10 @@ Prioritized by user feedback:
 
 ## Key risks
 
-| Risk | Mitigation |
-|---|---|
-| Native integration (drag-out, shell menu, thumbnails) is where Tauri apps struggle | Spike all three in 0.1 |
-| Data loss in copy/move | Build and test the operations engine headless before UI depends on it |
-| Cleanup false positives | Suggestions only, review step, trash-only, protected-path deny list |
-| WebKitGTK quirks on Linux | Budget extra QA time in 1.1 |
-| Scope creep | "Out of scope" list in PRODUCT.md is binding |
+| Risk                                                                               | Mitigation                                                            |
+| ---------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| Native integration (drag-out, shell menu, thumbnails) is where Tauri apps struggle | Spike all three in 0.1                                                |
+| Data loss in copy/move                                                             | Build and test the operations engine headless before UI depends on it |
+| Cleanup false positives                                                            | Suggestions only, review step, trash-only, protected-path deny list   |
+| WebKitGTK quirks on Linux                                                          | Budget extra QA time in 1.1                                           |
+| Scope creep                                                                        | "Out of scope" list in PRODUCT.md is binding                          |

@@ -32,7 +32,13 @@
   let maximized = $state(false);
 
   let strip: HTMLDivElement;
-  let drag = $state<{ index: number; x: number; y: number; moved: boolean; outside: boolean } | null>(null);
+  let drag = $state<{
+    index: number;
+    x: number;
+    y: number;
+    moved: boolean;
+    outside: boolean;
+  } | null>(null);
 
   function pointerDown(e: PointerEvent, index: number) {
     if (e.button !== 0) return;
@@ -49,7 +55,9 @@
     drag.outside = isOutside(e);
     if (drag.outside) return;
     // Reorder live: the dragged tab takes the slot under the pointer.
-    const rects = [...strip.querySelectorAll<HTMLElement>(".tab")].map((el) => el.getBoundingClientRect());
+    const rects = [...strip.querySelectorAll<HTMLElement>(".tab")].map((el) =>
+      el.getBoundingClientRect(),
+    );
     const target = rects.findIndex((r) => e.clientX >= r.left && e.clientX < r.right);
     if (target >= 0 && target !== drag.index) {
       onmove(drag.index, target);
@@ -91,11 +99,19 @@
   function tabKey(e: KeyboardEvent, index: number) {
     const last = tabs.length - 1;
     const to =
-      e.key === "ArrowLeft" ? (index > 0 ? index - 1 : last)
-      : e.key === "ArrowRight" ? (index < last ? index + 1 : 0)
-      : e.key === "Home" ? 0
-      : e.key === "End" ? last
-      : -1;
+      e.key === "ArrowLeft"
+        ? index > 0
+          ? index - 1
+          : last
+        : e.key === "ArrowRight"
+          ? index < last
+            ? index + 1
+            : 0
+          : e.key === "Home"
+            ? 0
+            : e.key === "End"
+              ? last
+              : -1;
     // Stop propagation: the window-level handler would move the file cursor on arrows
     // and move the selected files to the Recycle Bin on Delete.
     if (to >= 0) {
@@ -142,7 +158,8 @@
     onpointermove={pointerMove}
     onpointerup={pointerUp}
     onpointercancel={() => (drag = null)}
-    onlostpointercapture={() => (drag = null)}>
+    onlostpointercapture={() => (drag = null)}
+  >
     {#each tabs as tab, index (tab.id)}
       <div
         class="tab"
@@ -155,7 +172,8 @@
         onpointerdown={(e) => pointerDown(e, index)}
         onkeydown={(e) => tabKey(e, index)}
         onmousedown={noFocusDown}
-        onauxclick={(e) => auxClick(e, index)}>
+        onauxclick={(e) => auxClick(e, index)}
+      >
         <FolderIcon size={16} />
         <span class="label">{tab.title}</span>
         <!-- Not in the tab order: Delete or Ctrl+W close the focused tab from the keyboard. -->
@@ -164,7 +182,8 @@
           tabindex="-1"
           aria-label="Close tab"
           onpointerdown={(e) => e.stopPropagation()}
-          onclick={() => onclose(index)}>
+          onclick={() => onclose(index)}
+        >
           <Icon name="x" size={14} stroke={2} />
         </button>
       </div>
@@ -177,7 +196,11 @@
   <button class="control" aria-label="Minimize" onclick={() => appWindow.minimize()}>
     <Icon name="minimize" size={15} stroke={1.5} />
   </button>
-  <button class="control" aria-label={maximized ? "Restore" : "Maximize"} onclick={() => appWindow.toggleMaximize()}>
+  <button
+    class="control"
+    aria-label={maximized ? "Restore" : "Maximize"}
+    onclick={() => appWindow.toggleMaximize()}
+  >
     <Icon name={maximized ? "restore" : "maximize"} size={13} stroke={1.5} />
   </button>
   <button class="control close-window" aria-label="Close window" onclick={() => appWindow.close()}>

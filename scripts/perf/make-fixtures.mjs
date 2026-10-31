@@ -23,7 +23,10 @@ for (const raw of counts) {
   mkdirSync(dir, { recursive: true });
   const folders = Math.floor(count / 20); // ~5% folders, like real projects
   for (let i = 0; i < count; i++) {
-    const name = i < folders ? `Folder ${String(i).padStart(6, "0")}` : `file-${String(i).padStart(6, "0")}.${exts[i % exts.length]}`;
+    const name =
+      i < folders
+        ? `Folder ${String(i).padStart(6, "0")}`
+        : `file-${String(i).padStart(6, "0")}.${exts[i % exts.length]}`;
     const path = join(dir, name);
     if (existsSync(path)) continue;
     if (i < folders) mkdirSync(path);

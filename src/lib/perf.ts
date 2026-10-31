@@ -58,7 +58,10 @@ export async function measureScroll(el: HTMLElement, frames = 600, px = 60): Pro
 }
 
 /** Jumps to several scroll positions (like dragging the scrollbar) and returns the slowest paint. */
-export async function measureJumps(el: HTMLElement, positions = [0.5, 1, 0.25, 0.75, 0]): Promise<number> {
+export async function measureJumps(
+  el: HTMLElement,
+  positions = [0.5, 1, 0.25, 0.75, 0],
+): Promise<number> {
   let worst = 0;
   for (const p of positions) {
     const t = performance.now();

@@ -27,9 +27,9 @@ The script:
 
 Instrumentation is opt-in through environment variables and is inert otherwise:
 
-| Variable | Effect |
-|---|---|
-| `FOLIO_PERF_LOG` | File that receives `<ms since start>\t<event>` lines |
+| Variable           | Effect                                                |
+| ------------------ | ----------------------------------------------------- |
+| `FOLIO_PERF_LOG`   | File that receives `<ms since start>\t<event>` lines  |
 | `FOLIO_BENCH_DIRS` | `;`-separated folders the UI benchmarks after startup |
 
 For Rust listing alone:
@@ -40,22 +40,22 @@ For Rust listing alone:
 Windows 11 Pro 22621, 60 Hz display, release build, NTFS SSD. 1 benchmark run per fixture;
 cold start is the median of 3 runs.
 
-| Metric | Budget | Before | After | Status |
-|---|---|---|---|---|
-| 50k folder scroll | 60 fps | 60 fps, p95 16.7 ms | 60 fps, p95 16.8 ms, 0/599 slow (grid) | ✅ Pass |
-| 10k folder open → first paint | < 150 ms | 164 ms grid / 186 ms list | 67 ms grid / 132 ms list | ✅ Pass |
-| Cold start → first paint | < 1 s | 1,114 ms | 897 ms (856–1,452) | ✅ Pass (median) |
-| Idle memory, Folio process | < 80 MB | 28 MB | 28 MB | ✅ Pass |
-| Idle memory, total private incl. WebView2 | < 150 MB | 136 MB | 136 MB | ✅ Pass |
+| Metric                                    | Budget   | Before                    | After                                  | Status           |
+| ----------------------------------------- | -------- | ------------------------- | -------------------------------------- | ---------------- |
+| 50k folder scroll                         | 60 fps   | 60 fps, p95 16.7 ms       | 60 fps, p95 16.8 ms, 0/599 slow (grid) | ✅ Pass          |
+| 10k folder open → first paint             | < 150 ms | 164 ms grid / 186 ms list | 67 ms grid / 132 ms list               | ✅ Pass          |
+| Cold start → first paint                  | < 1 s    | 1,114 ms                  | 897 ms (856–1,452)                     | ✅ Pass (median) |
+| Idle memory, Folio process                | < 80 MB  | 28 MB                     | 28 MB                                  | ✅ Pass          |
+| Idle memory, total private incl. WebView2 | < 150 MB | 136 MB                    | 136 MB                                 | ✅ Pass          |
 
 Other numbers (after):
 
 | Fixture | View | listMs | openMs | avg fps | p95 / max frame | slow frames | jumpMax |
-|---|---|---|---|---|---|---|---|
-| 10k | grid | 36 | 67 | 60 | 16.7 / 49.9 ms | 3/599 | 47 ms |
-| 10k | list | 36 | 132 | 60 | 16.7 / 33.3 ms | 1/599 | 74 ms |
-| 50k | grid | 238 | 171 | 60 | 16.8 / 16.8 ms | 0/599 | 90 ms |
-| 50k | list | 238 | 562 | 60 | 16.7 / 17.0 ms | 0/599 | 35 ms |
+| ------- | ---- | ------ | ------ | ------- | --------------- | ----------- | ------- |
+| 10k     | grid | 36     | 67     | 60      | 16.7 / 49.9 ms  | 3/599       | 47 ms   |
+| 10k     | list | 36     | 132    | 60      | 16.7 / 33.3 ms  | 1/599       | 74 ms   |
+| 50k     | grid | 238    | 171    | 60      | 16.8 / 16.8 ms  | 0/599       | 90 ms   |
+| 50k     | list | 238    | 562    | 60      | 16.7 / 17.0 ms  | 0/599       | 35 ms   |
 
 ### What changed
 

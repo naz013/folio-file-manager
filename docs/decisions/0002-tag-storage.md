@@ -11,12 +11,12 @@ Tags must survive renames and moves, and work identically on every OS.
 
 ## Options considered
 
-| Option | Verdict |
-|---|---|
-| NTFS Alternate Data Streams | Lost when copying to FAT/exFAT, cloud folders, zip, email — fragile |
-| Sidecar files (`.folio` per folder) | Clutters folders, breaks with moves |
-| Path-keyed database | Breaks on every rename/move |
-| **SQLite index keyed by file identity** | Survives rename/move within a volume; consistent on all OSes |
+| Option                                  | Verdict                                                             |
+| --------------------------------------- | ------------------------------------------------------------------- |
+| NTFS Alternate Data Streams             | Lost when copying to FAT/exFAT, cloud folders, zip, email — fragile |
+| Sidecar files (`.folio` per folder)     | Clutters folders, breaks with moves                                 |
+| Path-keyed database                     | Breaks on every rename/move                                         |
+| **SQLite index keyed by file identity** | Survives rename/move within a volume; consistent on all OSes        |
 
 ## Decision
 

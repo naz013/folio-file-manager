@@ -8,13 +8,13 @@ Finder-inspired UI.
 
 ## Documentation
 
-| Doc | What's inside |
-|---|---|
-| [Product](docs/PRODUCT.md) | Vision, principles, performance budgets, feature catalog |
-| [Roadmap](docs/ROADMAP.md) | Releases 0.1 → 2.0 with exit criteria |
-| [Architecture](docs/ARCHITECTURE.md) | Stack, module layout, key technical decisions |
-| [Design](docs/DESIGN.md) | Penpot file map, tokens, UX rules |
-| [Decisions](docs/decisions/) | Architecture decision records (ADRs) |
+| Doc                                  | What's inside                                            |
+| ------------------------------------ | -------------------------------------------------------- |
+| [Product](docs/PRODUCT.md)           | Vision, principles, performance budgets, feature catalog |
+| [Roadmap](docs/ROADMAP.md)           | Releases 0.1 → 2.0 with exit criteria                    |
+| [Architecture](docs/ARCHITECTURE.md) | Stack, module layout, key technical decisions            |
+| [Design](docs/DESIGN.md)             | Penpot file map, tokens, UX rules                        |
+| [Decisions](docs/decisions/)         | Architecture decision records (ADRs)                     |
 
 ## Tech stack
 
@@ -23,6 +23,7 @@ Tauri 2 · Rust · SvelteKit (Svelte 5, TypeScript) · SQLite (planned)
 ## Getting started
 
 Prerequisites:
+
 - Node.js 20+
 - Rust (stable, via rustup)
 - Windows: Microsoft C++ Build Tools and WebView2 (preinstalled on Windows 11)
@@ -35,12 +36,12 @@ npm run tauri dev
 
 Other scripts:
 
-| Command | Purpose |
-|---|---|
-| `npm run check` | Svelte + TypeScript type-check |
-| `npm run build` | Build the frontend only |
-| `npm run tauri build` | Build the installer |
-| `cargo test --manifest-path src-tauri/Cargo.toml` | Rust unit tests |
+| Command                                           | Purpose                        |
+| ------------------------------------------------- | ------------------------------ |
+| `npm run check`                                   | Svelte + TypeScript type-check |
+| `npm run build`                                   | Build the frontend only        |
+| `npm run tauri build`                             | Build the installer            |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | Rust unit tests                |
 
 ## License
 

@@ -2,13 +2,13 @@
 
 ## Stack
 
-| Layer | Choice | Why |
-|---|---|---|
-| Shell | **Tauri 2** | System webview (WebView2 / WKWebView / WebKitGTK), ~10 MB installers, low memory |
-| Core | **Rust** | Fast parallel file I/O, safe native OS integration |
-| UI | **SvelteKit (SPA, adapter-static) + Svelte 5 + TypeScript** | Compiled, tiny runtime, fast reactive lists |
-| Local data | **SQLite** (`rusqlite`, bundled) | Tags, favorites, scan cache, undo journal |
-| Styling | Plain CSS with design tokens (CSS custom properties) | Mirrors Penpot tokens 1:1, no framework weight |
+| Layer      | Choice                                                      | Why                                                                              |
+| ---------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Shell      | **Tauri 2**                                                 | System webview (WebView2 / WKWebView / WebKitGTK), ~10 MB installers, low memory |
+| Core       | **Rust**                                                    | Fast parallel file I/O, safe native OS integration                               |
+| UI         | **SvelteKit (SPA, adapter-static) + Svelte 5 + TypeScript** | Compiled, tiny runtime, fast reactive lists                                      |
+| Local data | **SQLite** (`rusqlite`, bundled)                            | Tags, favorites, scan cache, undo journal                                        |
+| Styling    | Plain CSS with design tokens (CSS custom properties)        | Mirrors Penpot tokens 1:1, no framework weight                                   |
 
 See [ADR 0001](decisions/0001-tauri-svelte-stack.md) for alternatives considered.
 
@@ -40,11 +40,13 @@ Only `commands/` and `fs/` exist today; the other modules arrive with their mile
 ## Key design decisions
 
 ### File listing
+
 - Rust reads directories and returns compact entry records (name, kind, size, modified, hidden).
 - Large folders stream in chunks via events so the first screen paints immediately.
 - The UI uses a virtualized list/grid; only visible rows are in the DOM.
 
 ### Operations engine
+
 - All mutating operations go through a single queue in Rust (`ops/`), never directly from the UI.
 - Each operation writes an **undo journal** entry to SQLite before it executes.
 - Deletes use the OS trash (`trash` crate). Permanent delete requires an explicit
@@ -52,16 +54,19 @@ Only `commands/` and `fs/` exist today; the other modules arrive with their mile
 - Conflicts pause the operation and emit an event; the UI answers with a resolution.
 
 ### Tags
+
 SQLite index keyed by a stable file identity (NTFS file ID + volume serial on Windows,
 inode + device on Unix), with path as a fallback for re-linking.
 See [ADR 0002](decisions/0002-tag-storage.md).
 
 ### Disk scanning
+
 - Parallel walk (`jwalk`) in a background task, results cached in SQLite per volume.
 - Incremental refresh from `notify` events; full rescan on demand.
 - Cleanup detectors (duplicates, large/old, downloads, caches) run on top of the cache.
 
 ### Native integration (Windows first)
+
 Implemented in `platform/windows` with the `windows` crate:
 file icons & thumbnails (`IShellItemImageFactory`), native context menu (`IContextMenu`),
 OLE drag source/target, Recycle Bin. Each has a macOS/Linux counterpart in 1.1.

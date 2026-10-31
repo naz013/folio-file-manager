@@ -42,11 +42,17 @@ export const showContextMenu = (paths: string[], extended: boolean) =>
   invoke<void>("show_context_menu", { paths, extended });
 
 /** URL of the OS thumbnail (or icon) for `path`, served by the Rust `thumb://` protocol. */
-export const thumbUrl = (path: string, size: number) => `${convertFileSrc(path, "thumb")}?s=${size}`;
+export const thumbUrl = (path: string, size: number) =>
+  `${convertFileSrc(path, "thumb")}?s=${size}`;
 
 /** Explorer's rule: dragging within a volume moves, across volumes copies. */
 export function sameVolume(a: string, b: string): boolean {
-  const root = (p: string) => (/^[a-zA-Z]:/.test(p) ? p.slice(0, 2).toLowerCase() : p.startsWith("\\\\") ? p.split("\\").slice(0, 4).join("\\").toLowerCase() : "/");
+  const root = (p: string) =>
+    /^[a-zA-Z]:/.test(p)
+      ? p.slice(0, 2).toLowerCase()
+      : p.startsWith("\\\\")
+        ? p.split("\\").slice(0, 4).join("\\").toLowerCase()
+        : "/";
   return root(a) === root(b);
 }
 
@@ -71,7 +77,8 @@ export interface WindowTabs {
 }
 
 export const windowTabs = () => invoke<WindowTabs | null>("window_tabs");
-export const saveTabs = (tabs: string[], active: number) => invoke<void>("save_tabs", { tabs, active });
+export const saveTabs = (tabs: string[], active: number) =>
+  invoke<void>("save_tabs", { tabs, active });
 
 /** Opens a new window showing `tabs`, its top-left corner at logical screen position (x, y). */
 export const openWindow = (tabs: string[], x: number, y: number) =>

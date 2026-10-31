@@ -12,6 +12,7 @@ never edit files, commit, or write to GitHub. Bash is for `git diff`, `gh issue 
 Read `docs/decisions/0003-trash-first.md` first; it is the standard you review against.
 
 For every code path that removes, moves, renames or overwrites a file, establish:
+
 - Deletes go to the OS trash. Any permanent delete is a separate, explicitly confirmed
   action and is unreachable from cleanup.
 - An undo-journal entry is written **before** the operation runs, and a failure mid-way

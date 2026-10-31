@@ -8,10 +8,10 @@ guide; the unit of work is always a GitHub issue on the
 
 ## Roles
 
-| Role | Who | Owns |
-|---|---|---|
-| Lead | main session | the issue, branch, project status, commits, local merge to `main`, talking to you |
-| Specialist | `.claude/agents/*.md` | one scoped task; reports back, never touches GitHub or git history |
+| Role       | Who                   | Owns                                                                              |
+| ---------- | --------------------- | --------------------------------------------------------------------------------- |
+| Lead       | main session          | the issue, branch, project status, commits, local merge to `main`, talking to you |
+| Specialist | `.claude/agents/*.md` | one scoped task; reports back, never touches GitHub or git history                |
 
 Rules taken from the guide:
 
@@ -28,27 +28,27 @@ Rules taken from the guide:
 
 ## Specialists
 
-| Agent | Model | Writes code | Use for |
-|---|---|---|---|
-| `reviewer` | Sonnet | no | Final review of every change against CLAUDE.md rules and the issue's criteria |
-| `safety-reviewer` | Opus | no | Deletes, moves, overwrites, cleanup, undo journal — ADR 0003 |
-| `test-writer` | Sonnet | tests only | Rust unit/integration tests for acceptance criteria |
-| `perf-auditor` | Sonnet | no | Checks a change against the PRODUCT.md performance budgets |
+| Agent             | Model  | Writes code | Use for                                                                       |
+| ----------------- | ------ | ----------- | ----------------------------------------------------------------------------- |
+| `reviewer`        | Sonnet | no          | Final review of every change against CLAUDE.md rules and the issue's criteria |
+| `safety-reviewer` | Opus   | no          | Deletes, moves, overwrites, cleanup, undo journal — ADR 0003                  |
+| `test-writer`     | Sonnet | tests only  | Rust unit/integration tests for acceptance criteria                           |
+| `perf-auditor`    | Sonnet | no          | Checks a change against the PRODUCT.md performance budgets                    |
 
 ## Routing by label
 
 The issue's `area:` labels pick the specialists. `reviewer` runs on every issue.
 
-| Label | Also call |
-|---|---|
-| `area: file-ops` | `test-writer`, `safety-reviewer` |
-| `area: storage` | `safety-reviewer`; `perf-auditor` for scanner work |
-| `area: browsing` | `perf-auditor` |
-| `area: tags` | `test-writer` |
-| `area: platform` | — (`reviewer` checks `unsafe` / FFI) |
-| `area: ux` | — (`reviewer` checks tokens and accessibility) |
-| `chore` | — |
-| `spike` | none; the lead time-boxes it and ends with an ADR draft in `docs/decisions/` |
+| Label            | Also call                                                                    |
+| ---------------- | ---------------------------------------------------------------------------- |
+| `area: file-ops` | `test-writer`, `safety-reviewer`                                             |
+| `area: storage`  | `safety-reviewer`; `perf-auditor` for scanner work                           |
+| `area: browsing` | `perf-auditor`                                                               |
+| `area: tags`     | `test-writer`                                                                |
+| `area: platform` | — (`reviewer` checks `unsafe` / FFI)                                         |
+| `area: ux`       | — (`reviewer` checks tokens and accessibility)                               |
+| `chore`          | —                                                                            |
+| `spike`          | none; the lead time-boxes it and ends with an ADR draft in `docs/decisions/` |
 
 ## Issue lifecycle
 

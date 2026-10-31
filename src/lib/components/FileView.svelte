@@ -69,12 +69,16 @@
   let padX = $derived(grid ? GRID_PAD_X : LIST_PAD_X);
   let padY = $derived(grid ? GRID_PAD_Y : LIST_PAD_Y);
   let rowH = $derived(grid ? TILE_H + GAP_Y : ROW_H);
-  let cols = $derived(grid ? Math.max(1, Math.floor((width - padX * 2 + GAP_X) / (TILE_W + GAP_X))) : 1);
+  let cols = $derived(
+    grid ? Math.max(1, Math.floor((width - padX * 2 + GAP_X) / (TILE_W + GAP_X))) : 1,
+  );
   let rows = $derived(Math.ceil(entries.length / cols));
   let firstRow = $derived(Math.max(0, Math.floor((scrollTop - padY) / rowH) - OVERSCAN));
   let lastRow = $derived(Math.min(rows, Math.ceil((scrollTop + height - padY) / rowH) + OVERSCAN));
   let visible = $derived(
-    entries.slice(firstRow * cols, lastRow * cols).map((entry, i) => ({ entry, index: firstRow * cols + i })),
+    entries
+      .slice(firstRow * cols, lastRow * cols)
+      .map((entry, i) => ({ entry, index: firstRow * cols + i })),
   );
 
   export function columns(): number {
@@ -84,7 +88,8 @@
   export function scrollToIndex(index: number) {
     const top = padY + Math.floor(index / cols) * rowH;
     if (top < scroller.scrollTop) scroller.scrollTop = top - padY;
-    else if (top + rowH > scroller.scrollTop + height) scroller.scrollTop = top + rowH - height + padY;
+    else if (top + rowH > scroller.scrollTop + height)
+      scroller.scrollTop = top + rowH - height + padY;
   }
 
   export function scrollElement(): HTMLElement {
@@ -153,7 +158,8 @@
   bind:clientHeight={height}
   onscroll={() => (scrollTop = scroller.scrollTop)}
   onclick={backgroundClick}
-  role="presentation">
+  role="presentation"
+>
   <div class="canvas" style:height="{padY * 2 + rows * rowH}px">
     {#each visible as { entry, index } (entry.path)}
       {@const selected = selection.has(entry.path)}
@@ -178,14 +184,23 @@
         oncontextmenu={(e) => {
           e.preventDefault();
           onitemcontextmenu(index, e);
-        }}>
+        }}
+      >
         {#if grid}
           <span class="thumb">
-            {#if entry.isDir}<FolderIcon size={64} />{:else}<Thumbnail path={entry.path} name={entry.name} size={72} />{/if}
+            {#if entry.isDir}<FolderIcon size={64} />{:else}<Thumbnail
+                path={entry.path}
+                name={entry.name}
+                size={72}
+              />{/if}
           </span>
         {:else}
           <span class="icon">
-            {#if entry.isDir}<FolderIcon size={18} />{:else}<Thumbnail path={entry.path} name="" size={18} />{/if}
+            {#if entry.isDir}<FolderIcon size={18} />{:else}<Thumbnail
+                path={entry.path}
+                name=""
+                size={18}
+              />{/if}
           </span>
         {/if}
 
@@ -197,7 +212,8 @@
             onkeydown={(e) => renameKey(e, entry)}
             onblur={(e) => onrename(entry, e.currentTarget.value)}
             onclick={(e) => e.stopPropagation()}
-            ondblclick={(e) => e.stopPropagation()} />
+            ondblclick={(e) => e.stopPropagation()}
+          />
         {:else}
           <span class="name">{entry.name}</span>
         {/if}
