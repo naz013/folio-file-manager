@@ -37,8 +37,15 @@ These are the tie-breakers for every decision.
 | Scroll a 50,000-item folder               | 60 fps                  |
 | Idle memory, Folio process                | < 80 MB                 |
 | Idle memory, total private incl. WebView2 | < 150 MB                |
+| Idle memory, each extra window            | < 60 MB private         |
 | Cold start                                | < 1 s                   |
 | Installer size                            | < 15 MB                 |
+
+The budgets above (except the extra-window row) are measured with **one window and one tab**, a fresh start.
+Every extra window runs its own WebView2 renderer process, so the memory budgets hold for
+a single window only. Each extra window is allowed < 60 MB more private memory
+(provisional, not yet measured). Tabs live inside their window and are expected to share
+its renderer, so they are not budgeted separately.
 
 ## Feature catalog
 

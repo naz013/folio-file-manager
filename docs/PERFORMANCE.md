@@ -67,6 +67,14 @@ Other numbers (after):
 - **Sort keys computed once:** `sort_by_cached_key` instead of lowercasing names on every
   comparison.
 
+### What the budgets are measured with
+
+The figures here are taken with a single window and its default tab. A second window adds
+its own WebView2 renderer process (roughly 30–60 MB private), which is why PRODUCT.md holds
+the 80 MB and 150 MB memory budgets for a single window and allows each extra window a
+provisional < 60 MB more. That allowance has not been measured yet: run
+`scripts/perf/run.ps1` with a second window open and record the result here.
+
 ### Idle memory: why there are two budgets
 
 The `folio.exe` host uses **28 MB**. The other ~108 MB private (~287 MB working set) are
