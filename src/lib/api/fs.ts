@@ -67,6 +67,8 @@ export interface Copied {
   paths: string[];
   /** Links that weren't copied because they can't be recreated on this system. */
   skipped: string[];
+  /** Links in the copy that should point into it but still lead to the original. */
+  notRepointed: string[];
 }
 export const copyPaths = (sources: string[], dest: string) =>
   invoke<Copied>("copy_paths", { sources, dest });
@@ -76,6 +78,8 @@ export interface Moved {
   paths: string[];
   /** Sources a move to another drive had to leave: changed, in use, or links. */
   leftBehind: string[];
+  /** Links in the moved folder that should point into it but dangle or are missing. */
+  notRepointed: string[];
 }
 export const movePaths = (sources: string[], dest: string) =>
   invoke<Moved>("move_paths", { sources, dest });

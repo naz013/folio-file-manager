@@ -1827,3 +1827,47 @@ fn only_absolute_targets_inside_the_tree_are_retargeted() {
     assert_eq!(at("a/b"), None, "relative targets move with the tree");
     assert_eq!(at("/elsewhere/a"), None);
 }
+
+#[cfg(windows)]
+#[test]
+fn a_link_that_cannot_be_repointed_is_reported_and_nothing_is_overwritten() {
+    let t = tmp();
+    let (src, _outside) = tree_with_links(t.path());
+    // Takes the name the replacement link would be made under.
+    write(src.join("to_data.folio-retarget"), "mine");
+    let dest = dir(t.path().join("dest"));
+
+    let out = copy_into(&one(&src), &dest).unwrap();
+
+    let copy = &out.paths[0];
+    assert_eq!(out.not_repointed, [copy.join("to_data")]);
+    assert_eq!(read(copy.join("to_data.folio-retarget")), "mine");
+    // The old link is still there, still pointing at the original.
+    assert!(same_place(&copy.join("to_data"), &src.join("data")));
+}
+
+#[cfg(windows)]
+#[test]
+fn a_moved_link_that_cannot_be_repointed_is_reported() {
+    let t = tmp();
+    let (src, _outside) = tree_with_links(t.path());
+    write(src.join("to_data.folio-retarget"), "mine");
+    let dest = dir(t.path().join("dest"));
+
+    let (target, left, dangling) = cross_volume::move_by_copy_noted(&src, &dest, "src").unwrap();
+
+    assert_eq!(left, Vec::<PathBuf>::new());
+    assert_eq!(dangling, [target.unwrap().join("to_data")]);
+}
+
+#[cfg(windows)]
+#[test]
+fn links_that_were_repointed_are_not_reported() {
+    let t = tmp();
+    let (src, _outside) = tree_with_links(t.path());
+    let dest = dir(t.path().join("dest"));
+
+    let out = copy_into(&one(&src), &dest).unwrap();
+
+    assert_eq!(out.not_repointed, Vec::<PathBuf>::new());
+}

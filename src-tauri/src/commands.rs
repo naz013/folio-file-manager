@@ -222,6 +222,7 @@ pub async fn copy_paths(sources: Vec<String>, dest: String) -> CmdResult<Copied>
             .map(|c| Copied {
                 paths: strings(c.paths),
                 skipped: strings(c.skipped),
+                not_repointed: strings(c.not_repointed),
             })
             .map_err(|e| e.to_string())
     })
@@ -234,6 +235,7 @@ pub async fn copy_paths(sources: Vec<String>, dest: String) -> CmdResult<Copied>
 pub struct Copied {
     paths: Vec<String>,
     skipped: Vec<String>,
+    not_repointed: Vec<String>,
 }
 
 /// `ops::Moved` for the UI.
@@ -242,6 +244,7 @@ pub struct Copied {
 pub struct Moved {
     paths: Vec<String>,
     left_behind: Vec<String>,
+    not_repointed: Vec<String>,
 }
 
 #[tauri::command]
@@ -251,6 +254,7 @@ pub async fn move_paths(sources: Vec<String>, dest: String) -> CmdResult<Moved> 
             .map(|m| Moved {
                 paths: strings(m.paths),
                 left_behind: strings(m.left_behind),
+                not_repointed: strings(m.not_repointed),
             })
             .map_err(|e| e.to_string())
     })

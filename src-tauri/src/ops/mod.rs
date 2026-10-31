@@ -83,6 +83,17 @@ fn rename_in_place(dir: &Path, path: &Path, target: &Path) -> io::Result<()> {
 }
 
 /// Adds to a failure in the middle of a batch which items were already done.
+/// Adds to `e` that `n` links in earlier items could not be pointed at their new place.
+fn with_dangling(e: io::Error, n: usize) -> io::Error {
+    if n == 0 {
+        return e;
+    }
+    io::Error::new(
+        e.kind(),
+        format!("{e}. Earlier, {n} link(s) couldn't be pointed at their new place"),
+    )
+}
+
 fn batch_error(e: io::Error, verb: &str, done: &[PathBuf]) -> io::Error {
     const SHOWN: usize = 5;
     if done.is_empty() {
@@ -124,13 +135,17 @@ pub fn copy_into(sources: &[PathBuf], dest_dir: &Path) -> io::Result<Copied> {
             let mut walk = Plain {
                 made: Created::default(),
                 skipped: &mut copied.skipped,
+                not_repointed: &mut copied.not_repointed,
             };
             copy_tree(src, dest_dir, &file_name(src)?, &mut walk)
         });
         match copy {
             Ok(Some(target)) => copied.paths.push(target),
             Ok(None) => {}
-            Err(e) => return Err(batch_error(e, "copied", &copied.paths)),
+            Err(e) => {
+                let e = with_dangling(e, copied.not_repointed.len());
+                return Err(batch_error(e, "copied", &copied.paths));
+            }
         }
     }
     Ok(copied)
@@ -143,6 +158,9 @@ pub struct Copied {
     pub paths: Vec<PathBuf>,
     /// Links that weren't copied because they can't be recreated here.
     pub skipped: Vec<PathBuf>,
+    /// Links in the copies that lead back into the original folder, or are missing:
+    /// they should point into the copy but could not be repointed.
+    pub not_repointed: Vec<PathBuf>,
 }
 
 /// The result of [`move_into`].
@@ -153,6 +171,9 @@ pub struct Moved {
     /// Source paths a cross-volume move had to leave: they changed during the move, or
     /// couldn't be removed. Each one still has a complete copy.
     pub left_behind: Vec<PathBuf>,
+    /// Links in a moved folder that should point into its new place but could not be
+    /// repointed: they dangle, or are missing.
+    pub not_repointed: Vec<PathBuf>,
 }
 
 /// Moves each source into `dest_dir`. Items already in `dest_dir` are left untouched.
@@ -171,6 +192,7 @@ pub fn move_into(sources: &[PathBuf], dest_dir: &Path) -> io::Result<Moved> {
                     format!("{e}. Earlier, {n} item(s) stayed in the original folder"),
                 ),
             };
+            let e = with_dangling(e, moved.not_repointed.len());
             return Err(batch_error(e, "moved", &moved.paths));
         }
     }
@@ -193,8 +215,9 @@ fn move_one(src: &Path, dest_dir: &Path, moved: &mut Moved) -> io::Result<()> {
     let target = match noclobber::place(dest_dir, &name, |t| noclobber::rename(src, t)) {
         Ok(target) => target,
         Err(e) if is_cross_device(&e) => {
-            let (target, left) = cross_volume::move_by_copy(src, dest_dir, &name)?;
+            let (target, left, dangling) = cross_volume::move_by_copy_noted(src, dest_dir, &name)?;
             moved.left_behind.extend(left);
+            moved.not_repointed.extend(dangling);
             match target {
                 Some(target) => target,
                 None => return Ok(()),
@@ -354,12 +377,17 @@ trait Observe {
 
     /// The copy at `temp` now has its final name `target`.
     fn renamed(&mut self, _temp: &Path, _target: &Path) {}
+
+    /// A link in the finished copy that should point into the copy but could not be
+    /// repointed: it still leads to the original, or is missing.
+    fn not_repointed(&mut self, _at: PathBuf) {}
 }
 
 /// A plain copy: it only needs to be undone on failure and to report skipped links.
 struct Plain<'a> {
     made: Created,
     skipped: &'a mut Vec<PathBuf>,
+    not_repointed: &'a mut Vec<PathBuf>,
 }
 
 impl Observe for Plain<'_> {
@@ -369,6 +397,10 @@ impl Observe for Plain<'_> {
 
     fn skipped(&mut self) -> &mut Vec<PathBuf> {
         self.skipped
+    }
+
+    fn not_repointed(&mut self, at: PathBuf) {
+        self.not_repointed.push(at);
     }
 }
 
@@ -416,23 +448,32 @@ impl Observe for Retarget<'_> {
     fn renamed(&mut self, temp: &Path, target: &Path) {
         self.inner.renamed(temp, target);
     }
+
+    fn not_repointed(&mut self, at: PathBuf) {
+        self.inner.not_repointed(at);
+    }
 }
 
 impl Retarget<'_> {
     /// Points each link that led into the source tree at the same place in the copy at
-    /// `copy`. Best effort: a link that can't be repointed keeps its old target, which
-    /// still works, just through the original.
-    fn apply(&self, copy: &Path) {
+    /// `copy`. A link that cannot be repointed keeps its old target, which works only
+    /// until the original is gone, and is reported.
+    fn apply(&mut self, copy: &Path) {
         // Absolute, so a symlink's new target doesn't depend on the working directory.
-        let Ok(copy) = std::path::absolute(copy) else {
-            return;
-        };
-        for (from, rest) in &self.inside {
+        let copy = std::path::absolute(copy).unwrap_or_else(|_| copy.to_path_buf());
+        for (from, rest) in std::mem::take(&mut self.inside) {
             let Ok(relative) = from.strip_prefix(self.root) else {
+                // Every recorded link is below the root; reported rather than lost.
+                self.inner.not_repointed(from);
                 continue;
             };
             let at = copy.join(relative);
-            let _ = repoint_link(&copy.join(rest), &at);
+            if let Err(leftover) = repoint_link(&copy.join(&rest), &at) {
+                self.inner.not_repointed(at);
+                if let Some(temp) = leftover {
+                    self.inner.not_repointed(temp);
+                }
+            }
         }
     }
 }
@@ -455,23 +496,31 @@ fn inside_tree(root: &Path, target: &Path) -> Option<PathBuf> {
 }
 
 /// Replaces the link `at` with one of the same kind to `new_target`. The new link is made
-/// beside it first, so a failure leaves the old one.
-fn repoint_link(new_target: &Path, at: &Path) -> io::Result<()> {
-    let old_target = fs::read_link(at)?;
-    let temp = at.with_file_name(format!(
+/// beside it first, so a failure leaves the old one. On failure, returns the temporary
+/// link this call made and could not remove, if any; the old link may be missing then
+/// only if it could not be put back.
+fn repoint_link(new_target: &Path, at: &Path) -> Result<(), Option<PathBuf>> {
+    let old_target = fs::read_link(at).map_err(|_| None)?;
+    let temp = retarget_temp(at);
+    // Fails if the name is taken, so nothing of anyone else's is touched.
+    copy_link(at, new_target, &temp).map_err(|_| None)?;
+    let swapped = cross_volume::remove_link(at).and_then(|()| noclobber::rename(&temp, at));
+    if swapped.is_ok() {
+        return Ok(());
+    }
+    // Put back what was there, whatever state the swap stopped in.
+    if fs::symlink_metadata(at).is_err() {
+        let _ = copy_link(&temp, &old_target, at);
+    }
+    Err(cross_volume::remove_link(&temp).err().map(|_| temp))
+}
+
+/// Where a replacement for the link `at` is made before it is swapped in.
+fn retarget_temp(at: &Path) -> PathBuf {
+    at.with_file_name(format!(
         "{}.folio-retarget",
         at.file_name().and_then(|n| n.to_str()).unwrap_or_default()
-    ));
-    copy_link(at, new_target, &temp)?;
-    let swapped = cross_volume::remove_link(at).and_then(|()| noclobber::rename(&temp, at));
-    if swapped.is_err() {
-        // Put back what was there, whatever state the swap stopped in.
-        if fs::symlink_metadata(at).is_err() {
-            let _ = copy_link(&temp, &old_target, at);
-        }
-        let _ = cross_volume::remove_link(&temp);
-    }
-    swapped
+    ))
 }
 
 /// Copies `src` into `dest_dir` as `name`, or the next free name. The copy is built

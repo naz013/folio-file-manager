@@ -385,17 +385,24 @@
     const verb = copy ? "Copied" : "Moved";
     const done = created.length ? `${verb} ${plural(created.length, "item")}. ` : "";
     // Shown in the error style so it's noticed; nothing is lost either way.
+    const notes: string[] = [];
     if ("skipped" in result && result.skipped.length) {
-      notify(
-        `${done}Skipped ${plural(result.skipped.length, "link")}: links can't be copied yet.`,
-        true,
-      );
-    } else if ("leftBehind" in result && result.leftBehind.length) {
+      notes.push(`Skipped ${plural(result.skipped.length, "link")}: links can't be copied yet.`);
+    }
+    if ("leftBehind" in result && result.leftBehind.length) {
       const n = result.leftBehind.length;
-      notify(
-        `${done}${plural(n, "item")} stayed in the original folder: changed during the move, in use, or a link.`,
-        true,
+      notes.push(
+        `${plural(n, "item")} stayed in the original folder: changed during the move, in use, or a link.`,
       );
+    }
+    if (result.notRepointed.length) {
+      const n = result.notRepointed.length;
+      notes.push(
+        `${plural(n, "link")} in the ${copy ? "copy" : "moved folder"} couldn't be pointed at its new place and may not work or may be missing.`,
+      );
+    }
+    if (notes.length) {
+      notify(`${done}${notes.join(" ")}`, true);
     } else {
       notify(`${verb} ${plural(created.length, "item")}`);
     }

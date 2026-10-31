@@ -70,6 +70,8 @@ pub struct CopyLog {
     skipped: Vec<PathBuf>,
     /// Everything created at the destination, for removing a failed copy.
     made: super::Created,
+    /// Links in the copy that could not be pointed into it; see `Observe::not_repointed`.
+    not_repointed: Vec<PathBuf>,
     /// Set by `built` for `renamed`: whether the finished top-level file was untouched
     /// before its final rename.
     untouched: bool,
@@ -78,13 +80,25 @@ pub struct CopyLog {
 /// Moves `src` into `dest_dir` as `name` (or the next free name) across volumes.
 /// Returns where it went (`None` when it was a link that can't be recreated here)
 /// and the source paths that were left behind.
+#[cfg(test)]
 pub fn move_by_copy(
     src: &Path,
     dest_dir: &Path,
     name: &str,
 ) -> io::Result<(Option<PathBuf>, Vec<PathBuf>)> {
-    let (target, copied) = copy_tracked(src, dest_dir, name)?;
-    Ok((target, remove_copied(copied)))
+    move_by_copy_noted(src, dest_dir, name).map(|(target, left, _)| (target, left))
+}
+
+/// Like [`move_by_copy`], and also returns the links in the moved folder that should
+/// point into it but could not be repointed, so they dangle now that the source is gone.
+pub fn move_by_copy_noted(
+    src: &Path,
+    dest_dir: &Path,
+    name: &str,
+) -> io::Result<(Option<PathBuf>, Vec<PathBuf>, Vec<PathBuf>)> {
+    let (target, mut copied) = copy_tracked(src, dest_dir, name)?;
+    let dangling = std::mem::take(&mut copied.not_repointed);
+    Ok((target, remove_copied(copied), dangling))
 }
 
 /// Copies `src` into `dest_dir` as `name` (or the next free name), recording each
@@ -121,6 +135,10 @@ impl super::Observe for CopyLog {
             dst_stamp: Stamp::of(dst)?,
         });
         Ok(())
+    }
+
+    fn not_repointed(&mut self, at: PathBuf) {
+        self.not_repointed.push(at);
     }
 
     fn link(&mut self, src: &Path, target: PathBuf) {
