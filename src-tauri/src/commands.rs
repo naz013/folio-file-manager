@@ -149,7 +149,11 @@ pub async fn start_drag(window: tauri::WebviewWindow, paths: Vec<String>) -> Cmd
                     drag::DragItem::Files(files),
                     drag::Image::Raw(preview),
                     |_, _| {},
-                    drag::Options::default(),
+                    // Copy or move is the target's call, from the keys held during the drag.
+                    drag::Options {
+                        mode: drag::DragMode::CopyOrMove,
+                        ..drag::Options::default()
+                    },
                 ) {
                     eprintln!("native drag failed: {e}");
                 }
@@ -160,6 +164,40 @@ pub async fn start_drag(window: tauri::WebviewWindow, paths: Vec<String>) -> Cmd
     {
         let _ = (window, paths);
         Err("Dragging to other apps is not supported on Linux yet".into())
+    }
+}
+
+/// Which modifier keys are held down right now.
+#[derive(Serialize)]
+pub struct Modifiers {
+    ctrl: bool,
+    shift: bool,
+}
+
+/// The modifier keys held now. A native drop reaches the page without them, so the page
+/// asks while the drag is over it: Ctrl forces a copy and Shift a move, as in Explorer.
+/// Only implemented on Windows; elsewhere a drop follows the drive rule alone.
+#[tauri::command]
+pub fn modifier_keys() -> Modifiers {
+    #[cfg(windows)]
+    {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_SHIFT};
+        // The high bit of the result is set while the key is down.
+        let down = |key: u16| {
+            // SAFETY: plain query of the keyboard state; no pointers are involved.
+            unsafe { GetAsyncKeyState(i32::from(key)) < 0 }
+        };
+        Modifiers {
+            ctrl: down(VK_CONTROL.0),
+            shift: down(VK_SHIFT.0),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        Modifiers {
+            ctrl: false,
+            shift: false,
+        }
     }
 }
 

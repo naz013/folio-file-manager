@@ -24,6 +24,7 @@
     renamePath,
     sameVolume,
     saveTabs,
+    modifierKeys,
     showContextMenu,
     startDrag,
     redoOperation,
@@ -557,10 +558,42 @@
     return el?.closest<HTMLElement>("[data-drop-path]")?.dataset.dropPath ?? null;
   }
 
+  /** Explorer's rule: Ctrl copies, Shift moves, otherwise it follows the drive. */
+  function copyOnDrop(
+    keys: { ctrl: boolean; shift: boolean },
+    sources: string[],
+    dest: string,
+  ): boolean {
+    if (keys.ctrl) return true;
+    if (keys.shift) return false;
+    return !sources.every((s) => sameVolume(s, dest));
+  }
+
+  /**
+   * The modifier keys as of the last drag-over. People often let go of Ctrl or Shift as they
+   * drop, so reading them after the drop arrives would see them already up.
+   */
+  let dragKeys = { ctrl: false, shift: false };
+  let dragKeysAt = 0;
+
+  function sampleDragKeys() {
+    const now = performance.now();
+    if (now - dragKeysAt < 50) return;
+    dragKeysAt = now;
+    modifierKeys()
+      .then((keys) => (dragKeys = keys))
+      .catch(() => {});
+  }
+
   async function dropPaths(paths: string[], dest: string) {
     // Dropping items back into the folder they came from is a no-op.
     const sources = paths.filter((p) => p !== dest && parentOf(p) !== dest);
-    if (sources.length) await transfer(sources, dest, !sameVolume(sources[0], dest));
+    if (!sources.length) return;
+    // Held at the last drag-over, or still held now: either counts.
+    const now = await modifierKeys().catch(() => dragKeys);
+    const keys = { ctrl: dragKeys.ctrl || now.ctrl, shift: dragKeys.shift || now.shift };
+    dragKeys = { ctrl: false, shift: false };
+    await transfer(sources, dest, copyOnDrop(keys, sources, dest));
   }
 
   function dragOut(paths: string[]) {
@@ -821,9 +854,10 @@
     // Flush pending tab changes before any close (button, Ctrl+W, Alt+F4, taskbar).
     const unlistenClose = getCurrentWindow().onCloseRequested(() => persistTabs());
     const unlistenDrop = getCurrentWebview().onDragDropEvent(({ payload }) => {
-      if (payload.type === "enter" || payload.type === "over")
+      if (payload.type === "enter" || payload.type === "over") {
         dropTarget = folderAt(payload.position);
-      else if (payload.type === "drop") {
+        sampleDragKeys();
+      } else if (payload.type === "drop") {
         const dest = folderAt(payload.position) ?? path;
         dropTarget = null;
         dropPaths(payload.paths, dest);

@@ -15,6 +15,11 @@ mod noclobber;
 pub mod progress;
 
 pub fn trash(paths: &[PathBuf]) -> Result<(), trash::Error> {
+    // The Windows shell fails an empty request (E_UNEXPECTED), and a copy or move with
+    // nothing to replace asks for exactly that.
+    if paths.is_empty() {
+        return Ok(());
+    }
     trash::delete_all(paths)
 }
 
@@ -1032,6 +1037,13 @@ mod tests {
 
     fn tmp() -> tempfile::TempDir {
         tempfile::tempdir().unwrap()
+    }
+
+    #[test]
+    fn trashing_nothing_succeeds() {
+        // Every copy and move asks the Recycle Bin to take what it replaces, which is
+        // usually nothing; the Windows shell fails that request.
+        assert!(trash(&[]).is_ok());
     }
 
     #[test]

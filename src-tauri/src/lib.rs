@@ -126,6 +126,7 @@ pub fn run() {
             commands::open_window,
             commands::open_path,
             commands::start_drag,
+            commands::modifier_keys,
             commands::show_context_menu,
             commands::trash_paths,
             commands::rename_path,

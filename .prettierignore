@@ -6,6 +6,7 @@ package-lock.json
 src-tauri/target/
 src-tauri/gen/
 src-tauri/icons/
+src-tauri/vendor/
 static/
 
 # Rust is formatted by rustfmt
