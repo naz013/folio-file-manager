@@ -34,9 +34,13 @@
   </button>
 
   <nav class="crumbs">
-    {#each segments as seg, i}
+    {#each segments as seg, i (seg.path)}
       {#if i > 0}<span class="sep"><Icon name="chevronRight" size={12} stroke={2} /></span>{/if}
-      <button class="crumb" class:last={i === segments.length - 1} onclick={() => onnavigate(seg.path)}>
+      <button
+        class="crumb"
+        class:last={i === segments.length - 1}
+        onclick={() => onnavigate(seg.path)}
+      >
         {seg.name}
       </button>
     {/each}

@@ -90,10 +90,10 @@ pub fn unique_destination(dir: &Path, name: &str) -> PathBuf {
         return candidate;
     }
     let (stem, ext) = split_name(name);
-    (2..)
+    (2..=u64::MAX)
         .map(|n| dir.join(format!("{stem} ({n}){ext}")))
         .find(|p| !p.exists())
-        .expect("unbounded range always yields a free name")
+        .expect("a folder cannot hold u64::MAX entries")
 }
 
 fn split_name(name: &str) -> (&str, &str) {

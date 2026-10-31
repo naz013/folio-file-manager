@@ -54,7 +54,7 @@ pub fn list_dir(dir: &Path) -> io::Result<Vec<Entry>> {
                     .modified()
                     .ok()
                     .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                    .map(|d| d.as_millis() as u64),
+                    .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX)),
                 name,
             })
         })

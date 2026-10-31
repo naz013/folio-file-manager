@@ -378,7 +378,7 @@ mod locked {
 // -------------------------------------------------------- 3. Paths > 260 chars
 
 /// Creates a nested chain of 50-char folders under `base` until the chain alone is
-/// longer than 270 chars, so the full path is always beyond MAX_PATH.
+/// longer than 270 chars, so the full path is always beyond `MAX_PATH`.
 fn long_chain(base: &Path) -> PathBuf {
     let mut p = base.to_path_buf();
     let mut len = 0;
@@ -534,7 +534,14 @@ fn volume_total_bytes(path: &Path) -> u64 {
     let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
     let (mut free_caller, mut total, mut free) = (0u64, 0u64, 0u64);
     // SAFETY: `wide` is NUL-terminated and the out pointers are valid for the call.
-    let ok = unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut free_caller, &mut total, &mut free) };
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &raw mut free_caller,
+            &raw mut total,
+            &raw mut free,
+        )
+    };
     assert!(ok != 0, "GetDiskFreeSpaceExW failed for {}", path.display());
     total
 }
@@ -544,7 +551,7 @@ fn volume_total_bytes(_path: &Path) -> u64 {
     u64::MAX // disk-full tests are Windows-only for now; refuse everywhere else
 }
 
-fn volume_prefix(path: &Path) -> Option<std::path::PathBuf> {
+fn volume_prefix(path: &Path) -> Option<PathBuf> {
     use std::path::Component;
     let canon = fs::canonicalize(path).ok()?;
     match canon.components().next() {

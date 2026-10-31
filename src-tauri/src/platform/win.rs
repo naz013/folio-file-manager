@@ -22,37 +22,55 @@ pub fn thumbnail_png(path: &Path, size: u32) -> Result<Vec<u8>, String> {
 
 /// Asks the shell for the item's thumbnail (falls back to its icon) and returns RGBA pixels.
 fn shell_image(path: &Path, size: u32) -> windows::core::Result<(u32, u32, Vec<u8>)> {
+    let edge = i32::try_from(size).unwrap_or(i32::MAX);
+    // SAFETY: COM is initialized on this thread before any shell call; the path is passed as
+    // an owned HSTRING that outlives the call; the bitmap returned by GetImage is ours and is
+    // released exactly once with DeleteObject after its pixels are copied.
     unsafe {
         // Safe to call repeatedly; each blocking-pool thread needs COM initialized once.
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         let factory: IShellItemImageFactory =
             SHCreateItemFromParsingName(&HSTRING::from(path.as_os_str()), None)?;
-        let side = size as i32;
-        let bitmap = factory.GetImage(SIZE { cx: side, cy: side }, SIIGBF_RESIZETOFIT)?;
+        let bitmap = factory.GetImage(SIZE { cx: edge, cy: edge }, SIIGBF_RESIZETOFIT)?;
         let pixels = bitmap_rgba(bitmap);
         let _ = DeleteObject(HGDIOBJ(bitmap.0));
         pixels
     }
 }
 
+/// Copies a GDI bitmap's pixels out as RGBA.
+///
+/// # Safety
+/// `bitmap` must be a valid bitmap handle for the duration of the call.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    reason = "Win32 struct sizes are small compile-time constants"
+)]
 unsafe fn bitmap_rgba(bitmap: HBITMAP) -> windows::core::Result<(u32, u32, Vec<u8>)> {
+    // SAFETY: the caller guarantees `bitmap` is valid; `info`, `header` and `bgra` are local
+    // buffers sized exactly as the calls expect, and the DC is deleted before returning.
     unsafe {
         let mut info = BITMAP::default();
         if GetObjectW(
             HGDIOBJ(bitmap.0),
             size_of::<BITMAP>() as i32,
-            Some(&mut info as *mut _ as *mut c_void),
+            Some((&raw mut info).cast::<c_void>()),
         ) == 0
         {
             return Err(windows::core::Error::from_thread());
         }
-        let (width, height) = (info.bmWidth as u32, info.bmHeight.unsigned_abs());
+        let (bm_width, bm_height) = (
+            info.bmWidth.saturating_abs(),
+            info.bmHeight.saturating_abs(),
+        );
+        let (width, height) = (bm_width.unsigned_abs(), bm_height.unsigned_abs());
 
         let mut header = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: width as i32,
-                biHeight: -(height as i32), // top-down rows
+                biWidth: bm_width,
+                biHeight: -bm_height, // top-down rows
                 biPlanes: 1,
                 biBitCount: 32,
                 biCompression: BI_RGB.0,
@@ -67,8 +85,8 @@ unsafe fn bitmap_rgba(bitmap: HBITMAP) -> windows::core::Result<(u32, u32, Vec<u
             bitmap,
             0,
             height,
-            Some(bgra.as_mut_ptr() as *mut c_void),
-            &mut header,
+            Some(bgra.as_mut_ptr().cast::<c_void>()),
+            &raw mut header,
             DIB_RGB_COLORS,
         );
         let _ = DeleteDC(dc);
@@ -87,9 +105,9 @@ fn bgra_premultiplied_to_rgba(mut px: Vec<u8>) -> Vec<u8> {
         if !has_alpha {
             p[3] = 255;
         } else if p[3] != 0 && p[3] != 255 {
-            let a = p[3] as u32;
+            let a = u32::from(p[3]);
             for c in &mut p[..3] {
-                *c = ((*c as u32 * 255 + a / 2) / a).min(255) as u8;
+                *c = ((u32::from(*c) * 255 + a / 2) / a).min(255) as u8;
             }
         }
     }

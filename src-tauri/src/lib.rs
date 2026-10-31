@@ -10,6 +10,10 @@ mod window;
 
 use tauri::{Manager, WindowEvent};
 
+/// Starts the app and blocks until the last window closes.
+///
+/// # Panics
+/// If the Tauri runtime fails to start; there is nothing to recover to.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     perf::mark_start();
@@ -46,7 +50,7 @@ pub fn run() {
         })
         .register_asynchronous_uri_scheme_protocol(thumbs::SCHEME, |_ctx, request, responder| {
             tauri::async_runtime::spawn_blocking(move || {
-                responder.respond(thumbs::handle(&request))
+                responder.respond(thumbs::handle(&request));
             });
         })
         .invoke_handler(tauri::generate_handler![

@@ -1,6 +1,10 @@
 //! Thin Tauri command layer. Validation and error mapping only; logic lives in modules.
 //!
 //! File operations run on the blocking thread pool so the UI never freezes.
+#![expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri deserializes command arguments and injects state by value"
+)]
 
 use crate::fs::{self, Entry};
 use crate::ops;

@@ -44,7 +44,7 @@
   </div>
 
   <div class="label">Favorites</div>
-  {#each favorites as fav}
+  {#each favorites as fav (fav.label)}
     {@const path = fav.sub ? joinPath(home, fav.sub) : home}
     <button
       class="item"
@@ -53,14 +53,15 @@
       data-drop-path={path}
       onclick={() => onnavigate(path)}
       onmousedown={(e) => e.button === 1 && e.preventDefault()}
-      onauxclick={(e) => e.button === 1 && onopentab(path)}>
+      onauxclick={(e) => e.button === 1 && onopentab(path)}
+    >
       <Icon name={fav.icon} />
       <span>{fav.label}</span>
     </button>
   {/each}
 
   <div class="label">Tags</div>
-  {#each tags as [name, color]}
+  {#each tags as [name, color] (name)}
     <div class="item tag">
       <span class="dot" style:background="var({color})"></span>
       <span>{name}</span>

@@ -34,6 +34,8 @@ thread_local! {
 /// Shows the shell menu for `paths` at the cursor and runs the chosen command.
 /// Must be called on the UI thread that owns `hwnd`. `extended` adds Shift+right-click verbs.
 pub fn show(hwnd: HWND, paths: &[PathBuf], extended: bool) -> windows::core::Result<()> {
+    // SAFETY: called on the UI thread that owns `hwnd` (see above); the popup menu is
+    // destroyed and the window subclass removed before returning, and `pt` outlives the calls.
     unsafe {
         let shell_menu = context_menu_for(paths)?;
         let menu = CreatePopupMenu()?;
@@ -46,21 +48,25 @@ pub fn show(hwnd: HWND, paths: &[PathBuf], extended: bool) -> windows::core::Res
                 .QueryContextMenu(menu, 0, FIRST_CMD, LAST_CMD, flags)
                 .ok()?;
             let mut pt = POINT::default();
-            GetCursorPos(&mut pt)?;
+            GetCursorPos(&raw mut pt)?;
 
             let helper = shell_menu.cast::<IContextMenu2>().ok();
             let subclassed = helper.is_some()
                 && SetWindowSubclass(hwnd, Some(subclass_proc), SUBCLASS_ID, 0).as_bool();
             ACTIVE.with(|a| *a.borrow_mut() = helper);
-            let cmd = TrackPopupMenuEx(
-                menu,
-                (TPM_RETURNCMD | TPM_RIGHTBUTTON).0,
-                pt.x,
-                pt.y,
-                hwnd,
-                None,
+            // With TPM_RETURNCMD the result is the chosen command id, or 0 for none.
+            let cmd = u32::try_from(
+                TrackPopupMenuEx(
+                    menu,
+                    (TPM_RETURNCMD | TPM_RIGHTBUTTON).0,
+                    pt.x,
+                    pt.y,
+                    hwnd,
+                    None,
+                )
+                .0,
             )
-            .0 as u32;
+            .unwrap_or(0);
             ACTIVE.with(|a| *a.borrow_mut() = None);
             if subclassed {
                 let _ = RemoveWindowSubclass(hwnd, Some(subclass_proc), SUBCLASS_ID);
@@ -76,25 +82,45 @@ pub fn show(hwnd: HWND, paths: &[PathBuf], extended: bool) -> windows::core::Res
     }
 }
 
-/// Builds the shell's IContextMenu for one or more items (multi-selection aware).
+/// Builds the shell's `IContextMenu` for one or more items (multi-selection aware).
+///
+/// # Safety
+/// COM must be initialized on the calling thread.
 unsafe fn context_menu_for(paths: &[PathBuf]) -> windows::core::Result<IContextMenu> {
     let mut pidls: Vec<*mut ITEMIDLIST> = Vec::with_capacity(paths.len());
+    // SAFETY: each path is passed as an owned HSTRING; every PIDL the shell returns is kept in
+    // `pidls` and stays valid until it is freed below, after the shell item array is built.
     let result = (|| unsafe {
         for path in paths {
             let mut pidl = null_mut();
-            SHParseDisplayName(&HSTRING::from(path.as_os_str()), None, &mut pidl, 0, None)?;
+            SHParseDisplayName(
+                &HSTRING::from(path.as_os_str()),
+                None,
+                &raw mut pidl,
+                0,
+                None,
+            )?;
             pidls.push(pidl);
         }
-        let ids: Vec<*const ITEMIDLIST> = pidls.iter().map(|p| *p as *const _).collect();
+        let ids: Vec<*const ITEMIDLIST> = pidls.iter().map(|p| (*p).cast_const()).collect();
         let items = SHCreateShellItemArrayFromIDLists(&ids)?;
         items.BindToHandler::<_, IContextMenu>(None, &BHID_SFUIObject)
     })();
     for pidl in pidls {
+        // SAFETY: `pidl` came from SHParseDisplayName and is freed exactly once.
         unsafe { ILFree(Some(pidl)) };
     }
     result
 }
 
+/// Runs the menu command at `offset`.
+///
+/// # Safety
+/// `hwnd` must be a valid window owned by the calling thread.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the struct size is a small compile-time constant"
+)]
 unsafe fn invoke(
     menu: &IContextMenu,
     hwnd: HWND,
@@ -112,7 +138,9 @@ unsafe fn invoke(
         ptInvoke: pt,
         ..Default::default()
     };
-    unsafe { menu.InvokeCommand(&info as *const _ as *const CMINVOKECOMMANDINFO) }
+    // SAFETY: CMINVOKECOMMANDINFOEX starts with the CMINVOKECOMMANDINFO layout and `cbSize`
+    // tells the shell which one it got; `info` lives until the call returns.
+    unsafe { menu.InvokeCommand((&raw const info).cast::<CMINVOKECOMMANDINFO>()) }
 }
 
 unsafe extern "system" fn subclass_proc(
@@ -129,17 +157,19 @@ unsafe extern "system" fn subclass_proc(
     ) {
         let handled = ACTIVE.with(|active| {
             let menu = active.borrow().clone()?;
+            // SAFETY: the window procedure runs on the UI thread with the message parameters
+            // Windows passed in; `result` lives until the call returns.
             unsafe {
                 if let Ok(menu3) = menu.cast::<IContextMenu3>() {
                     let mut result = LRESULT(0);
                     menu3
-                        .HandleMenuMsg2(msg, wparam, lparam, Some(&mut result))
+                        .HandleMenuMsg2(msg, wparam, lparam, Some(&raw mut result))
                         .ok()
-                        .map(|_| result)
+                        .map(|()| result)
                 } else {
                     menu.HandleMenuMsg(msg, wparam, lparam)
                         .ok()
-                        .map(|_| LRESULT(0))
+                        .map(|()| LRESULT(0))
                 }
             }
         });
@@ -147,5 +177,6 @@ unsafe extern "system" fn subclass_proc(
             return result;
         }
     }
+    // SAFETY: forwards the unchanged message to the next procedure in the subclass chain.
     unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
 }

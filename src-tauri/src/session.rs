@@ -178,7 +178,7 @@ mod tests {
 
     fn tabs(paths: &[&str], active: usize) -> WindowTabs {
         WindowTabs {
-            tabs: paths.iter().map(|p| p.to_string()).collect(),
+            tabs: paths.iter().map(ToString::to_string).collect(),
             active,
         }
     }
@@ -193,7 +193,7 @@ mod tests {
     #[test]
     fn load_without_file_restores_nothing() {
         let (session, extra) = Session::load(None);
-        assert!(extra.is_empty());
+        assert_eq!(extra, [] as [String; 0]);
         assert_eq!(session.tabs(MAIN_LABEL), None);
     }
 
@@ -223,7 +223,7 @@ mod tests {
 
         let (restored, extra) = Session::load(Some(file));
         assert_eq!(restored.tabs(MAIN_LABEL), Some(tabs(&["C:\\b"], 0)));
-        assert!(extra.is_empty());
+        assert_eq!(extra, [] as [String; 0]);
     }
 
     #[test]
@@ -246,7 +246,7 @@ mod tests {
 
         let (restored, extra) = Session::load(Some(file));
         assert_eq!(restored.tabs(MAIN_LABEL), Some(tabs(&["C:\\a"], 0)));
-        assert!(extra.is_empty());
+        assert_eq!(extra, [] as [String; 0]);
     }
 
     #[test]
@@ -290,7 +290,7 @@ mod tests {
         let file = dir.path().join("session.json");
         std::fs::write(&file, "{ not json").unwrap();
         let (session, extra) = Session::load(Some(file));
-        assert!(extra.is_empty());
+        assert_eq!(extra, [] as [String; 0]);
         assert_eq!(session.tabs(MAIN_LABEL), None);
     }
 }

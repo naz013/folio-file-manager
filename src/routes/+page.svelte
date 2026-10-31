@@ -58,6 +58,8 @@
   let tabs = $state<Tab[]>([]);
   let active = $state(-1);
   let nextTabId = 0;
+  // Deliberately not reactive: nothing renders from it, and proxying large selections is slow.
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
   const memory = new Map<number, TabMemory>();
   /** Bumped by every navigation. A listing that arrives after a newer one started is dropped. */
   let navGen = 0;
@@ -268,21 +270,21 @@
     if (tabs.length > 1) activate((active + delta + tabs.length) % tabs.length);
   }
 
-  function persistTabs() {
+  function persistTabs(paths = tabPaths, index = active) {
     clearTimeout(saveTimer);
-    return saveTabs(tabPaths, Math.max(active, 0)).catch((e) => console.warn("saving tabs failed", e));
+    return saveTabs(paths, Math.max(index, 0)).catch((e) => console.warn("saving tabs failed", e));
   }
 
   /** Closing goes through the onCloseRequested handler in onMount, which saves first. */
   const closeWindow = () => getCurrentWindow().close();
 
+  // Save the tab list shortly after it settles.
   $effect(() => {
-    // Track the tab list and the active path; save shortly after they settle.
-    tabPaths;
-    active;
     if (!restored) return;
+    const paths = tabPaths;
+    const index = active;
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(persistTabs, 300);
+    saveTimer = setTimeout(() => persistTabs(paths, index), 300);
   });
 
   function open(entry: Entry) {
@@ -449,59 +451,125 @@
 
   // ---- Keyboard ----
 
+  type Action = () => unknown;
+  const ignore: Action = () => {};
+
+  function goUp() {
+    const up = parentOf(path);
+    if (up) navigate(up);
+  }
+
+  function copySelection() {
+    clipboard = { mode: "copy", paths: [...selection] };
+    notify(`Copied ${plural(selection.size, "item")} to clipboard`);
+  }
+
+  function cutSelection() {
+    clipboard = { mode: "cut", paths: [...selection] };
+  }
+
+  function clearSelectionAndClipboard() {
+    selection.clear();
+    clipboard = null;
+  }
+
+  function selectionContextMenu() {
+    // Spike limitation: the menu opens at the mouse cursor, not at the focused item.
+    if (selection.size) {
+      showContextMenu([...selection], false).catch((err) => notify(String(err), true));
+    }
+  }
+
+  /** Tab shortcuts. They work everywhere, including while a text field has focus. */
+  function tabShortcut(e: KeyboardEvent, ctrl: boolean): Action | null {
+    if (!ctrl) return null;
+    const key = e.key.toLowerCase();
+    if (key === "t" || key === "w") {
+      // Held-down Ctrl+T / Ctrl+W must not open or close tabs in a burst.
+      if (!restored || e.repeat) return ignore;
+      return key === "t" ? () => openTab(home) : () => closeTab(active);
+    }
+    if (e.key === "Tab") return () => cycleTab(e.shiftKey ? -1 : 1);
+    if (e.key === "PageDown") return () => cycleTab(1);
+    if (e.key === "PageUp") return () => cycleTab(-1);
+    if (!e.shiftKey && e.key >= "1" && e.key <= "9") {
+      // Ctrl+9 is always the last tab, as in browsers.
+      const last = tabs.length - 1;
+      return () => activate(e.key === "9" ? last : Math.min(Number(e.key) - 1, last));
+    }
+    return null;
+  }
+
+  /** File list shortcuts. */
+  function fileShortcut(e: KeyboardEvent, ctrl: boolean): Action | null {
+    const { key, shiftKey: shift } = e;
+    // Other Alt combinations fall through and act like the plain key (Alt+Backspace goes up).
+    if (e.altKey) {
+      if (key === "ArrowLeft") return goBack;
+      if (key === "ArrowRight") return goForward;
+      if (key === "ArrowUp") return goUp;
+    }
+    if (ctrl && shift && key.toLowerCase() === "n") return newFolder;
+    if (ctrl) {
+      // Exact lowercase match: Ctrl+Shift+letter combinations are left alone.
+      switch (key) {
+        case "a":
+          return () => selectRange(0, visible.length - 1);
+        case "c":
+          if (selection.size) return copySelection;
+          break;
+        case "x":
+          if (selection.size) return cutSelection;
+          break;
+        case "v":
+          return paste;
+        case "h":
+          return () => (showHidden = !showHidden);
+      }
+    }
+    const row = view === "grid" ? fileView.columns() : 1;
+    const grid = view === "grid";
+    switch (key) {
+      case "Backspace":
+        return goUp;
+      case "ArrowDown":
+        return () => moveCursor(row, shift);
+      case "ArrowUp":
+        return () => moveCursor(-row, shift);
+      case "ArrowRight":
+        return grid ? () => moveCursor(1, shift) : null;
+      case "ArrowLeft":
+        return grid ? () => moveCursor(-1, shift) : null;
+      case "Home":
+        return () => moveCursor(-visible.length, shift);
+      case "End":
+        return () => moveCursor(visible.length, shift);
+      case "Enter":
+        return cursor >= 0 ? () => open(visible[cursor]) : null;
+      case "F2":
+        return cursor >= 0 ? () => (renaming = visible[cursor].path) : null;
+      case "Delete":
+        return trashSelected;
+      case "F10":
+        return shift ? selectionContextMenu : null;
+      case "ContextMenu":
+        return selectionContextMenu;
+      case "Escape":
+        return clearSelectionAndClipboard;
+    }
+    return null;
+  }
+
   function onkeydown(e: KeyboardEvent) {
     const ctrl = e.ctrlKey || e.metaKey;
-    const key = e.key;
-    const handled = () => e.preventDefault();
-
-    // Tab shortcuts work everywhere, including while a text field has focus.
-    // Held-down Ctrl+T / Ctrl+W must not open or close tabs in a burst.
-    if (ctrl && (key.toLowerCase() === "t" || key.toLowerCase() === "w")) {
-      handled();
-      if (!restored || e.repeat) return;
-      return key.toLowerCase() === "t" ? openTab(home) : closeTab(active);
-    }
-    if (ctrl && (key === "Tab" || key === "PageDown" || key === "PageUp")) {
-      handled();
-      return cycleTab(key === "PageUp" || (key === "Tab" && e.shiftKey) ? -1 : 1);
-    }
-    if (ctrl && !e.shiftKey && key >= "1" && key <= "9") {
-      handled();
-      // Ctrl+9 is always the last tab, as in browsers.
-      return activate(key === "9" ? tabs.length - 1 : Math.min(Number(key) - 1, tabs.length - 1));
-    }
-
-    if (renaming || (e.target as HTMLElement).tagName === "INPUT") return;
-    // A tab focused from the keyboard handles its own keys; file shortcuts don't apply there.
-    if ((e.target as HTMLElement).closest?.("[role=tablist]")) return;
-
-    if (e.altKey && key === "ArrowLeft") (handled(), goBack());
-    else if (e.altKey && key === "ArrowRight") (handled(), goForward());
-    else if ((e.altKey && key === "ArrowUp") || key === "Backspace") {
-      handled();
-      const up = parentOf(path);
-      if (up) navigate(up);
-    } else if (key === "ArrowDown") (handled(), moveCursor(view === "grid" ? fileView.columns() : 1, e.shiftKey));
-    else if (key === "ArrowUp") (handled(), moveCursor(-(view === "grid" ? fileView.columns() : 1), e.shiftKey));
-    else if (key === "ArrowRight" && view === "grid") (handled(), moveCursor(1, e.shiftKey));
-    else if (key === "ArrowLeft" && view === "grid") (handled(), moveCursor(-1, e.shiftKey));
-    else if (key === "Home") (handled(), moveCursor(-visible.length, e.shiftKey));
-    else if (key === "End") (handled(), moveCursor(visible.length, e.shiftKey));
-    else if (key === "Enter" && cursor >= 0) (handled(), open(visible[cursor]));
-    else if (key === "Delete") (handled(), trashSelected());
-    else if ((e.shiftKey && key === "F10") || key === "ContextMenu") {
-      handled();
-      // Spike limitation: the menu opens at the mouse cursor, not at the focused item.
-      if (selection.size) showContextMenu([...selection], false).catch((err) => notify(String(err), true));
-    }
-    else if (key === "F2" && cursor >= 0) (handled(), (renaming = visible[cursor].path));
-    else if (key === "Escape") (handled(), selection.clear(), (clipboard = null));
-    else if (ctrl && e.shiftKey && key.toLowerCase() === "n") (handled(), newFolder());
-    else if (ctrl && key === "a") (handled(), selectRange(0, visible.length - 1));
-    else if (ctrl && key === "c" && selection.size) (handled(), (clipboard = { mode: "copy", paths: [...selection] }), notify(`Copied ${plural(selection.size, "item")} to clipboard`));
-    else if (ctrl && key === "x" && selection.size) (handled(), (clipboard = { mode: "cut", paths: [...selection] }));
-    else if (ctrl && key === "v") (handled(), paste());
-    else if (ctrl && key === "h") (handled(), (showHidden = !showHidden));
+    const target = e.target as HTMLElement;
+    // File shortcuts don't apply while renaming or typing, or on a keyboard-focused tab
+    // (it handles its own keys).
+    const fileKeys = !renaming && target.tagName !== "INPUT" && !target.closest?.("[role=tablist]");
+    const action = tabShortcut(e, ctrl) ?? (fileKeys ? fileShortcut(e, ctrl) : null);
+    if (!action) return;
+    e.preventDefault();
+    action();
   }
 
   onMount(() => {
@@ -511,7 +579,8 @@
     // Flush pending tab changes before any close (button, Ctrl+W, Alt+F4, taskbar).
     const unlistenClose = getCurrentWindow().onCloseRequested(() => persistTabs());
     const unlistenDrop = getCurrentWebview().onDragDropEvent(({ payload }) => {
-      if (payload.type === "enter" || payload.type === "over") dropTarget = folderAt(payload.position);
+      if (payload.type === "enter" || payload.type === "over")
+        dropTarget = folderAt(payload.position);
       else if (payload.type === "drop") {
         const dest = folderAt(payload.position) ?? path;
         dropTarget = null;
@@ -544,7 +613,13 @@
 <svelte:window {onkeydown} {oncontextmenu} />
 
 <div class="app">
-  <Sidebar {home} current={path} onnavigate={navigate} onopentab={(p) => openTab(p, true)} {dropTarget} />
+  <Sidebar
+    {home}
+    current={path}
+    onnavigate={navigate}
+    onopentab={(p) => openTab(p, true)}
+    {dropTarget}
+  />
   <main class="main">
     <TabBar
       tabs={tabList}
@@ -553,7 +628,8 @@
       onclose={closeTab}
       onnew={() => openTab(home)}
       onmove={moveTab}
-      ondetach={detachTab} />
+      ondetach={detachTab}
+    />
     <Toolbar
       {path}
       bind:view
@@ -561,7 +637,8 @@
       canForward={forward.length > 0}
       onback={goBack}
       onforward={goForward}
-      onnavigate={navigate} />
+      onnavigate={navigate}
+    />
     <FileView
       bind:this={fileView}
       entries={visible}
@@ -577,11 +654,19 @@
       ondragout={dragOut}
       onitemcontextmenu={itemContextMenu}
       onopentab={(p) => openTab(p, true)}
-      {dropTarget} />
+      {dropTarget}
+    />
     <footer class="status">
-      <span>{plural(visible.length, "item")}{selection.size ? ` · ${selection.size} selected` : ""}</span>
+      <span
+        >{plural(visible.length, "item")}{selection.size
+          ? ` · ${selection.size} selected`
+          : ""}</span
+      >
       {#if clipboard}
-        <span class="clip">{plural(clipboard.paths.length, "item")} {clipboard.mode === "cut" ? "to move" : "to copy"} · Ctrl+V to paste</span>
+        <span class="clip"
+          >{plural(clipboard.paths.length, "item")}
+          {clipboard.mode === "cut" ? "to move" : "to copy"} · Ctrl+V to paste</span
+        >
       {/if}
     </footer>
   </main>
