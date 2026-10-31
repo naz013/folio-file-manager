@@ -132,6 +132,7 @@ pub fn run() {
             commands::create_folder,
             commands::copy_paths,
             commands::move_paths,
+            commands::find_conflicts,
             commands::queue_pause,
             commands::queue_resume,
             commands::queue_cancel,

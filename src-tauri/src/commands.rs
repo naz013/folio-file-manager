@@ -212,6 +212,56 @@ fn begin(journal: &Journal, label: &str) -> Result<journal::Pending, String> {
     journal.begin(label).map_err(|e| e.to_string())
 }
 
+/// Moves `targets` to the Recycle Bin and returns the result with the journal steps for
+/// whatever really left its place, even when the call reported an error.
+fn trash_with_steps(journal: &Journal, targets: &[PathBuf]) -> (CmdResult<()>, Vec<Step>) {
+    let started = journal::unix_now() - 2;
+    // Only what is there to trash can end up in the bin.
+    let existing: Vec<PathBuf> = targets
+        .iter()
+        .filter(|p| std::fs::symlink_metadata(p).is_ok())
+        .cloned()
+        .collect();
+    let result = ops::trash(targets).map_err(|e| e.to_string());
+    let gone: Vec<PathBuf> = existing
+        .into_iter()
+        .filter(|p| std::fs::symlink_metadata(p).is_err())
+        .collect();
+    let ids = journal::trash_ids(&gone, started, &journal.trash_ids_in_use());
+    let steps = gone
+        .into_iter()
+        .zip(ids)
+        .map(|(original, id)| Step::Trash { original, id })
+        .collect();
+    (result, steps)
+}
+
+/// Replacing promises the old item can be brought back. If one left its place without a
+/// Recycle Bin entry to restore, it may have been deleted for good: stop before copying.
+fn every_one_in_the_bin(steps: &[Step]) -> CmdResult<()> {
+    if steps
+        .iter()
+        .any(|s| matches!(s, Step::Trash { id: None, .. }))
+    {
+        Err(
+            "An item that was to be replaced may have been deleted instead of moved to the \
+             Recycle Bin. Nothing was copied."
+                .into(),
+        )
+    } else {
+        Ok(())
+    }
+}
+
+/// The items of `sources` whose names are taken in `dest`, with both sides to compare.
+#[tauri::command]
+pub async fn find_conflicts(
+    sources: Vec<String>,
+    dest: String,
+) -> CmdResult<Vec<ops::conflicts::Conflict>> {
+    blocking(move || Ok(ops::conflicts::find(&paths(sources), &PathBuf::from(dest)))).await
+}
+
 /// Starts moving `targets` to the Recycle Bin in the background; returns the job id.
 #[tauri::command(async)]
 pub fn trash_paths(
@@ -233,7 +283,6 @@ pub fn trash_paths(
         let journal = handle.state::<Journal>();
         progress.set_totals(0, targets.len() as u64);
         let pending = begin(&journal, &label)?;
-        let started = journal::unix_now() - 2;
         // Only what is still there, and still the same item, is trashed.
         let (targets, changed): (Vec<_>, Vec<_>) = targets
             .into_iter()
@@ -241,23 +290,7 @@ pub fn trash_paths(
             .partition(|(path, was)| was.is_none() || ops::identity(path).as_ref() == was.as_ref());
         let targets: Vec<PathBuf> = targets.into_iter().map(|(path, _)| path).collect();
         let left_alone = changed.len();
-        let existing: Vec<PathBuf> = targets
-            .iter()
-            .filter(|p| std::fs::symlink_metadata(p).is_ok())
-            .cloned()
-            .collect();
-        let result = ops::trash(&targets).map_err(|e| e.to_string());
-        // Whatever left its place is in the bin, even if the call reported an error.
-        let gone: Vec<PathBuf> = existing
-            .into_iter()
-            .filter(|p| std::fs::symlink_metadata(p).is_err())
-            .collect();
-        let ids = journal::trash_ids(&gone, started, &journal.trash_ids_in_use());
-        let steps: Vec<Step> = gone
-            .into_iter()
-            .zip(ids)
-            .map(|(original, id)| Step::Trash { original, id })
-            .collect();
+        let (result, steps) = trash_with_steps(&journal, &targets);
         journal.finish(pending, &steps);
         for _ in &steps {
             ops::progress::add_item();
@@ -322,9 +355,13 @@ pub fn copy_paths(
     queue: tauri::State<'_, Arc<Queue>>,
     sources: Vec<String>,
     dest: String,
+    replace: Vec<String>,
+    replace_ids: Vec<Option<String>>,
 ) -> u64 {
     let sources = paths(sources);
     let dest = PathBuf::from(dest);
+    let replace: Vec<(PathBuf, Option<String>)> =
+        paths(replace).into_iter().zip(replace_ids).collect();
     let label = describe("Copy", &sources);
     let lane = ops::volume_key(&dest);
     let title = label.clone();
@@ -332,26 +369,31 @@ pub fn copy_paths(
     let work: queue::Work = Box::new(move |progress| {
         let journal = handle.state::<Journal>();
         progress.set_totals(ops::total_bytes(&sources), sources.len() as u64);
+        let doomed =
+            ops::conflicts::to_replace(&sources, &replace, &dest).map_err(|e| e.to_string())?;
         let pending = begin(&journal, &label)?;
+        // What is replaced goes to the Recycle Bin first, so its name is free.
+        let (trashed, mut steps) = trash_with_steps(&journal, &doomed);
+        let trashed = trashed.and_then(|()| every_one_in_the_bin(&steps));
         let mut done = ops::Copied::default();
-        let result = ops::copy_into_with(&sources, &dest, &mut done);
-        let steps: Vec<Step> = done
-            .pairs
-            .iter()
-            .map(|(from, to)| Step::copied(from.clone(), to.clone()))
-            .collect();
+        let result = trashed.and_then(|()| {
+            ops::copy_into_with(&sources, &dest, &mut done).map_err(|e| e.to_string())
+        });
+        steps.extend(
+            done.pairs
+                .iter()
+                .map(|(from, to)| Step::copied(from.clone(), to.clone())),
+        );
         journal.finish(pending, &steps);
-        result
-            .map(|()| {
-                serde_json::to_value(Copied {
-                    dest: dest.to_string_lossy().into_owned(),
-                    paths: strings(done.paths),
-                    skipped: strings(done.skipped),
-                    not_repointed: strings(done.not_repointed),
-                })
-                .unwrap_or_default()
+        result.map(|()| {
+            serde_json::to_value(Copied {
+                dest: dest.to_string_lossy().into_owned(),
+                paths: strings(done.paths),
+                skipped: strings(done.skipped),
+                not_repointed: strings(done.not_repointed),
             })
-            .map_err(|e| e.to_string())
+            .unwrap_or_default()
+        })
     });
     queue.submit(&app, window.label(), Kind::Copy, title, &lane, work)
 }
@@ -384,9 +426,13 @@ pub fn move_paths(
     queue: tauri::State<'_, Arc<Queue>>,
     sources: Vec<String>,
     dest: String,
+    replace: Vec<String>,
+    replace_ids: Vec<Option<String>>,
 ) -> u64 {
     let sources = paths(sources);
     let dest = PathBuf::from(dest);
+    let replace: Vec<(PathBuf, Option<String>)> =
+        paths(replace).into_iter().zip(replace_ids).collect();
     let label = describe("Move", &sources);
     let lane = ops::volume_key(&dest);
     let title = label.clone();
@@ -404,26 +450,31 @@ pub fn move_paths(
             ops::total_bytes(&sources)
         };
         progress.set_totals(bytes, sources.len() as u64);
+        let doomed =
+            ops::conflicts::to_replace(&sources, &replace, &dest).map_err(|e| e.to_string())?;
         let pending = begin(&journal, &label)?;
+        // What is replaced goes to the Recycle Bin first, so its name is free.
+        let (trashed, mut steps) = trash_with_steps(&journal, &doomed);
+        let trashed = trashed.and_then(|()| every_one_in_the_bin(&steps));
         let mut done = ops::Moved::default();
-        let result = ops::move_into_with(&sources, &dest, &mut done);
-        let steps: Vec<Step> = done
-            .pairs
-            .iter()
-            .map(|(from, to)| Step::moved(from.clone(), to.clone()))
-            .collect();
+        let result = trashed.and_then(|()| {
+            ops::move_into_with(&sources, &dest, &mut done).map_err(|e| e.to_string())
+        });
+        steps.extend(
+            done.pairs
+                .iter()
+                .map(|(from, to)| Step::moved(from.clone(), to.clone())),
+        );
         journal.finish(pending, &steps);
-        result
-            .map(|()| {
-                serde_json::to_value(Moved {
-                    dest: dest.to_string_lossy().into_owned(),
-                    paths: strings(done.paths),
-                    left_behind: strings(done.left_behind),
-                    not_repointed: strings(done.not_repointed),
-                })
-                .unwrap_or_default()
+        result.map(|()| {
+            serde_json::to_value(Moved {
+                dest: dest.to_string_lossy().into_owned(),
+                paths: strings(done.paths),
+                left_behind: strings(done.left_behind),
+                not_repointed: strings(done.not_repointed),
             })
-            .map_err(|e| e.to_string())
+            .unwrap_or_default()
+        })
     });
     queue.submit(&app, window.label(), Kind::Move, title, &lane, work)
 }

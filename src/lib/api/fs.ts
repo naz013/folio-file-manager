@@ -77,9 +77,39 @@ export interface Copied {
   /** Links in the copy that should point into it but still lead to the original. */
   notRepointed: string[];
 }
-/** Starts copying in the background; resolves to the id of the job in the queue. */
-export const copyPaths = (sources: string[], dest: string) =>
-  invoke<number>("copy_paths", { sources, dest });
+/** A name in the destination that an item being copied or moved would collide with. */
+export interface Conflict {
+  source: string;
+  existing: string;
+  name: string;
+  sourceIsDir: boolean;
+  existingIsDir: boolean;
+  /** Bytes; 0 for a folder. */
+  sourceSize: number;
+  existingSize: number;
+  /** Milliseconds since the Unix epoch. */
+  sourceModified: number | null;
+  existingModified: number | null;
+  /** False when replacing would also take the item itself or the destination. */
+  canReplace: boolean;
+  /** Identity of the existing item as shown; given back so a changed item isn't replaced. */
+  existingId: string | null;
+}
+/** What to do about one conflict: replace (existing goes to the Recycle Bin), skip, or keep both. */
+export type Choice = "replace" | "skip" | "both";
+export const findConflicts = (sources: string[], dest: string) =>
+  invoke<Conflict[]>("find_conflicts", { sources, dest });
+
+/**
+ * Starts copying in the background; resolves to the id of the job in the queue. The
+ * existing items for the sources in `replace` go to the Recycle Bin first.
+ */
+export const copyPaths = (
+  sources: string[],
+  dest: string,
+  replace: string[] = [],
+  replaceIds: (string | null)[] = [],
+) => invoke<number>("copy_paths", { sources, dest, replace, replaceIds });
 /** Result of `move_paths` (`commands::Moved`). */
 export interface Moved {
   /** The folder moved into. */
@@ -92,8 +122,12 @@ export interface Moved {
   notRepointed: string[];
 }
 /** Starts moving in the background; resolves to the id of the job in the queue. */
-export const movePaths = (sources: string[], dest: string) =>
-  invoke<number>("move_paths", { sources, dest });
+export const movePaths = (
+  sources: string[],
+  dest: string,
+  replace: string[] = [],
+  replaceIds: (string | null)[] = [],
+) => invoke<number>("move_paths", { sources, dest, replace, replaceIds });
 
 /** A copy, move or delete in the operations queue (`queue::JobView`). */
 export interface Job {

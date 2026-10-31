@@ -6,6 +6,7 @@
   import {
     copyPaths,
     createFolder,
+    findConflicts,
     homeDir,
     listDir,
     movePaths,
@@ -31,10 +32,13 @@
     watchDir,
     windowTabs,
     type Copied,
+    type Choice,
+    type Conflict,
     type Entry,
     type Job,
     type Moved,
   } from "$lib/api/fs";
+  import ConflictDialog from "$lib/components/ConflictDialog.svelte";
   import OpsPill from "$lib/components/OpsPill.svelte";
   import Sidebar from "$lib/components/Sidebar.svelte";
   import TabBar from "$lib/components/TabBar.svelte";
@@ -392,7 +396,60 @@
   }
 
   async function transfer(paths: string[], dest: string, copy: boolean) {
-    await run(() => (copy ? copyPaths(paths, dest) : movePaths(paths, dest)));
+    // One question at a time.
+    if (asking) return;
+    const conflicts = await run(() => findConflicts(paths, dest));
+    if (!conflicts) return;
+    let sources = paths;
+    let replace: string[] = [];
+    let replaceIds: (string | null)[] = [];
+    if (conflicts.length) {
+      const choices = await askAboutConflicts(conflicts, copy ? "copy" : "move");
+      if (!choices) return;
+      sources = paths.filter((p) => choices[p] !== "skip");
+      replace = sources.filter((p) => choices[p] === "replace");
+      replaceIds = replace.map((p) => conflicts.find((c) => c.source === p)?.existingId ?? null);
+      if (!sources.length) return;
+    }
+    await run(() =>
+      copy
+        ? copyPaths(sources, dest, replace, replaceIds)
+        : movePaths(sources, dest, replace, replaceIds),
+    );
+  }
+
+  // ---- Name conflicts ----
+
+  /** The conflict being asked about, and how many are still to come. */
+  let asking = $state<{ conflict: Conflict; remaining: number; verb: "copy" | "move" } | null>(
+    null,
+  );
+  let answer: ((choice: Choice | "cancel", all: boolean) => void) | null = null;
+
+  /** Asks about each conflict in turn; "do this for all" settles the rest. Null if cancelled. */
+  async function askAboutConflicts(
+    conflicts: Conflict[],
+    verb: "copy" | "move",
+  ): Promise<Record<string, Choice> | null> {
+    const choices: Record<string, Choice> = {};
+    for (let i = 0; i < conflicts.length; i++) {
+      const conflict = conflicts[i];
+      asking = { conflict, remaining: conflicts.length - i - 1, verb };
+      const [choice, all] = await new Promise<[Choice | "cancel", boolean]>((resolve) => {
+        answer = (c, a) => resolve([c, a]);
+      });
+      asking = null;
+      if (choice === "cancel") return null;
+      // Replace only where it is allowed; the rest keep both.
+      const pick = (c: Conflict): Choice =>
+        choice === "replace" && !c.canReplace ? "both" : choice;
+      choices[conflict.source] = pick(conflict);
+      if (all) {
+        for (const rest of conflicts.slice(i + 1)) choices[rest.source] = pick(rest);
+        break;
+      }
+    }
+    return choices;
   }
 
   // ---- Operations queue ----
@@ -654,6 +711,8 @@
   }
 
   function onkeydown(e: KeyboardEvent) {
+    // A dialog handles its own keys; nothing behind it may act on them.
+    if (asking) return;
     const ctrl = e.ctrlKey || e.metaKey;
     const target = e.target as HTMLElement;
     // File shortcuts don't apply while renaming or typing, or on a keyboard-focused tab
@@ -776,6 +835,19 @@
       />
     </footer>
   </main>
+
+  {#if asking}
+    <!-- Keyed, so each conflict gets a fresh dialog with focus on Keep both. -->
+    {#key asking.conflict.source}
+      <ConflictDialog
+        conflict={asking.conflict}
+        remaining={asking.remaining}
+        verb={asking.verb}
+        ondecide={(choice, all) => answer?.(choice, all)}
+        oncancel={() => answer?.("cancel", false)}
+      />
+    {/key}
+  {/if}
 
   {#if toast}
     <div class="toast" class:error={toast.error} role="status">{toast.text}</div>
