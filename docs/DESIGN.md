@@ -9,11 +9,37 @@ The source of truth for visual design is the **Penpot** file
 | ------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | Design System | Foundations            | Colors (light, dark, tags), typography, spacing, radius, elevation, icons                                                   |
 | Design System | Components             | Thumbnails, Sidebar Item, Sidebar Tag, Tag Pill, Tab, Icon Button, View Switcher, Search Field, Button, File Tile, File Row |
+| Design System | Patterns               | Overlays and feedback for 0.2–0.5 features (see below), plus their library components                                       |
 | Screens       | Browser — Light / Dark | Main window: sidebar, tabs, toolbar, grid, inspector, status bar                                                            |
 | Screens       | Cleanup — Light / Dark | Storage & Cleanup: donut, largest-folders treemap, suggestions, summary panel                                               |
 
 The dark screens are recolored copies, not token-driven. In code, both themes come from the
-same tokens.
+same tokens. All text uses **Inter** (not Inter Tight; Penpot's name lookup returns Inter Tight
+for "Inter", so pick the font by exact name).
+
+### Patterns board
+
+| Section           | Contents                                                                                   | Issue    |
+| ----------------- | ------------------------------------------------------------------------------------------ | -------- |
+| Drag & drop       | Folder tile: default, drop target, spring-loading ring, opening; breadcrumb, sidebar and tab spring states; auto-scroll edge | #67, #68 |
+| Clipboard shelf   | Collapsed button with count bubble; Move/Copy toggle; expanded panel grouped by source folder with Paste | #69      |
+| Operations queue  | Status-bar pill; panel with running, paused, queued, done (Undo) and failed rows           | #14      |
+| Toasts            | Success with Undo, Info, Error                                                              | —        |
+| Dialogs & menus   | Conflict dialog (Keep both default, Replace → Recycle Bin); Folio context menu with tag row | #15, #17 |
+| Command palette   | Ctrl K: folder results, actions with shortcuts, keyboard hints                             | #23      |
+| Quick Look        | Dark preview window with Open with, full screen, previous/next                             | #13      |
+
+Library components added with the patterns:
+
+| Component     | Variants                                    |
+| ------------- | ------------------------------------------- |
+| Toast         | Kind: Success, Info, Error                  |
+| Menu Item     | State: Default, Hover, Disabled, Danger     |
+| Shelf Item    | State: Default, Hover, Missing              |
+| Operation Row | State: Running, Paused, Queued, Done, Failed |
+| Shelf Button  | —                                           |
+| Ops Pill      | —                                           |
+| Kbd           | —                                           |
 
 ## Tokens
 
