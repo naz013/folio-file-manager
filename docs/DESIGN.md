@@ -85,10 +85,11 @@ blue `#0A84FF` · purple `#AF52DE` · gray `#8E8E93`
 | Caption       | 11 / 14            | 500                |
 | Section Label | 11 / 14            | 600, +0.4 tracking |
 
-### Spacing, radius, elevation
+### Spacing, radius, size, elevation
 
 - Spacing (4 pt grid): 2, 4, 8, 12, 16, 20, 24, 32
-- Radius: xs 4, sm 6, md 8, lg 12, xl 16, full 999
+- Radius: xs 4, sm 6, md 8, lg 12, xl 16, full 999, tab 9 (`radius.tab`, the Tab component)
+- Size: titlebar 46 (`size.titlebar`, the Tab Bar and the sidebar brand row, which share one drag strip)
 - Elevation: _raised_ (controls, active tab), _popover_ (menus), _window_
 
 ## UX rules

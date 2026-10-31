@@ -86,7 +86,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    height: 46px;
+    height: var(--size-titlebar);
     flex-shrink: 0;
     padding: 0 8px;
     margin-bottom: 10px;

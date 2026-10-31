@@ -35,6 +35,10 @@
   --radius-lg: 12px;
   --radius-xl: 16px;
   --radius-full: 999px;
+  --radius-tab: 9px;
+
+  /* core: size */
+  --size-titlebar: 46px;
 
   /* core: typography */
   --font-sans: "Inter Variable", "Inter", system-ui, "Segoe UI", sans-serif;

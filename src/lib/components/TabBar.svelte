@@ -213,7 +213,7 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    height: 46px;
+    height: var(--size-titlebar);
     flex-shrink: 0;
     padding-left: 8px;
     background: var(--bg-sidebar);
@@ -241,7 +241,7 @@
     min-width: 72px;
     height: 34px;
     padding: 0 8px 0 12px;
-    border-radius: 9px;
+    border-radius: var(--radius-tab);
     color: var(--text-secondary);
     font-size: 12.5px;
     cursor: default;
@@ -322,7 +322,7 @@
     display: grid;
     place-items: center;
     width: 46px;
-    height: 46px;
+    height: var(--size-titlebar);
     flex-shrink: 0;
     color: var(--text-secondary);
   }
