@@ -113,6 +113,7 @@
   let toastTimer: ReturnType<typeof setTimeout>;
 
   let fileView: FileView;
+  let toolbar: Toolbar | undefined = $state();
 
   let visible = $derived(showHidden ? entries : entries.filter((e) => !e.hidden));
 
@@ -145,14 +146,14 @@
   }
 
   /** Shows `target` in the active tab. Resolves to false on error, null if a newer navigation took over. */
-  async function load(target: string): Promise<boolean | null> {
+  async function load(target: string, quiet = false): Promise<boolean | null> {
     const gen = ++navGen;
     let list: Entry[];
     try {
       list = await listDir(target);
     } catch (e) {
       if (gen !== navGen) return null;
-      notify(String(e), true);
+      if (!quiet) notify(String(e), true);
       return false;
     }
     if (gen !== navGen) return null;
@@ -170,13 +171,16 @@
     return true;
   }
 
-  async function navigate(target: string) {
-    if (target === path) return;
+  /** Opens `target`; resolves to whether it is now shown (null: a newer navigation won). */
+  async function navigate(target: string, quiet = false): Promise<boolean | null> {
+    if (target === path) return true;
     const from = path;
-    if (await load(target)) {
+    const ok = await load(target, quiet);
+    if (ok) {
       if (from) back.push(from);
       forward = [];
     }
+    return ok;
   }
 
   async function goBack() {
@@ -639,6 +643,7 @@
   function tabShortcut(e: KeyboardEvent, ctrl: boolean): Action | null {
     if (!ctrl) return null;
     const key = e.key.toLowerCase();
+    if (key === "l" && !e.shiftKey) return () => toolbar?.edit();
     if (key === "t" || key === "w") {
       // Held-down Ctrl+T / Ctrl+W must not open or close tabs in a burst.
       if (!restored || e.repeat) return ignore;
@@ -804,6 +809,7 @@
       ondetach={detachTab}
     />
     <Toolbar
+      bind:this={toolbar}
       {path}
       bind:view
       canBack={back.length > 0}
