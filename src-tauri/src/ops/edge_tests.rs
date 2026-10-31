@@ -1871,3 +1871,99 @@ fn links_that_were_repointed_are_not_reported() {
 
     assert_eq!(out.not_repointed, Vec::<PathBuf>::new());
 }
+
+#[cfg(windows)]
+#[test]
+fn a_folder_moved_within_a_drive_keeps_its_internal_links_working() {
+    let t = tmp();
+    let (src, outside) = tree_with_links(t.path());
+    // Deeper, to check the whole tree is covered.
+    junction(
+        &dir(src.join("data").join("deep")).join("up"),
+        &src.join("data"),
+    );
+    let dest = dir(t.path().join("dest"));
+
+    let moved = move_into(&one(&src), &dest).unwrap();
+
+    let at = &moved.paths[0];
+    assert_eq!(moved.not_repointed, Vec::<PathBuf>::new());
+    assert_eq!(read(at.join("to_data").join("f.txt")), "inside");
+    assert!(same_place(&at.join("to_data"), &at.join("data")));
+    assert!(same_place(
+        &at.join("data").join("deep").join("up"),
+        &at.join("data")
+    ));
+    assert!(same_place(&at.join("to_out"), &outside), "outside is kept");
+    assert_eq!(read(outside.join("o.txt")), "outside");
+    assert_eq!(names_in(at), ["data", "to_data", "to_out"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_folder_moved_within_a_drive_keeps_its_absolute_symlinks_working() {
+    let t = tmp();
+    let src = dir(t.path().join("src"));
+    write(dir(src.join("data")).join("f.txt"), "inside");
+    std::os::unix::fs::symlink(src.join("data"), src.join("to_data")).unwrap();
+    let dest = dir(t.path().join("dest"));
+
+    let moved = move_into(&one(&src), &dest).unwrap();
+
+    let at = &moved.paths[0];
+    assert_eq!(fs::read_link(at.join("to_data")).unwrap(), at.join("data"));
+}
+
+#[test]
+fn moving_a_file_or_a_folder_without_links_changes_nothing_else() {
+    let t = tmp();
+    let src = dir(t.path().join("src"));
+    write(dir(src.join("a")).join("f.txt"), "f");
+    let file = t.path().join("file.txt");
+    write(&file, "x");
+    let dest = dir(t.path().join("dest"));
+
+    let moved = move_into(&[src, file], &dest).unwrap();
+
+    assert_eq!(moved.not_repointed, Vec::<PathBuf>::new());
+    assert_eq!(read(dest.join("src").join("a").join("f.txt")), "f");
+    assert_eq!(read(dest.join("file.txt")), "x");
+}
+
+#[cfg(windows)]
+#[test]
+fn a_folder_moved_from_under_a_junction_repoints_links_made_with_its_real_path() {
+    let t = tmp();
+    let real = dir(t.path().join("real"));
+    let src = dir(real.join("proj"));
+    write(dir(src.join("data")).join("f.txt"), "inside");
+    junction(&src.join("to_data"), &src.join("data"));
+    // The folder is reached through a junction, but the link names the real path.
+    let door = t.path().join("door");
+    junction(&door, &real);
+    let dest = dir(t.path().join("dest"));
+
+    let moved = move_into(&one(&door.join("proj")), &dest).unwrap();
+
+    let at = &moved.paths[0];
+    assert_eq!(moved.not_repointed, Vec::<PathBuf>::new());
+    assert_eq!(read(at.join("to_data").join("f.txt")), "inside");
+    assert!(same_place(&at.join("to_data"), &at.join("data")));
+}
+
+#[cfg(windows)]
+#[test]
+fn a_link_to_a_sibling_sharing_the_old_prefix_is_left_alone() {
+    let t = tmp();
+    let src = dir(t.path().join("src"));
+    let sibling = dir(t.path().join("src-old"));
+    write(sibling.join("s.txt"), "sibling");
+    junction(&src.join("to_sibling"), &sibling);
+    let dest = dir(t.path().join("dest"));
+
+    let moved = move_into(&one(&src), &dest).unwrap();
+
+    let at = &moved.paths[0];
+    assert!(same_place(&at.join("to_sibling"), &sibling));
+    assert_eq!(moved.not_repointed, Vec::<PathBuf>::new());
+}

@@ -212,8 +212,20 @@ fn move_one(src: &Path, dest_dir: &Path, moved: &mut Moved) -> io::Result<()> {
     }
     ensure_not_into_itself(src, dest_dir)?;
     let name = file_name(src)?;
+    let was_folder = fs::symlink_metadata(src).is_ok_and(|m| m.is_dir());
+    // Links may name the folder by its real path when `src` is reached through a link;
+    // that can't be resolved once it has moved.
+    let mut old_names = vec![src.to_path_buf()];
+    if was_folder {
+        old_names.extend(fs::canonicalize(src).ok());
+    }
     let target = match noclobber::place(dest_dir, &name, |t| noclobber::rename(src, t)) {
-        Ok(target) => target,
+        Ok(target) => {
+            if was_folder {
+                repoint_renamed_tree(&old_names, &target, &mut moved.not_repointed);
+            }
+            target
+        }
         Err(e) if is_cross_device(&e) => {
             let (target, left, dangling) = cross_volume::move_by_copy_noted(src, dest_dir, &name)?;
             moved.left_behind.extend(left);
@@ -513,6 +525,71 @@ fn repoint_link(new_target: &Path, at: &Path) -> Result<(), Option<PathBuf>> {
         let _ = copy_link(&temp, &old_target, at);
     }
     Err(cross_volume::remove_link(&temp).err().map(|_| temp))
+}
+
+/// After the folder known as any of `olds` was renamed to `new`, points the links inside
+/// it that led into the old folder at the same places under `new`: renaming a folder does
+/// not touch absolute link targets, which would dangle. Links that can't be repointed are
+/// added to `not_repointed`.
+///
+/// This reads every folder in the tree once (folders only, no file is opened), so a move
+/// that was instant now takes as long as listing the tree. It runs on the blocking
+/// thread of the move command, and links are never followed. Folders whose contents are
+/// only in the cloud are not entered, so listing them doesn't download anything.
+fn repoint_renamed_tree(olds: &[PathBuf], new: &Path, not_repointed: &mut Vec<PathBuf>) {
+    // Absolute, so a symlink's new target doesn't depend on the working directory.
+    let new = std::path::absolute(new).unwrap_or_else(|_| new.to_path_buf());
+    let mut folders = vec![new.clone()];
+    while let Some(folder) = folders.pop() {
+        let Ok(entries) = fs::read_dir(&folder) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            let at = entry.path();
+            if kind.is_dir() {
+                if !is_cloud_only(&entry) {
+                    folders.push(at);
+                }
+            } else if kind.is_symlink() {
+                // A link of a kind that can't be read has nothing to repoint.
+                let Some(rest) = fs::read_link(&at)
+                    .ok()
+                    .and_then(|target| olds.iter().find_map(|old| inside_tree(old, &target)))
+                else {
+                    continue;
+                };
+                if let Err(leftover) = repoint_link(&new.join(rest), &at) {
+                    not_repointed.push(at);
+                    not_repointed.extend(leftover);
+                }
+            }
+        }
+    }
+}
+
+/// A folder whose contents a sync provider keeps in the cloud until they are opened.
+#[cfg(windows)]
+fn is_cloud_only(entry: &fs::DirEntry) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_OFFLINE: u32 = 0x1000;
+    const FILE_ATTRIBUTE_RECALL_ON_OPEN: u32 = 0x4_0000;
+    const FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS: u32 = 0x40_0000;
+    // The attributes come with the listing; nothing is opened.
+    entry.metadata().is_ok_and(|m| {
+        m.file_attributes()
+            & (FILE_ATTRIBUTE_OFFLINE
+                | FILE_ATTRIBUTE_RECALL_ON_OPEN
+                | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS)
+            != 0
+    })
+}
+
+#[cfg(not(windows))]
+fn is_cloud_only(_entry: &fs::DirEntry) -> bool {
+    false
 }
 
 /// Where a replacement for the link `at` is made before it is swapped in.
