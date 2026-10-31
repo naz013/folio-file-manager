@@ -22,7 +22,9 @@
     trashPaths,
     watchDir,
     windowTabs,
+    type Copied,
     type Entry,
+    type Moved,
   } from "$lib/api/fs";
   import Sidebar from "$lib/components/Sidebar.svelte";
   import TabBar from "$lib/components/TabBar.svelte";
@@ -375,21 +377,27 @@
   }
 
   async function transfer(paths: string[], dest: string, copy: boolean) {
-    const result = await run(async () => {
-      if (copy) return { paths: await copyPaths(paths, dest), leftBehind: [] };
-      return movePaths(paths, dest);
-    });
+    const result = await run<Copied | Moved>(() =>
+      copy ? copyPaths(paths, dest) : movePaths(paths, dest),
+    );
     if (!result) return;
-    const { paths: created, leftBehind } = result;
-    if (leftBehind.length) {
-      // Shown in the error style so it's noticed; nothing is lost, every item has a complete copy.
+    const created = result.paths;
+    const verb = copy ? "Copied" : "Moved";
+    const done = created.length ? `${verb} ${plural(created.length, "item")}. ` : "";
+    // Shown in the error style so it's noticed; nothing is lost either way.
+    if ("skipped" in result && result.skipped.length) {
       notify(
-        `Moved ${plural(created.length, "item")}. ${plural(leftBehind.length, "item")} stayed in ` +
-          `the original folder because they changed during the move or are in use.`,
+        `${done}Skipped ${plural(result.skipped.length, "link")}: links can't be copied yet.`,
+        true,
+      );
+    } else if ("leftBehind" in result && result.leftBehind.length) {
+      const n = result.leftBehind.length;
+      notify(
+        `${done}${plural(n, "item")} stayed in the original folder: changed during the move, in use, or a link.`,
         true,
       );
     } else {
-      notify(`${copy ? "Copied" : "Moved"} ${plural(created.length, "item")}`);
+      notify(`${verb} ${plural(created.length, "item")}`);
     }
     await refresh(dest === path ? created : []);
   }

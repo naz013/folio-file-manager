@@ -54,7 +54,7 @@ fn copy_into_keeps_both_and_never_overwrites_existing_file() {
     write(src.join("f.txt"), "new");
     write(dest.join("f.txt"), "old");
 
-    let out = copy_into(&one(&src.join("f.txt")), &dest).unwrap();
+    let out = copy_into(&one(&src.join("f.txt")), &dest).unwrap().paths;
 
     assert_eq!(out[0], dest.join("f (2).txt"));
     assert_eq!(read(dest.join("f.txt")), "old");
@@ -89,7 +89,9 @@ fn copy_into_multiple_sources_with_same_name_get_distinct_targets() {
     write(b.join("f.txt"), "B");
     write(c.join("f.txt"), "C");
 
-    let out = copy_into(&[a.join("f.txt"), b.join("f.txt"), c.join("f.txt")], &dest).unwrap();
+    let out = copy_into(&[a.join("f.txt"), b.join("f.txt"), c.join("f.txt")], &dest)
+        .unwrap()
+        .paths;
 
     assert_eq!(
         out,
@@ -132,7 +134,7 @@ fn copy_into_folder_does_not_merge_into_file_with_same_name() {
     write(src.join("item").join("inner.txt"), "inner");
     write(dest.join("item"), "i am a file");
 
-    let out = copy_into(&one(&src.join("item")), &dest).unwrap();
+    let out = copy_into(&one(&src.join("item")), &dest).unwrap().paths;
 
     assert_eq!(out[0], dest.join("item (2)"));
     assert_eq!(read(dest.join("item")), "i am a file");
@@ -148,7 +150,7 @@ fn copy_into_file_does_not_replace_folder_with_same_name() {
     dir(dest.join("item"));
     write(dest.join("item").join("keep.txt"), "keep");
 
-    let out = copy_into(&one(&src.join("item")), &dest).unwrap();
+    let out = copy_into(&one(&src.join("item")), &dest).unwrap().paths;
 
     assert_eq!(out[0], dest.join("item (2)"));
     assert!(dest.join("item").is_dir());
@@ -208,7 +210,7 @@ fn copy_into_folder_with_same_named_folder_keeps_both_without_merging() {
     dir(dest.join("docs"));
     write(dest.join("docs").join("clash.txt"), "dest clash");
 
-    let out = copy_into(&one(&src.join("docs")), &dest).unwrap();
+    let out = copy_into(&one(&src.join("docs")), &dest).unwrap().paths;
 
     assert_eq!(out[0], dest.join("docs (2)"));
     assert_eq!(read(dest.join("docs").join("clash.txt")), "dest clash");
@@ -225,7 +227,7 @@ fn conflict_resolution_handles_non_ascii_names() {
     write(src.join(name), "new");
     write(dest.join(name), "old");
 
-    let copied = copy_into(&one(&src.join(name)), &dest).unwrap();
+    let copied = copy_into(&one(&src.join(name)), &dest).unwrap().paths;
     let moved = move_into(&one(&src.join(name)), &dest).unwrap().paths;
 
     assert_eq!(copied[0], dest.join("отчёт 日本語 ñ (2).txt"));
@@ -405,7 +407,7 @@ fn copy_into_folder_tree_deeper_than_260_chars_preserves_contents() {
     write(root.join("top.txt"), "top");
     let dest = dir(t.path().join("dest"));
 
-    let out = copy_into(&one(&root), &dest).unwrap();
+    let out = copy_into(&one(&root), &dest).unwrap().paths;
 
     let rel = deep.strip_prefix(&root).unwrap();
     let copied_leaf = out[0].join(rel).join("leaf.txt");
@@ -425,8 +427,8 @@ fn copy_into_single_file_with_path_over_260_chars_succeeds() {
     let dest_short = dir(t.path().join("dest"));
     let dest_long = long_chain(&t.path().join("dest2"));
 
-    let to_short = copy_into(&one(&file), &dest_short).unwrap();
-    let to_long = copy_into(&one(&file), &dest_long).unwrap();
+    let to_short = copy_into(&one(&file), &dest_short).unwrap().paths;
+    let to_long = copy_into(&one(&file), &dest_long).unwrap().paths;
 
     assert_eq!(read(&to_short[0]), "long");
     assert!(path_len(&to_long[0]) > 260);
@@ -442,7 +444,9 @@ fn copy_into_long_destination_conflict_still_keeps_both() {
     write(src.join("f.txt"), "new");
     write(dest_long.join("f.txt"), "old");
 
-    let out = copy_into(&one(&src.join("f.txt")), &dest_long).unwrap();
+    let out = copy_into(&one(&src.join("f.txt")), &dest_long)
+        .unwrap()
+        .paths;
 
     assert_eq!(out[0], dest_long.join("f (2).txt"));
     assert_eq!(read(dest_long.join("f.txt")), "old");
@@ -697,7 +701,7 @@ fn copy_into_read_only_file_succeeds_and_keeps_attribute() {
     let _g1 = RoGuard(src.join("ro.txt"));
     let _g2 = RoGuard(dest.join("ro.txt"));
 
-    let out = copy_into(&one(&src.join("ro.txt")), &dest).unwrap();
+    let out = copy_into(&one(&src.join("ro.txt")), &dest).unwrap().paths;
 
     assert_eq!(read(&out[0]), "ro");
     assert!(
@@ -748,7 +752,7 @@ fn copy_into_read_only_folder_tree_copies_contents() {
     let _g1 = RoGuard(src.join("ro.txt"));
     let _g2 = RoGuard(dest.join("tree").join("ro.txt"));
 
-    let out = copy_into(&one(&src), &dest).unwrap();
+    let out = copy_into(&one(&src), &dest).unwrap().paths;
 
     assert_eq!(read(out[0].join("ro.txt")), "ro");
     assert!(is_readonly(&out[0].join("ro.txt")));
@@ -765,7 +769,7 @@ fn copy_into_dest_with_read_only_file_of_same_name_keeps_both_untouched() {
     let _g1 = RoGuard(dest.join("f.txt"));
     let _g2 = RoGuard(dest.join("f (2).txt"));
 
-    let out = copy_into(&one(&src.join("f.txt")), &dest).unwrap();
+    let out = copy_into(&one(&src.join("f.txt")), &dest).unwrap().paths;
 
     assert_eq!(out[0], dest.join("f (2).txt"));
     assert_eq!(read(dest.join("f.txt")), "old");
@@ -938,15 +942,12 @@ mod unwritable {
     }
 }
 
-// ------------------------------------------------------ Suspected risks
+// ------------------------------------------------- Folder into itself by case
 
-/// `ensure_not_into_itself` uses `Path::starts_with`, which is case-sensitive, while
-/// NTFS is case-insensitive: `...\Src` into `...\src\inner` is the same folder tree.
-/// If the guard is bypassed, `copy_into` recurses until the path limit, so this test
-/// checks the guard directly and only runs the copy when the guard holds.
+/// NTFS is case-insensitive: `...\Src` into `...\src\inner` is the same folder tree,
+/// and the guard must see that (it once compared path text, see #62).
 #[cfg(windows)]
 #[test]
-#[ignore = "bug: ensure_not_into_itself is case-sensitive, so copying Src into src\\inner is not refused on Windows"]
 fn copy_into_folder_into_itself_with_different_letter_case_is_refused() {
     let t = tmp();
     let src = dir(t.path().join("Src"));
@@ -961,7 +962,7 @@ fn copy_into_folder_into_itself_with_different_letter_case_is_refused() {
 
     assert!(
         guard.is_err(),
-        "folder-into-itself check missed a case-differing spelling; copy_into would recurse"
+        "folder-into-itself check missed a case-differing spelling"
     );
     assert!(copy_into(&one(&src), &sneaky).is_err());
 }
@@ -975,7 +976,7 @@ fn move_into_folder_into_itself_with_different_letter_case_fails_and_keeps_sourc
     write(src.join("inner").join("f.txt"), "x");
     let sneaky = t.path().join("src").join("inner");
 
-    // The guard misses this, but the OS refuses to rename a folder into itself.
+    // Refused by the identity check (the OS would refuse the rename too).
     let res = move_into(&one(&src), &sneaky);
 
     assert!(res.is_err());
@@ -1009,7 +1010,7 @@ fn concurrent_copies_of_one_name_produce_distinct_files() {
                 let (barrier, dest) = (&barrier, &dest);
                 s.spawn(move || {
                     barrier.wait();
-                    copy_into(&one(src), dest).unwrap().remove(0)
+                    copy_into(&one(src), dest).unwrap().paths.remove(0)
                 })
             })
             .collect();
@@ -1197,4 +1198,156 @@ fn names_windows_would_change_are_rejected() {
         assert!(renamed.exists(), "{good}");
     }
     assert_eq!(read(t.path().join("a.b")), "a");
+}
+
+// ------------------------------------- 8. Links and folder-into-itself (#62)
+
+fn junction(link: &Path, target: &Path) {
+    let ok = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .output()
+        .unwrap()
+        .status
+        .success();
+    assert!(ok, "mklink /J failed");
+}
+
+#[test]
+fn folder_into_itself_is_refused_through_dot_dot_components() {
+    let t = tmp();
+    let src = dir(t.path().join("src"));
+    dir(src.join("inner"));
+    let sneaky = src.join("inner").join("..").join("inner");
+
+    assert!(copy_into(&one(&src), &sneaky).is_err());
+    assert!(move_into(&one(&src), &sneaky).is_err());
+    assert_eq!(fs::read_dir(src.join("inner")).unwrap().count(), 0);
+}
+
+#[cfg(windows)]
+#[test]
+fn folder_into_itself_is_refused_through_a_verbatim_prefix() {
+    let t = tmp();
+    let src = dir(t.path().join("src"));
+    dir(src.join("inner"));
+    let sneaky = PathBuf::from(format!(r"\\?\{}", src.join("inner").display()));
+    assert!(sneaky.is_dir());
+
+    assert!(copy_into(&one(&src), &sneaky).is_err());
+    assert_eq!(fs::read_dir(src.join("inner")).unwrap().count(), 0);
+}
+
+#[cfg(windows)]
+#[test]
+fn folder_into_itself_is_refused_through_a_junction() {
+    let t = tmp();
+    let src = dir(t.path().join("src"));
+    dir(src.join("inner"));
+    // Elsewhere\door leads into src\inner.
+    let elsewhere = dir(t.path().join("elsewhere"));
+    junction(&elsewhere.join("door"), &src.join("inner"));
+
+    assert!(copy_into(&one(&src), &elsewhere.join("door")).is_err());
+    assert_eq!(fs::read_dir(src.join("inner")).unwrap().count(), 0);
+}
+
+#[cfg(windows)]
+#[test]
+fn copy_skips_a_junction_loop_instead_of_recursing() {
+    let t = tmp();
+    let src = dir(t.path().join("src"));
+    write(src.join("f.txt"), "f");
+    junction(&src.join("loop"), &src);
+    let dest = dir(t.path().join("dest"));
+
+    let out = copy_into(&one(&src), &dest).unwrap();
+
+    assert_eq!(out.skipped, [src.join("loop")]);
+    assert_eq!(read(dest.join("src").join("f.txt")), "f");
+    assert!(fs::symlink_metadata(dest.join("src").join("loop")).is_err());
+}
+
+#[cfg(windows)]
+#[test]
+fn copy_never_pulls_in_data_through_a_junction_to_outside() {
+    let t = tmp();
+    let outside = dir(t.path().join("outside"));
+    write(outside.join("secret.txt"), "outside");
+    let src = dir(t.path().join("src"));
+    write(src.join("f.txt"), "f");
+    junction(&src.join("door"), &outside);
+    let dest = dir(t.path().join("dest"));
+
+    let out = copy_into(&one(&src), &dest).unwrap();
+
+    assert_eq!(out.skipped, [src.join("door")]);
+    assert!(!dest.join("src").join("door").exists());
+    assert_eq!(read(outside.join("secret.txt")), "outside");
+}
+
+#[cfg(windows)]
+#[test]
+fn a_junction_itself_can_be_moved_within_a_volume() {
+    let t = tmp();
+    let target = dir(t.path().join("target"));
+    write(target.join("f.txt"), "f");
+    junction(&t.path().join("door"), &target);
+    let dest = dir(t.path().join("dest"));
+
+    let moved = move_into(&one(&t.path().join("door")), &dest).unwrap();
+
+    assert_eq!(moved.paths, [dest.join("door")]);
+    assert_eq!(read(dest.join("door").join("f.txt")), "f");
+    assert_eq!(read(target.join("f.txt")), "f");
+}
+
+#[cfg(unix)]
+#[test]
+fn copy_recreates_links_instead_of_following_them() {
+    let t = tmp();
+    let outside = dir(t.path().join("outside"));
+    write(outside.join("secret.txt"), "outside");
+    let src = dir(t.path().join("src"));
+    std::os::unix::fs::symlink(&outside, src.join("door")).unwrap();
+    std::os::unix::fs::symlink(&src, src.join("loop")).unwrap();
+    let dest = dir(t.path().join("dest"));
+
+    let out = copy_into(&one(&src), &dest).unwrap();
+
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    assert_eq!(
+        fs::read_link(dest.join("src").join("door")).unwrap(),
+        outside
+    );
+    assert_eq!(fs::read_link(dest.join("src").join("loop")).unwrap(), src);
+}
+
+#[cfg(windows)]
+#[test]
+fn move_into_itself_is_refused_through_a_junction() {
+    let t = tmp();
+    let src = dir(t.path().join("src"));
+    write(src.join("f.txt"), "f");
+    dir(src.join("inner"));
+    let elsewhere = dir(t.path().join("elsewhere"));
+    junction(&elsewhere.join("door"), &src.join("inner"));
+
+    assert!(move_into(&one(&src), &elsewhere.join("door")).is_err());
+    assert_eq!(read(src.join("f.txt")), "f");
+}
+
+#[cfg(windows)]
+#[test]
+fn move_onto_its_own_parent_spelled_differently_is_a_no_op() {
+    let t = tmp();
+    let parent = dir(t.path().join("Parent"));
+    write(parent.join("f.txt"), "f");
+    let respelled = t.path().join("PARENT");
+
+    let moved = move_into(&one(&parent.join("f.txt")), &respelled).unwrap();
+
+    assert_eq!(moved.paths, [parent.join("f.txt")]);
+    assert_eq!(names_in(&parent), ["f.txt"]);
 }

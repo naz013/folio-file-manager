@@ -5,9 +5,9 @@
 //! move, and files that cannot be removed, stay where they are and are reported, so
 //! every file always has at least one complete copy.
 //!
-//! Links (symlinks, junctions) are followed when copying, so the destination gets
-//! their contents; the link itself is then removed, never what it points to. Whether
-//! to recreate links instead is #62.
+//! Links (symlinks, junctions) are recreated at the destination and then removed
+//! from the source; what they point to is never copied or removed. Where a link
+//! can't be recreated, it stays in the source and is reported.
 
 use std::fs;
 use std::io::{self, ErrorKind};
@@ -58,89 +58,97 @@ struct CopiedLink {
 
 /// The record of a finished copy, consumed by [`remove_copied`].
 #[derive(Default)]
-pub struct Copied {
+pub struct CopyLog {
     files: Vec<CopiedFile>,
     /// Source folders, children before parents, so they can be removed in order.
     dirs: Vec<PathBuf>,
-    /// Nothing below a link is recorded: removing through it would delete the files it
-    /// points to. Only the link itself is removed.
+    /// Links recreated at the destination; only the link itself is removed. Nothing
+    /// below a link is copied or removed.
     links: Vec<CopiedLink>,
+    /// Links that couldn't be recreated here; they stay in the source.
+    skipped: Vec<PathBuf>,
 }
 
 /// Moves `src` into `dest_dir` as `name` (or the next free name) across volumes.
-/// Returns where it went and the source paths that were left behind.
+/// Returns where it went (`None` when it was a link that can't be recreated here)
+/// and the source paths that were left behind.
 pub fn move_by_copy(
     src: &Path,
     dest_dir: &Path,
     name: &str,
-) -> io::Result<(PathBuf, Vec<PathBuf>)> {
+) -> io::Result<(Option<PathBuf>, Vec<PathBuf>)> {
     let (target, copied) = copy_tracked(src, dest_dir, name)?;
     Ok((target, remove_copied(copied)))
 }
 
 /// Copies `src` into `dest_dir` as `name` (or the next free name), recording each
 /// file's stamp before it is read. The name is claimed before anything is written.
-pub fn copy_tracked(src: &Path, dest_dir: &Path, name: &str) -> io::Result<(PathBuf, Copied)> {
-    let mut copied = Copied::default();
-    let removable = note_link(src, true, &mut copied)?;
-    let target = if src.is_dir() {
+/// Links are recreated, never followed (see [`super::copy_link`]).
+pub fn copy_tracked(
+    src: &Path,
+    dest_dir: &Path,
+    name: &str,
+) -> io::Result<(Option<PathBuf>, CopyLog)> {
+    let mut log = CopyLog::default();
+    let kind = fs::symlink_metadata(src)?.file_type();
+    let target = if kind.is_symlink() {
+        let link = fs::read_link(src)?;
+        let placed = noclobber::place(dest_dir, name, |t| super::copy_link(&link, t));
+        let placed = super::skip_unsupported(placed, src, &mut log.skipped)?;
+        if placed.is_some() {
+            log.links.push(CopiedLink {
+                path: src.to_path_buf(),
+                target: link,
+            });
+        }
+        placed
+    } else if kind.is_dir() {
         let target = noclobber::place(dest_dir, name, |t| fs::create_dir(t))?;
-        copy_contents(src, &target, removable, &mut copied)?;
-        target
+        copy_contents(src, &target, &mut log)?;
+        Some(target)
     } else {
-        noclobber::place(dest_dir, name, |t| {
-            copy_file(src, t, removable, &mut copied)
-        })?
+        Some(noclobber::place(dest_dir, name, |t| {
+            copy_file(src, t, &mut log)
+        })?)
     };
-    Ok((target, copied))
+    Ok((target, log))
 }
 
-/// Records `src` if it's a link. Returns whether what's below it may be removed.
-fn note_link(src: &Path, removable: bool, copied: &mut Copied) -> io::Result<bool> {
-    let is_link = fs::symlink_metadata(src)?.file_type().is_symlink();
-    if is_link && removable {
-        copied.links.push(CopiedLink {
-            path: src.to_path_buf(),
-            target: fs::read_link(src)?,
-        });
-    }
-    Ok(removable && !is_link)
-}
-
-fn copy_entry(src: &Path, dst: &Path, removable: bool, copied: &mut Copied) -> io::Result<()> {
-    let removable = note_link(src, removable, copied)?;
-    if src.is_dir() {
+fn copy_entry(src: &Path, dst: &Path, log: &mut CopyLog) -> io::Result<()> {
+    let kind = fs::symlink_metadata(src)?.file_type();
+    if kind.is_symlink() {
+        // Read once: the recorded target is what was recreated.
+        let link = fs::read_link(src)?;
+        let copied = super::copy_link(&link, dst);
+        if super::skip_unsupported(copied, src, &mut log.skipped)?.is_some() {
+            log.links.push(CopiedLink {
+                path: src.to_path_buf(),
+                target: link,
+            });
+        }
+        Ok(())
+    } else if kind.is_dir() {
         fs::create_dir(dst)?;
-        copy_contents(src, dst, removable, copied)
+        copy_contents(src, dst, log)
     } else {
-        copy_file(src, dst, removable, copied)
+        copy_file(src, dst, log)
     }
 }
 
-fn copy_contents(src: &Path, dst: &Path, removable: bool, copied: &mut Copied) -> io::Result<()> {
+fn copy_contents(src: &Path, dst: &Path, log: &mut CopyLog) -> io::Result<()> {
     for entry in fs::read_dir(src)? {
         let entry = entry?;
-        copy_entry(
-            &entry.path(),
-            &dst.join(entry.file_name()),
-            removable,
-            copied,
-        )?;
+        copy_entry(&entry.path(), &dst.join(entry.file_name()), log)?;
     }
-    if removable {
-        copied.dirs.push(src.to_path_buf());
-    }
+    log.dirs.push(src.to_path_buf());
     Ok(())
 }
 
 /// Copies one file without replacing `dst`; nothing is recorded if that fails.
-fn copy_file(src: &Path, dst: &Path, removable: bool, copied: &mut Copied) -> io::Result<()> {
-    if !removable {
-        return noclobber::copy_file(src, dst);
-    }
+fn copy_file(src: &Path, dst: &Path, log: &mut CopyLog) -> io::Result<()> {
     let src_stamp = Stamp::of(src)?;
     noclobber::copy_file(src, dst)?;
-    copied.files.push(CopiedFile {
+    log.files.push(CopiedFile {
         src: src.to_path_buf(),
         dst: dst.to_path_buf(),
         src_stamp,
@@ -151,8 +159,8 @@ fn copy_file(src: &Path, dst: &Path, removable: bool, copied: &mut Copied) -> io
 
 /// Removes the copied sources that are unchanged since the copy, then the links and
 /// folders, non-recursively. Returns what stayed in the source.
-pub fn remove_copied(copied: Copied) -> Vec<PathBuf> {
-    let mut left = Vec::new();
+pub fn remove_copied(copied: CopyLog) -> Vec<PathBuf> {
+    let mut left = copied.skipped;
     for file in copied.files {
         if !remove_source_file(&file, &|p| remove_even_read_only(p, |p| fs::remove_file(p))) {
             left.push(file.src);
@@ -415,10 +423,10 @@ mod tests {
     }
 
     /// `copy_tracked` to an exact path, which must be free.
-    fn copy_tracked(src: &Path, dst: &Path) -> io::Result<Copied> {
+    fn copy_tracked(src: &Path, dst: &Path) -> io::Result<CopyLog> {
         let name = dst.file_name().unwrap().to_str().unwrap();
         let (target, copied) = super::copy_tracked(src, dst.parent().unwrap(), name)?;
-        assert_eq!(target, dst);
+        assert_eq!(target.as_deref(), Some(dst));
         Ok(copied)
     }
 
@@ -426,7 +434,7 @@ mod tests {
     fn move_by_copy(src: &Path, dst: &Path) -> io::Result<Vec<PathBuf>> {
         let name = dst.file_name().unwrap().to_str().unwrap();
         let (target, left) = super::move_by_copy(src, dst.parent().unwrap(), name)?;
-        assert_eq!(target, dst);
+        assert_eq!(target.as_deref(), Some(dst));
         Ok(left)
     }
 
@@ -670,7 +678,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn link_is_removed_but_its_target_is_kept() {
+    fn link_is_recreated_and_its_target_is_never_copied() {
         let (t, src, dst) = tree();
         let outside = t.path().join("outside");
         fs::create_dir(&outside).unwrap();
@@ -679,25 +687,40 @@ mod tests {
 
         let left = move_by_copy(&src, &dst).unwrap();
 
+        assert!(left.is_empty(), "{left:?}");
+        assert!(!src.exists());
+        assert_eq!(fs::read_link(dst.join("link")).unwrap(), outside);
         assert_eq!(
             fs::read_to_string(outside.join("keep.txt")).unwrap(),
             "keep"
         );
-        assert_eq!(
-            fs::read_to_string(dst.join("link").join("keep.txt")).unwrap(),
-            "keep"
-        );
-        assert!(
-            fs::symlink_metadata(src.join("link")).is_err(),
-            "link removed"
-        );
-        assert!(left.is_empty(), "{left:?}");
-        assert!(!src.exists());
     }
 
     #[cfg(windows)]
     #[test]
-    fn junction_is_removed_but_its_target_is_kept() {
+    fn a_top_level_junction_stays_and_reports_no_target() {
+        let (t, src, _dst) = tree();
+        let outside = t.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        let link = src.join("door");
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&outside)
+            .output()
+            .unwrap();
+        assert!(made.status.success());
+
+        let (target, left) = super::move_by_copy(&link, t.path(), "door").unwrap();
+
+        assert_eq!(target, None);
+        assert_eq!(left, vec![link.clone()]);
+        assert!(fs::symlink_metadata(&link).is_ok());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn junction_stays_in_the_source_and_its_target_is_never_copied() {
         let (t, src, dst) = tree();
         let outside = t.path().join("outside");
         fs::create_dir(&outside).unwrap();
@@ -713,19 +736,19 @@ mod tests {
 
         let left = move_by_copy(&src, &dst).unwrap();
 
+        assert_eq!(left, vec![src.join("link")]);
+        assert!(
+            fs::symlink_metadata(src.join("link")).is_ok(),
+            "junction kept"
+        );
+        assert!(
+            fs::symlink_metadata(dst.join("link")).is_err(),
+            "not followed"
+        );
+        assert_eq!(fs::read_to_string(dst.join("a.txt")).unwrap(), "a");
         assert_eq!(
             fs::read_to_string(outside.join("keep.txt")).unwrap(),
             "keep"
         );
-        assert_eq!(
-            fs::read_to_string(dst.join("link").join("keep.txt")).unwrap(),
-            "keep"
-        );
-        assert!(
-            fs::symlink_metadata(src.join("link")).is_err(),
-            "link removed"
-        );
-        assert!(left.is_empty(), "{left:?}");
-        assert!(!src.exists());
     }
 }

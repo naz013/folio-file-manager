@@ -94,13 +94,24 @@ pub fn create_folder(parent: &Path, name: &str) -> io::Result<PathBuf> {
 }
 
 /// Copies each source into `dest_dir`. Returns the created paths.
-pub fn copy_into(sources: &[PathBuf], dest_dir: &Path) -> io::Result<Vec<PathBuf>> {
-    let mut created = Vec::with_capacity(sources.len());
+pub fn copy_into(sources: &[PathBuf], dest_dir: &Path) -> io::Result<Copied> {
+    let mut copied = Copied::default();
     for src in sources {
         ensure_not_into_itself(src, dest_dir)?;
-        created.push(copy_new(src, dest_dir)?);
+        if let Some(target) = copy_new(src, dest_dir, &mut copied.skipped)? {
+            copied.paths.push(target);
+        }
     }
-    Ok(created)
+    Ok(copied)
+}
+
+/// The result of [`copy_into`].
+#[derive(Debug, Default)]
+pub struct Copied {
+    /// The copy of each source.
+    pub paths: Vec<PathBuf>,
+    /// Links that weren't copied because they can't be recreated here.
+    pub skipped: Vec<PathBuf>,
 }
 
 /// The result of [`move_into`].
@@ -135,7 +146,11 @@ pub fn move_into(sources: &[PathBuf], dest_dir: &Path) -> io::Result<Moved> {
 }
 
 fn move_one(src: &Path, dest_dir: &Path, moved: &mut Moved) -> io::Result<()> {
-    if src.parent() == Some(dest_dir) {
+    // Already there, however the destination is spelled.
+    let parent = src.parent();
+    if parent == Some(dest_dir)
+        || parent.is_some_and(|p| noclobber::same_file(p, dest_dir).unwrap_or(false))
+    {
         moved.paths.push(src.to_path_buf());
         return Ok(());
     }
@@ -146,7 +161,10 @@ fn move_one(src: &Path, dest_dir: &Path, moved: &mut Moved) -> io::Result<()> {
         Err(e) if is_cross_device(&e) => {
             let (target, left) = cross_volume::move_by_copy(src, dest_dir, &name)?;
             moved.left_behind.extend(left);
-            target
+            match target {
+                Some(target) => target,
+                None => return Ok(()),
+            }
         }
         Err(e) => return Err(e),
     };
@@ -214,45 +232,125 @@ fn file_name(path: &Path) -> io::Result<String> {
         .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "Path has no file name"))
 }
 
+/// Refuses to put a folder inside itself. Compares file identity, not path text, for
+/// the destination and every folder above it once links, `..`, letter case and `\\?\`
+/// prefixes are resolved.
 fn ensure_not_into_itself(src: &Path, dest_dir: &Path) -> io::Result<()> {
-    if src.is_dir() && dest_dir.starts_with(src) {
-        return Err(io::Error::new(
-            ErrorKind::InvalidInput,
-            "Cannot copy or move a folder into itself",
-        ));
+    // A link is moved or recreated as itself, so it can't contain its destination.
+    if !fs::symlink_metadata(src).is_ok_and(|m| m.is_dir()) {
+        return Ok(());
     }
-    Ok(())
+    let src_id = noclobber::file_id(src)?;
+    // Some file system drivers can't resolve a final path; their ids still work.
+    let mut dir = fs::canonicalize(dest_dir).or_else(|_| std::path::absolute(dest_dir))?;
+    let mut src_real = None;
+    loop {
+        let same = match noclobber::file_id(&dir) {
+            Ok(id) if id.1 != 0 && src_id.1 != 0 => id == src_id,
+            // Some network redirectors report 0 for every id: compare resolved paths.
+            _ => {
+                let real = src_real.get_or_insert_with(|| fs::canonicalize(src).ok());
+                real.as_deref() == Some(dir.as_path())
+            }
+        };
+        if same {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "Cannot copy or move a folder into itself",
+            ));
+        }
+        if !dir.pop() {
+            return Ok(());
+        }
+    }
 }
 
 /// Copies `src` into `dest_dir` under its own name, or the next free one. The name is
 /// claimed first (the folder, or the file itself), so nothing is written to a name
-/// someone else took meanwhile.
-fn copy_new(src: &Path, dest_dir: &Path) -> io::Result<PathBuf> {
+/// someone else took meanwhile. Returns `None` for a link that can't be recreated.
+fn copy_new(
+    src: &Path,
+    dest_dir: &Path,
+    skipped: &mut Vec<PathBuf>,
+) -> io::Result<Option<PathBuf>> {
     let name = file_name(src)?;
-    if src.is_dir() {
+    let kind = fs::symlink_metadata(src)?.file_type();
+    if kind.is_symlink() {
+        let target = fs::read_link(src)?;
+        let placed = noclobber::place(dest_dir, &name, |t| copy_link(&target, t));
+        return skip_unsupported(placed, src, skipped);
+    }
+    if kind.is_dir() {
         let target = noclobber::place(dest_dir, &name, |t| fs::create_dir(t))?;
-        copy_contents(src, &target)?;
-        Ok(target)
+        copy_contents(src, &target, skipped)?;
+        Ok(Some(target))
     } else {
-        noclobber::place(dest_dir, &name, |t| noclobber::copy_file(src, t))
+        noclobber::place(dest_dir, &name, |t| noclobber::copy_file(src, t)).map(Some)
     }
 }
 
-fn copy_contents(src: &Path, dst: &Path) -> io::Result<()> {
+fn copy_contents(src: &Path, dst: &Path, skipped: &mut Vec<PathBuf>) -> io::Result<()> {
     for entry in fs::read_dir(src)? {
         let entry = entry?;
-        copy_recursive(&entry.path(), &dst.join(entry.file_name()))?;
+        copy_recursive(&entry.path(), &dst.join(entry.file_name()), skipped)?;
     }
     Ok(())
 }
 
-fn copy_recursive(src: &Path, dst: &Path) -> io::Result<()> {
-    if src.is_dir() {
+/// Copies a tree without following links, so a link to an ancestor can't loop and a
+/// link to elsewhere can't pull in data from outside the selection.
+fn copy_recursive(src: &Path, dst: &Path, skipped: &mut Vec<PathBuf>) -> io::Result<()> {
+    let kind = fs::symlink_metadata(src)?.file_type();
+    if kind.is_symlink() {
+        skip_unsupported(copy_link(&fs::read_link(src)?, dst), src, skipped).map(drop)
+    } else if kind.is_dir() {
         fs::create_dir(dst)?;
-        copy_contents(src, dst)
+        copy_contents(src, dst, skipped)
     } else {
         noclobber::copy_file(src, dst)
     }
+}
+
+/// Turns a link copy that this system or volume can't do into a skipped entry, so it
+/// is reported instead of failing the whole operation. Only for link copies: any other
+/// `Unsupported` error is a real failure.
+fn skip_unsupported<T>(
+    copied: io::Result<T>,
+    src: &Path,
+    skipped: &mut Vec<PathBuf>,
+) -> io::Result<Option<T>> {
+    match copied {
+        Ok(done) => Ok(Some(done)),
+        Err(e) if e.kind() == ErrorKind::Unsupported => {
+            skipped.push(src.to_path_buf());
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Creates at `dst` a link to `target`, failing if `dst` exists. Reports `Unsupported`
+/// where the volume can't hold links (FAT and exFAT refuse with EPERM).
+#[cfg(unix)]
+fn copy_link(target: &Path, dst: &Path) -> io::Result<()> {
+    std::os::unix::fs::symlink(target, dst).map_err(|e| {
+        let codes = [libc::EPERM, libc::ENOTSUP, libc::EOPNOTSUPP, libc::ENOSYS];
+        if e.raw_os_error().is_some_and(|c| codes.contains(&c)) {
+            io::Error::new(ErrorKind::Unsupported, e)
+        } else {
+            e
+        }
+    })
+}
+
+/// Windows can't recreate junctions through std, and symlinks need Developer Mode or
+/// admin rights, so links are reported as `Unsupported` and skipped.
+#[cfg(windows)]
+fn copy_link(_target: &Path, _dst: &Path) -> io::Result<()> {
+    Err(io::Error::new(
+        ErrorKind::Unsupported,
+        "Links can't be copied on Windows yet",
+    ))
 }
 
 fn is_cross_device(e: &io::Error) -> bool {
@@ -340,8 +438,8 @@ mod tests {
         let dest = dir.path().join("dest");
         fs::create_dir(&dest).unwrap();
 
-        let first = copy_into(std::slice::from_ref(&src), &dest).unwrap();
-        let second = copy_into(std::slice::from_ref(&src), &dest).unwrap();
+        let first = copy_into(std::slice::from_ref(&src), &dest).unwrap().paths;
+        let second = copy_into(std::slice::from_ref(&src), &dest).unwrap().paths;
         assert_eq!(first[0], dest.join("src"));
         assert_eq!(second[0], dest.join("src (2)"));
         assert_eq!(

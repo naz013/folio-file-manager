@@ -199,13 +199,24 @@ pub async fn create_folder(parent: String, name: String) -> CmdResult<String> {
 }
 
 #[tauri::command]
-pub async fn copy_paths(sources: Vec<String>, dest: String) -> CmdResult<Vec<String>> {
+pub async fn copy_paths(sources: Vec<String>, dest: String) -> CmdResult<Copied> {
     blocking(move || {
         ops::copy_into(&paths(sources), &PathBuf::from(dest))
-            .map(strings)
+            .map(|c| Copied {
+                paths: strings(c.paths),
+                skipped: strings(c.skipped),
+            })
             .map_err(|e| e.to_string())
     })
     .await
+}
+
+/// `ops::Copied` for the UI.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Copied {
+    paths: Vec<String>,
+    skipped: Vec<String>,
 }
 
 /// `ops::Moved` for the UI.

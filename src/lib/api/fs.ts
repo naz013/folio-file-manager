@@ -61,13 +61,20 @@ export const renamePath = (path: string, newName: string) =>
   invoke<string>("rename_path", { path, newName });
 export const createFolder = (parent: string, name: string) =>
   invoke<string>("create_folder", { parent, name });
+/** Result of `copy_paths` (`commands::Copied`). */
+export interface Copied {
+  /** The copy of each source. */
+  paths: string[];
+  /** Links that weren't copied because they can't be recreated on this system. */
+  skipped: string[];
+}
 export const copyPaths = (sources: string[], dest: string) =>
-  invoke<string[]>("copy_paths", { sources, dest });
+  invoke<Copied>("copy_paths", { sources, dest });
 /** Result of `move_paths` (`commands::Moved`). */
 export interface Moved {
   /** Where each source ended up. */
   paths: string[];
-  /** Sources a move to another drive had to leave because they changed or are in use. */
+  /** Sources a move to another drive had to leave: changed, in use, or links. */
   leftBehind: string[];
 }
 export const movePaths = (sources: string[], dest: string) =>
