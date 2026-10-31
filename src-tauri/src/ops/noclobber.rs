@@ -32,15 +32,31 @@ pub fn place(
     ))
 }
 
-pub use platform::{copy_file, rename};
+pub use platform::{copy_file, file_id, rename};
+
+/// True when `a` and `b` name the same file or folder (links not followed), such as
+/// `readme.md` and `README.md` on a case-insensitive volume.
+///
+/// Some network redirectors report 0 for every file id; that is treated as unknown,
+/// so it never makes two items look like one.
+pub fn same_file(a: &Path, b: &Path) -> io::Result<bool> {
+    let (a, b) = (file_id(a)?, file_id(b)?);
+    Ok(a.1 != 0 && a == b)
+}
 
 #[cfg(windows)]
 mod platform {
+    use std::fs;
     use std::io::{self, ErrorKind};
     use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
     use std::path::Path;
+    use windows::Win32::Foundation::HANDLE;
     use windows::Win32::Storage::FileSystem::{
-        COPY_FILE_FAIL_IF_EXISTS, CopyFileExW, MOVE_FILE_FLAGS, MoveFileExW,
+        BY_HANDLE_FILE_INFORMATION, COPY_FILE_FAIL_IF_EXISTS, CopyFileExW,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_INFO, FileIdInfo,
+        GetFileInformationByHandle, GetFileInformationByHandleEx, MOVE_FILE_FLAGS, MoveFileExW,
     };
     use windows::core::HSTRING;
 
@@ -65,7 +81,7 @@ mod platform {
             Err(e)
                 if e.kind() == ErrorKind::PermissionDenied
                     && dst.symlink_metadata().is_ok()
-                    && !same_but_case(src, dst) =>
+                    && !super::same_file(src, dst).unwrap_or(false) =>
             {
                 Err(io::Error::new(ErrorKind::AlreadyExists, e))
             }
@@ -73,10 +89,36 @@ mod platform {
         }
     }
 
-    /// A case-only rename: `dst` exists because it is `src`, so a denial isn't a clash.
-    fn same_but_case(src: &Path, dst: &Path) -> bool {
-        src.as_os_str().to_string_lossy().to_lowercase()
-            == dst.as_os_str().to_string_lossy().to_lowercase()
+    /// Volume serial number and file index of what `path` names; links aren't followed.
+    pub fn file_id(path: &Path) -> io::Result<(u64, u128)> {
+        const FILE_READ_ATTRIBUTES: u32 = 0x80;
+        const FILE_SHARE_ALL: u32 = 0x7;
+        let file = fs::OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES)
+            .share_mode(FILE_SHARE_ALL)
+            // Folders need backup semantics; the reparse flag opens a link itself.
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0 | FILE_FLAG_OPEN_REPARSE_POINT.0)
+            .open(path)?;
+        let handle = HANDLE(file.as_raw_handle());
+        let mut id = FILE_ID_INFO::default();
+        #[expect(clippy::cast_possible_truncation, reason = "FILE_ID_INFO is 24 bytes")]
+        let size = size_of::<FILE_ID_INFO>() as u32;
+        // SAFETY: `file` keeps the handle open, and `id` is a local FILE_ID_INFO of
+        // `size` bytes, the struct FileIdInfo writes.
+        let full =
+            unsafe { GetFileInformationByHandleEx(handle, FileIdInfo, (&raw mut id).cast(), size) };
+        if full.is_ok() {
+            return Ok((
+                id.VolumeSerialNumber,
+                u128::from_le_bytes(id.FileId.Identifier),
+            ));
+        }
+        // FAT has no 128-bit ids; its 64-bit index is enough to tell two names apart.
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: `file` keeps the handle open, and `info` is a local the call fills.
+        unsafe { GetFileInformationByHandle(handle, &raw mut info) }.map_err(io_error)?;
+        let index = (u128::from(info.nFileIndexHigh) << 32) | u128::from(info.nFileIndexLow);
+        Ok((u64::from(info.dwVolumeSerialNumber), index))
     }
 
     /// The `\\?\` form of `path`, so paths over 260 characters work as they do in std.
@@ -178,6 +220,12 @@ mod platform {
     fn fill(from: &mut File, to: &mut File, perms: fs::Permissions) -> io::Result<()> {
         io::copy(from, to)?;
         to.set_permissions(perms)
+    }
+
+    /// Device and inode of what `path` names; links aren't followed.
+    pub fn file_id(path: &Path) -> io::Result<(u64, u128)> {
+        let meta = fs::symlink_metadata(path)?;
+        Ok((meta.dev(), u128::from(meta.ino())))
     }
 
     /// Renames a file or folder, failing if `dst` exists.
@@ -394,6 +442,29 @@ mod tests {
             !t.path().join("gone").exists(),
             "nothing written through the link"
         );
+    }
+
+    #[test]
+    fn same_file_tells_names_apart_by_identity() {
+        let t = tempfile::tempdir().unwrap();
+        let (a, b, d) = (t.path().join("a"), t.path().join("b"), t.path().join("d"));
+        fs::write(&a, "x").unwrap();
+        fs::write(&b, "x").unwrap();
+        fs::create_dir(&d).unwrap();
+
+        assert!(same_file(&a, &a).unwrap());
+        assert!(!same_file(&a, &b).unwrap(), "same content, different files");
+        assert!(same_file(&d, &t.path().join("d")).unwrap());
+        fs::hard_link(&a, t.path().join("link")).unwrap();
+        assert!(same_file(&a, &t.path().join("link")).unwrap());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn same_file_sees_through_letter_case_on_windows() {
+        let t = tempfile::tempdir().unwrap();
+        fs::write(t.path().join("readme.md"), "").unwrap();
+        assert!(same_file(&t.path().join("readme.md"), &t.path().join("README.MD")).unwrap());
     }
 
     #[test]

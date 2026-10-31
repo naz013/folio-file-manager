@@ -1057,3 +1057,144 @@ fn concurrent_moves_of_one_name_produce_distinct_files() {
     assert_eq!(contents, expected);
     assert!(sources.iter().all(|s| !s.exists()));
 }
+
+// ------------------------------------------------ 7. Case-only renames (#61)
+
+/// A folder where `readme.md` and `README.md` are different files, or `None` when the
+/// platform can't make one (Windows without per-directory case sensitivity).
+fn case_sensitive_dir(t: &tempfile::TempDir) -> Option<PathBuf> {
+    let d = dir(t.path().join("cs"));
+    #[cfg(windows)]
+    {
+        let enabled = std::process::Command::new("fsutil")
+            .args(["file", "setCaseSensitiveInfo"])
+            .arg(&d)
+            .arg("enable")
+            .output()
+            .is_ok_and(|o| o.status.success());
+        if !enabled {
+            eprintln!("skipped: per-directory case sensitivity is unavailable");
+            return None;
+        }
+    }
+    write(d.join("probe"), "");
+    let sensitive = !d.join("PROBE").exists();
+    fs::remove_file(d.join("probe")).unwrap();
+    sensitive.then_some(d)
+}
+
+#[test]
+fn case_only_rename_onto_a_different_file_is_refused() {
+    let t = tmp();
+    let Some(d) = case_sensitive_dir(&t) else {
+        return;
+    };
+    write(d.join("readme.md"), "lower");
+    write(d.join("README.md"), "upper");
+
+    let err = rename(&d.join("readme.md"), "README.md").unwrap_err();
+
+    assert_eq!(err.kind(), ErrorKind::AlreadyExists);
+    assert_eq!(read(d.join("readme.md")), "lower");
+    assert_eq!(read(d.join("README.md")), "upper");
+}
+
+#[test]
+fn case_only_rename_without_a_clash_works_in_a_case_sensitive_folder() {
+    let t = tmp();
+    let Some(d) = case_sensitive_dir(&t) else {
+        return;
+    };
+    write(d.join("readme.md"), "lower");
+
+    let renamed = rename(&d.join("readme.md"), "README.md").unwrap();
+
+    assert_eq!(read(&renamed), "lower");
+    assert!(!d.join("readme.md").exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn case_only_rename_of_a_folder_keeps_its_contents() {
+    let t = tmp();
+    let docs = dir(t.path().join("docs"));
+    write(docs.join("f.txt"), "f");
+
+    let renamed = rename(&docs, "Docs").unwrap();
+
+    let names: Vec<_> = fs::read_dir(t.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(names, ["Docs"]);
+    assert_eq!(read(renamed.join("f.txt")), "f");
+}
+
+fn names_in(d: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(d)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn rename_onto_a_hard_link_of_the_same_file_is_refused_without_moving_it() {
+    let t = tmp();
+    let d = dir(t.path().join("d"));
+    write(d.join("a"), "data");
+    fs::hard_link(d.join("a"), d.join("b")).unwrap();
+
+    let err = rename(&d.join("a"), "b").unwrap_err();
+
+    assert_eq!(err.kind(), ErrorKind::AlreadyExists);
+    assert_eq!(names_in(&d), ["a", "b"]);
+}
+
+#[test]
+fn case_only_rename_between_hard_links_is_refused() {
+    let t = tmp();
+    let Some(d) = case_sensitive_dir(&t) else {
+        return;
+    };
+    write(d.join("readme.md"), "data");
+    fs::hard_link(d.join("readme.md"), d.join("README.md")).unwrap();
+
+    assert!(rename(&d.join("readme.md"), "README.md").is_err());
+    assert_eq!(names_in(&d), ["README.md", "readme.md"]);
+}
+
+#[test]
+fn rename_in_place_puts_the_old_name_back_when_finishing_fails() {
+    let t = tmp();
+    let d = dir(t.path().join("d"));
+    write(d.join("a"), "mine");
+    // Stands in for a case-folding volume refusing the final step.
+    write(d.join("b"), "theirs");
+
+    let err = rename_in_place(&d, &d.join("a"), &d.join("b")).unwrap_err();
+
+    assert_eq!(err.kind(), ErrorKind::AlreadyExists);
+    assert_eq!(names_in(&d), ["a", "b"], "no temporary name left behind");
+    assert_eq!(read(d.join("a")), "mine");
+    assert_eq!(read(d.join("b")), "theirs");
+}
+
+#[cfg(windows)]
+#[test]
+fn names_windows_would_change_are_rejected() {
+    let t = tmp();
+    let a = t.path().join("a.txt");
+    write(&a, "a");
+    for bad in ["a.txt.", "a.txt ", "CON", "nul.txt", "com1", "LPT9.log"] {
+        let err = rename(&a, bad).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidInput, "{bad}");
+        assert!(create_folder(t.path(), bad).is_err(), "{bad}");
+    }
+    for good in ["com", "COM0", "console", ".env", "a.b"] {
+        let renamed = rename(&t.path().join(names_in(t.path())[0].clone()), good).unwrap();
+        assert!(renamed.exists(), "{good}");
+    }
+    assert_eq!(read(t.path().join("a.b")), "a");
+}

@@ -17,25 +17,67 @@ pub fn trash(paths: &[PathBuf]) -> Result<(), trash::Error> {
 /// Renames `path` within its folder. Returns the new path.
 pub fn rename(path: &Path, new_name: &str) -> io::Result<PathBuf> {
     validate_name(new_name)?;
-    let target = path
+    let dir = path
         .parent()
-        .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "Cannot rename a root"))?
-        .join(new_name);
+        .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "Cannot rename a root"))?;
+    let target = dir.join(new_name);
     if target == path {
         return Ok(target);
     }
-    // Allow case-only renames on case-insensitive file systems.
-    let case_only =
-        target.to_string_lossy().to_lowercase() == path.to_string_lossy().to_lowercase();
-    if target.exists() && !case_only {
-        return Err(already_exists(new_name));
-    }
-    noclobber::rename(path, &target).map_err(|e| match e.kind() {
+    let renamed = match fs::symlink_metadata(&target) {
+        Err(e) if e.kind() == ErrorKind::NotFound => noclobber::rename(path, &target),
+        Err(e) => Err(e),
+        Ok(_) if is_other_spelling(dir, path, new_name) => rename_in_place(dir, path, &target),
+        Ok(_) => return Err(already_exists(new_name)),
+    };
+    renamed.map_err(|e| match e.kind() {
         // Taken after the check above.
         ErrorKind::AlreadyExists => already_exists(new_name),
         _ => e,
     })?;
     Ok(target)
+}
+
+/// True when `new_name` in `dir` resolves to `path` itself only because the volume
+/// ignores letter case: a case-only rename. It isn't when the folder holds an entry
+/// spelled exactly `new_name` (a different item, or a hard link to this one), or when
+/// the identity can't be read; then the rename is refused.
+fn is_other_spelling(dir: &Path, path: &Path, new_name: &str) -> bool {
+    let spelled_exactly = fs::read_dir(dir).map_or(true, |entries| {
+        entries
+            .flatten()
+            .any(|e| e.file_name() == std::ffi::OsStr::new(new_name))
+    });
+    !spelled_exactly && noclobber::same_file(path, &dir.join(new_name)).unwrap_or(false)
+}
+
+/// Gives `path` the name `target`, which already resolves to it. Some systems (macOS,
+/// case-folding Linux) refuse a no-replace rename onto the item's own other spelling,
+/// so that goes through a temporary name, without ever replacing anything.
+fn rename_in_place(dir: &Path, path: &Path, target: &Path) -> io::Result<()> {
+    match noclobber::rename(path, target) {
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
+        result => return result,
+    }
+    // Named after the item, so it can still be recognised if it's ever left behind,
+    // unless that would pass the usual 255-character name limit.
+    let named = format!(".{}.folio-rename", file_name(target)?);
+    let temp_name = if named.len() <= 255 {
+        named
+    } else {
+        ".folio-rename".to_owned()
+    };
+    let temp = noclobber::place(dir, &temp_name, |t| noclobber::rename(path, t))?;
+    let Err(e) = noclobber::rename(&temp, target) else {
+        return Ok(());
+    };
+    // Put the item back under its old name; if even that fails, say where it is.
+    noclobber::rename(&temp, path).map_err(|_| {
+        // Not `e.kind()`: `rename` would turn AlreadyExists into a message that hides
+        // where the item went.
+        io::Error::other(format!("{e}. The item is now named \"{}\"", temp.display()))
+    })?;
+    Err(e)
 }
 
 fn already_exists(name: &str) -> io::Error {
@@ -139,7 +181,8 @@ fn validate_name(name: &str) -> io::Result<()> {
     let invalid = name.trim().is_empty()
         || name == "."
         || name == ".."
-        || name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']);
+        || name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|'])
+        || (cfg!(windows) && !is_valid_on_windows(name));
     if invalid {
         return Err(io::Error::new(
             ErrorKind::InvalidInput,
@@ -147,6 +190,22 @@ fn validate_name(name: &str) -> io::Result<()> {
         ));
     }
     Ok(())
+}
+
+/// Windows drops a trailing dot or space and maps device names (`CON`, `nul.txt`) to
+/// devices, so such a name would silently mean something else.
+fn is_valid_on_windows(name: &str) -> bool {
+    const DEVICES: [&str; 4] = ["CON", "PRN", "AUX", "NUL"];
+    let stem = name.split('.').next().unwrap_or(name).trim_end();
+    let numbered = |prefix: &str| {
+        stem.len() == 4
+            && stem[..3].eq_ignore_ascii_case(prefix)
+            && stem.as_bytes()[3].is_ascii_digit()
+            && stem.as_bytes()[3] != b'0'
+    };
+    let device =
+        DEVICES.iter().any(|d| stem.eq_ignore_ascii_case(d)) || numbered("COM") || numbered("LPT");
+    !(device || name.ends_with(['.', ' ']))
 }
 
 fn file_name(path: &Path) -> io::Result<String> {
