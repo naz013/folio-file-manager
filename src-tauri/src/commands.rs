@@ -7,6 +7,7 @@
 )]
 
 use crate::fs::{self, Entry};
+use crate::journal::{self, Journal, Step};
 use crate::ops;
 use crate::session::{Session, WindowTabs};
 use crate::watch::DirWatcher;
@@ -190,15 +191,74 @@ pub fn show_context_menu(
     }
 }
 
-#[tauri::command]
-pub async fn trash_paths(targets: Vec<String>) -> CmdResult<()> {
-    blocking(move || ops::trash(&paths(targets)).map_err(|e| e.to_string())).await
+/// "Move "a.txt"" or "Move 3 items": what an undo entry is called.
+fn describe(verb: &str, items: &[PathBuf]) -> String {
+    match items {
+        [one] => format!(
+            "{verb} \"{}\"",
+            one.file_name().map_or_else(
+                || one.display().to_string(),
+                |n| n.to_string_lossy().into_owned()
+            )
+        ),
+        many => format!("{verb} {} items", many.len()),
+    }
+}
+
+/// Writes the journal entry that must exist before an operation runs.
+fn begin(journal: &Journal, label: &str) -> Result<journal::Pending, String> {
+    journal.begin(label).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn rename_path(path: String, new_name: String) -> CmdResult<String> {
+pub async fn trash_paths(app: tauri::AppHandle, targets: Vec<String>) -> CmdResult<()> {
     blocking(move || {
-        ops::rename(&PathBuf::from(path), &new_name)
+        let journal = app.state::<Journal>();
+        let targets = paths(targets);
+        let pending = begin(&journal, &describe("Move to Recycle Bin:", &targets))?;
+        let started = journal::unix_now() - 2;
+        // Only what is there to trash can end up in the bin.
+        let existing: Vec<PathBuf> = targets
+            .iter()
+            .filter(|p| std::fs::symlink_metadata(p).is_ok())
+            .cloned()
+            .collect();
+        let result = ops::trash(&targets).map_err(|e| e.to_string());
+        // Whatever left its place is in the bin, even if the call reported an error.
+        let gone: Vec<PathBuf> = existing
+            .into_iter()
+            .filter(|p| std::fs::symlink_metadata(p).is_err())
+            .collect();
+        let ids = journal::trash_ids(&gone, started, &journal.trash_ids_in_use());
+        let steps: Vec<Step> = gone
+            .into_iter()
+            .zip(ids)
+            .map(|(original, id)| Step::Trash { original, id })
+            .collect();
+        journal.finish(pending, &steps);
+        result
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn rename_path(
+    app: tauri::AppHandle,
+    path: String,
+    new_name: String,
+) -> CmdResult<String> {
+    blocking(move || {
+        let journal = app.state::<Journal>();
+        let from = PathBuf::from(path);
+        let pending = begin(&journal, &describe("Rename", std::slice::from_ref(&from)))?;
+        let result = ops::rename(&from, &new_name);
+        let steps: Vec<Step> = result
+            .as_ref()
+            .map(|to| Step::rename(from.clone(), to.clone()))
+            .into_iter()
+            .collect();
+        journal.finish(pending, &steps);
+        result
             .map(|p| p.to_string_lossy().into_owned())
             .map_err(|e| e.to_string())
     })
@@ -206,9 +266,22 @@ pub async fn rename_path(path: String, new_name: String) -> CmdResult<String> {
 }
 
 #[tauri::command]
-pub async fn create_folder(parent: String, name: String) -> CmdResult<String> {
+pub async fn create_folder(
+    app: tauri::AppHandle,
+    parent: String,
+    name: String,
+) -> CmdResult<String> {
     blocking(move || {
-        ops::create_folder(&PathBuf::from(parent), &name)
+        let journal = app.state::<Journal>();
+        let pending = begin(&journal, &format!("New folder \"{name}\""))?;
+        let result = ops::create_folder(&PathBuf::from(parent), &name);
+        let steps: Vec<Step> = result
+            .as_ref()
+            .map(|path| Step::create_folder(path.clone()))
+            .into_iter()
+            .collect();
+        journal.finish(pending, &steps);
+        result
             .map(|p| p.to_string_lossy().into_owned())
             .map_err(|e| e.to_string())
     })
@@ -216,13 +289,28 @@ pub async fn create_folder(parent: String, name: String) -> CmdResult<String> {
 }
 
 #[tauri::command]
-pub async fn copy_paths(sources: Vec<String>, dest: String) -> CmdResult<Copied> {
+pub async fn copy_paths(
+    app: tauri::AppHandle,
+    sources: Vec<String>,
+    dest: String,
+) -> CmdResult<Copied> {
     blocking(move || {
-        ops::copy_into(&paths(sources), &PathBuf::from(dest))
-            .map(|c| Copied {
-                paths: strings(c.paths),
-                skipped: strings(c.skipped),
-                not_repointed: strings(c.not_repointed),
+        let journal = app.state::<Journal>();
+        let sources = paths(sources);
+        let pending = begin(&journal, &describe("Copy", &sources))?;
+        let mut done = ops::Copied::default();
+        let result = ops::copy_into_with(&sources, &PathBuf::from(dest), &mut done);
+        let steps: Vec<Step> = done
+            .pairs
+            .iter()
+            .map(|(from, to)| Step::copied(from.clone(), to.clone()))
+            .collect();
+        journal.finish(pending, &steps);
+        result
+            .map(|()| Copied {
+                paths: strings(done.paths),
+                skipped: strings(done.skipped),
+                not_repointed: strings(done.not_repointed),
             })
             .map_err(|e| e.to_string())
     })
@@ -248,17 +336,60 @@ pub struct Moved {
 }
 
 #[tauri::command]
-pub async fn move_paths(sources: Vec<String>, dest: String) -> CmdResult<Moved> {
+pub async fn move_paths(
+    app: tauri::AppHandle,
+    sources: Vec<String>,
+    dest: String,
+) -> CmdResult<Moved> {
     blocking(move || {
-        ops::move_into(&paths(sources), &PathBuf::from(dest))
-            .map(|m| Moved {
-                paths: strings(m.paths),
-                left_behind: strings(m.left_behind),
-                not_repointed: strings(m.not_repointed),
+        let journal = app.state::<Journal>();
+        let sources = paths(sources);
+        let pending = begin(&journal, &describe("Move", &sources))?;
+        let mut done = ops::Moved::default();
+        let result = ops::move_into_with(&sources, &PathBuf::from(dest), &mut done);
+        let steps: Vec<Step> = done
+            .pairs
+            .iter()
+            .map(|(from, to)| Step::moved(from.clone(), to.clone()))
+            .collect();
+        journal.finish(pending, &steps);
+        result
+            .map(|()| Moved {
+                paths: strings(done.paths),
+                left_behind: strings(done.left_behind),
+                not_repointed: strings(done.not_repointed),
             })
             .map_err(|e| e.to_string())
     })
     .await
+}
+
+/// What Ctrl+Z and Ctrl+Y would do now, for the UI to show.
+#[derive(Serialize)]
+pub struct UndoState {
+    undo: Option<String>,
+    redo: Option<String>,
+}
+
+#[tauri::command]
+pub async fn undo_state(app: tauri::AppHandle) -> CmdResult<UndoState> {
+    blocking(move || {
+        let (undo, redo) = app.state::<Journal>().next();
+        Ok(UndoState { undo, redo })
+    })
+    .await
+}
+
+/// Undoes the latest operation; returns its name.
+#[tauri::command]
+pub async fn undo(app: tauri::AppHandle) -> CmdResult<String> {
+    blocking(move || app.state::<Journal>().undo()).await
+}
+
+/// Redoes the latest undone operation; returns its name.
+#[tauri::command]
+pub async fn redo(app: tauri::AppHandle) -> CmdResult<String> {
+    blocking(move || app.state::<Journal>().redo()).await
 }
 
 #[tauri::command]

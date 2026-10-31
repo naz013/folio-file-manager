@@ -130,6 +130,13 @@ pub fn create_folder(parent: &Path, name: &str) -> io::Result<PathBuf> {
 /// Copies each source into `dest_dir`. Returns the created paths.
 pub fn copy_into(sources: &[PathBuf], dest_dir: &Path) -> io::Result<Copied> {
     let mut copied = Copied::default();
+    copy_into_with(sources, dest_dir, &mut copied)?;
+    Ok(copied)
+}
+
+/// Like [`copy_into`], recording into `copied` so that what was done before an error is
+/// still known to the caller.
+pub fn copy_into_with(sources: &[PathBuf], dest_dir: &Path, copied: &mut Copied) -> io::Result<()> {
     for src in sources {
         let copy = ensure_not_into_itself(src, dest_dir).and_then(|()| {
             let mut walk = Plain {
@@ -140,7 +147,10 @@ pub fn copy_into(sources: &[PathBuf], dest_dir: &Path) -> io::Result<Copied> {
             copy_tree(src, dest_dir, &file_name(src)?, &mut walk)
         });
         match copy {
-            Ok(Some(target)) => copied.paths.push(target),
+            Ok(Some(target)) => {
+                copied.pairs.push((src.clone(), target.clone()));
+                copied.paths.push(target);
+            }
             Ok(None) => {}
             Err(e) => {
                 let e = with_dangling(e, copied.not_repointed.len());
@@ -148,7 +158,7 @@ pub fn copy_into(sources: &[PathBuf], dest_dir: &Path) -> io::Result<Copied> {
             }
         }
     }
-    Ok(copied)
+    Ok(())
 }
 
 /// The result of [`copy_into`].
@@ -156,6 +166,8 @@ pub fn copy_into(sources: &[PathBuf], dest_dir: &Path) -> io::Result<Copied> {
 pub struct Copied {
     /// The copy of each source.
     pub paths: Vec<PathBuf>,
+    /// Each source and where its copy went, for the undo journal.
+    pub pairs: Vec<(PathBuf, PathBuf)>,
     /// Links that weren't copied because they can't be recreated here.
     pub skipped: Vec<PathBuf>,
     /// Links in the copies that lead back into the original folder, or are missing:
@@ -168,6 +180,9 @@ pub struct Copied {
 pub struct Moved {
     /// Where each source ended up.
     pub paths: Vec<PathBuf>,
+    /// Each source that was moved and where it went, for the undo journal. Sources that
+    /// were already in the destination are not here.
+    pub pairs: Vec<(PathBuf, PathBuf)>,
     /// Source paths a cross-volume move had to leave: they changed during the move, or
     /// couldn't be removed. Each one still has a complete copy.
     pub left_behind: Vec<PathBuf>,
@@ -181,10 +196,18 @@ pub struct Moved {
 /// # Errors
 /// Stops at the first source that fails. The error also mentions anything earlier
 /// sources had to leave behind, so it isn't lost.
+#[cfg(test)]
 pub fn move_into(sources: &[PathBuf], dest_dir: &Path) -> io::Result<Moved> {
     let mut moved = Moved::default();
+    move_into_with(sources, dest_dir, &mut moved)?;
+    Ok(moved)
+}
+
+/// Like [`move_into`], recording into `moved` so that what was done before an error is
+/// still known to the caller.
+pub fn move_into_with(sources: &[PathBuf], dest_dir: &Path, moved: &mut Moved) -> io::Result<()> {
     for src in sources {
-        if let Err(e) = move_one(src, dest_dir, &mut moved) {
+        if let Err(e) = move_one(src, dest_dir, moved) {
             let e = match moved.left_behind.len() {
                 0 => e,
                 n => io::Error::new(
@@ -196,7 +219,42 @@ pub fn move_into(sources: &[PathBuf], dest_dir: &Path) -> io::Result<Moved> {
             return Err(batch_error(e, "moved", &moved.paths));
         }
     }
-    Ok(moved)
+    Ok(())
+}
+
+/// The identity of the item at `path` as text (volume and file id), which stays the same
+/// when it is renamed or moved on its drive. `None` where it can't be read.
+pub fn identity(path: &Path) -> Option<String> {
+    let (volume, file) = noclobber::file_id(path).ok()?;
+    // Some network shares report 0 for every item: that tells nothing apart.
+    if file == 0 {
+        return None;
+    }
+    Some(format!("{volume:x}-{file:x}"))
+}
+
+/// After the folder `old` was moved to `new` by an undo or redo, points the links inside
+/// it that led into `old` at the same places under `new`, as a move does (see
+/// [`repoint_renamed_tree`]). Does nothing for a file.
+pub fn repoint_after_move(old: &Path, new: &Path) {
+    if fs::symlink_metadata(new).is_ok_and(|m| m.is_dir()) {
+        repoint_renamed_tree(&[old.to_path_buf()], new, &mut Vec::new());
+    }
+}
+
+/// Moves `src` to exactly `dst` on the same drive, failing if `dst` exists. For undoing
+/// and redoing a move, where the name must be the one the item had.
+pub fn move_exact(src: &Path, dst: &Path) -> io::Result<()> {
+    noclobber::rename(src, dst).map_err(|e| {
+        if is_cross_device(&e) {
+            io::Error::new(
+                ErrorKind::Unsupported,
+                "it was moved to another drive, so Folio can't move it back; move it yourself",
+            )
+        } else {
+            e
+        }
+    })
 }
 
 fn move_one(src: &Path, dest_dir: &Path, moved: &mut Moved) -> io::Result<()> {
@@ -237,6 +295,7 @@ fn move_one(src: &Path, dest_dir: &Path, moved: &mut Moved) -> io::Result<()> {
         }
         Err(e) => return Err(e),
     };
+    moved.pairs.push((src.to_path_buf(), target.clone()));
     moved.paths.push(target);
     Ok(())
 }
@@ -345,7 +404,7 @@ fn ensure_not_into_itself(src: &Path, dest_dir: &Path) -> io::Result<()> {
 
 /// `path` made absolute and, on Windows, without a `\\?\` prefix and in lower case, so
 /// two spellings of one path compare equal as text.
-fn comparable(path: &Path) -> io::Result<PathBuf> {
+pub(crate) fn comparable(path: &Path) -> io::Result<PathBuf> {
     let full = std::path::absolute(path)?;
     if !cfg!(windows) {
         return Ok(full);

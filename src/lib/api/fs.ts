@@ -56,6 +56,10 @@ export function sameVolume(a: string, b: string): boolean {
   return root(a) === root(b);
 }
 
+/** Undoes the latest file operation; resolves to its name, rejects with why it can't. */
+export const undoOperation = () => invoke<string>("undo");
+/** Redoes the latest undone file operation. */
+export const redoOperation = () => invoke<string>("redo");
 export const trashPaths = (targets: string[]) => invoke<void>("trash_paths", { targets });
 export const renamePath = (path: string, newName: string) =>
   invoke<string>("rename_path", { path, newName });

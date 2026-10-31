@@ -1,5 +1,6 @@
 mod commands;
 mod fs;
+mod journal;
 mod ops;
 mod perf;
 mod platform;
@@ -9,6 +10,33 @@ mod watch;
 mod window;
 
 use tauri::{Manager, WindowEvent};
+
+/// Opens the undo journal. A file that can't be opened (damaged, say) is put aside and a
+/// new journal started, so one bad file doesn't stop the app from starting.
+fn open_journal(file: Option<&std::path::Path>) -> rusqlite::Result<journal::Journal> {
+    use rusqlite::ErrorCode::{DatabaseCorrupt, NotADatabase};
+    match journal::Journal::open(file) {
+        // Only a file that is not a usable journal is replaced; a busy or unwritable
+        // one is left alone and the error stops the start.
+        Err(rusqlite::Error::SqliteFailure(failure, _))
+            if matches!(failure.code, DatabaseCorrupt | NotADatabase) && file.is_some() =>
+        {
+            let file = file.unwrap_or_else(|| std::path::Path::new(""));
+            eprintln!("the undo journal is damaged; starting a new one");
+            let stamp = journal::unix_now();
+            // Kept, with anything SQLite left beside it, under a name that is never reused.
+            for suffix in ["", "-journal", "-wal", "-shm"] {
+                let mut from = file.as_os_str().to_owned();
+                from.push(suffix);
+                let mut to = file.as_os_str().to_owned();
+                to.push(format!("{suffix}.damaged-{stamp}"));
+                let _ = std::fs::rename(from, to);
+            }
+            journal::Journal::open(Some(file))
+        }
+        other => other,
+    }
+}
 
 /// Starts the app and blocks until the last window closes.
 ///
@@ -28,6 +56,14 @@ pub fn run() {
                 .map(|d| d.join("session.json"));
             let (session, extra) = session::Session::load(file);
             app.manage(session);
+            let journal_file = app
+                .path()
+                .app_data_dir()
+                .ok()
+                .map(|d| d.join("journal.sqlite"));
+            // Without a journal nothing could be undone, and operations are refused, so
+            // a journal that can't open is a failed start.
+            app.manage(open_journal(journal_file.as_deref())?);
             // The main window comes from tauri.conf.json, hidden until it is back where
             // it was. Other saved windows open in the background so they don't hold up
             // the main window's start.
@@ -84,6 +120,9 @@ pub fn run() {
             commands::create_folder,
             commands::copy_paths,
             commands::move_paths,
+            commands::undo,
+            commands::redo,
+            commands::undo_state,
             commands::perf_config,
             commands::perf_report,
         ])

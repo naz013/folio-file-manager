@@ -19,7 +19,9 @@
     saveTabs,
     showContextMenu,
     startDrag,
+    redoOperation,
     trashPaths,
+    undoOperation,
     watchDir,
     windowTabs,
     type Copied,
@@ -349,6 +351,14 @@
     }
   }
 
+  /** Ctrl+Z / Ctrl+Y: reverse or repeat the latest file operation. */
+  async function stepHistory(redo: boolean) {
+    const name = await run(redo ? redoOperation : undoOperation);
+    if (name !== undefined) notify(`${redo ? "Redid" : "Undid"}: ${name}`);
+    // Partly done, too: what was reversed shows even when something couldn't be.
+    await refresh([]);
+  }
+
   async function trashSelected() {
     const items = selected();
     if (!items.length) return;
@@ -537,6 +547,10 @@
       if (key === "ArrowUp") return goUp;
     }
     if (ctrl && shift && key.toLowerCase() === "n") return newFolder;
+    // Holding the key must not undo one operation after another.
+    if (ctrl && key.toLowerCase() === "z") return e.repeat ? null : () => stepHistory(shift);
+    if (ctrl && !shift && key.toLowerCase() === "y")
+      return e.repeat ? null : () => stepHistory(true);
     if (ctrl) {
       // Exact lowercase match: Ctrl+Shift+letter combinations are left alone.
       switch (key) {
