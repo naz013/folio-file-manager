@@ -1266,9 +1266,10 @@ fn copy_recreates_a_junction_loop_instead_of_recursing() {
             .file_type()
             .is_symlink()
     );
+    // The loop leads back to the root of the copy, not of the original.
     assert_eq!(
-        fs::read_link(&copy).unwrap(),
-        fs::read_link(src.join("loop")).unwrap()
+        fs::canonicalize(&copy).unwrap(),
+        fs::canonicalize(dest.join("src")).unwrap()
     );
 }
 
@@ -1705,4 +1706,124 @@ fn a_move_between_volumes_leaves_a_link_that_cannot_be_read_in_the_source() {
     assert!(!src.join("a.txt").exists());
     assert!(src.is_dir(), "the folder holding the link stays");
     assert!(fs::symlink_metadata(src.join("b_wsl")).is_ok(), "link kept");
+}
+
+// ---------------------------- 12. Links that lead back into the tree (#76)
+
+/// A tree with `data/f.txt`, a link `to_data` to it, and a link `to_out` to a folder
+/// outside the tree. Returns the tree, and the outside folder.
+#[cfg(windows)]
+fn tree_with_links(t: &Path) -> (PathBuf, PathBuf) {
+    let outside = dir(t.join("outside"));
+    write(outside.join("o.txt"), "outside");
+    let src = dir(t.join("src"));
+    write(dir(src.join("data")).join("f.txt"), "inside");
+    junction(&src.join("to_data"), &src.join("data"));
+    junction(&src.join("to_out"), &outside);
+    (src, outside)
+}
+
+#[cfg(windows)]
+fn same_place(a: &Path, b: &Path) -> bool {
+    fs::canonicalize(a).unwrap() == fs::canonicalize(b).unwrap()
+}
+
+#[cfg(windows)]
+#[test]
+fn a_copied_link_into_the_tree_points_at_the_copy() {
+    let t = tmp();
+    let (src, outside) = tree_with_links(t.path());
+    let dest = dir(t.path().join("dest"));
+
+    let out = copy_into(&one(&src), &dest).unwrap();
+
+    let copy = &out.paths[0];
+    assert!(same_place(&copy.join("to_data"), &copy.join("data")));
+    assert!(!same_place(&copy.join("to_data"), &src.join("data")));
+    assert_eq!(read(copy.join("to_data").join("f.txt")), "inside");
+    assert!(
+        same_place(&copy.join("to_out"), &outside),
+        "outside is kept"
+    );
+    assert_eq!(
+        names_in(copy),
+        ["data", "to_data", "to_out"],
+        "no temporary link left"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn a_moved_link_into_the_tree_still_works_after_the_source_is_gone() {
+    let t = tmp();
+    let (src, outside) = tree_with_links(t.path());
+    let dest = dir(t.path().join("dest"));
+
+    let (target, left) = cross_volume::move_by_copy(&src, &dest, "src").unwrap();
+
+    let moved = target.unwrap();
+    assert_eq!(left, Vec::<PathBuf>::new());
+    assert!(!src.exists());
+    assert_eq!(read(moved.join("to_data").join("f.txt")), "inside");
+    assert!(same_place(&moved.join("to_out"), &outside));
+    assert_eq!(names_in(&moved), ["data", "to_data", "to_out"]);
+}
+
+#[test]
+fn removing_a_link_refuses_a_regular_file_or_folder() {
+    let t = tmp();
+    let file = t.path().join("f");
+    write(&file, "keep");
+    let folder = dir(t.path().join("d"));
+
+    assert!(cross_volume::remove_link(&file).is_err());
+    assert!(cross_volume::remove_link(&folder).is_err());
+    assert_eq!(read(&file), "keep");
+    assert!(folder.is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn an_absolute_symlink_into_the_tree_points_at_the_copy() {
+    let t = tmp();
+    let src = dir(t.path().join("src"));
+    write(dir(src.join("data")).join("f.txt"), "inside");
+    std::os::unix::fs::symlink(src.join("data"), src.join("to_data")).unwrap();
+    let dest = dir(t.path().join("dest"));
+
+    let out = copy_into(&one(&src), &dest).unwrap();
+
+    let copy = &out.paths[0];
+    assert_eq!(
+        fs::read_link(copy.join("to_data")).unwrap(),
+        copy.join("data")
+    );
+}
+
+#[test]
+fn only_absolute_targets_inside_the_tree_are_retargeted() {
+    let root = Path::new(if cfg!(windows) {
+        r"C:\work\src"
+    } else {
+        "/work/src"
+    });
+    let at = |p: &str| inside_tree(root, Path::new(p));
+    if cfg!(windows) {
+        assert_eq!(at(r"C:\work\src\a\b"), Some(PathBuf::from(r"a\b")));
+        assert_eq!(at(r"c:\WORK\src\A"), Some(PathBuf::from("A")), "any case");
+        assert_eq!(at(r"C:\work\src"), Some(PathBuf::new()), "the root itself");
+        assert_eq!(
+            at(r"C:\work\src2\a"),
+            None,
+            "a sibling with the same prefix"
+        );
+        assert_eq!(at(r"C:\work\src\..\x"), None);
+    } else {
+        assert_eq!(at("/work/src/a/b"), Some(PathBuf::from("a/b")));
+        assert_eq!(at("/work/src"), Some(PathBuf::new()), "the root itself");
+        assert_eq!(at("/work/src2/a"), None, "a sibling with the same prefix");
+        assert_eq!(at("/work/src/../x"), None);
+    }
+    assert_eq!(at("a/b"), None, "relative targets move with the tree");
+    assert_eq!(at("/elsewhere/a"), None);
 }

@@ -249,9 +249,14 @@ fn same_content(a: &Path, b: &Path) -> io::Result<bool> {
     }
 }
 
-/// Removes a link itself (a symlink or junction); what it points to is kept.
+/// Removes a link itself (a symlink or junction); what it points to is kept. Refuses
+/// anything that is not a link.
 pub(super) fn remove_link(path: &Path) -> io::Result<()> {
     platform::remove_link(path)
+}
+
+fn not_a_link() -> io::Error {
+    io::Error::new(ErrorKind::InvalidInput, "Not a link")
 }
 
 /// Runs `remove`, and on Windows retries with the read-only attribute cleared if that
@@ -377,7 +382,12 @@ mod platform {
 
     /// Removes a symlink or junction itself; the folder or file it points to is kept.
     pub fn remove_link(path: &Path) -> io::Result<()> {
-        let attributes = fs::symlink_metadata(path)?.file_attributes();
+        let meta = fs::symlink_metadata(path)?;
+        // Something else took the name since the link was made: not ours to remove.
+        if !meta.file_type().is_symlink() {
+            return Err(super::not_a_link());
+        }
+        let attributes = meta.file_attributes();
         if attributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
             fs::remove_file(path)
         } else {
@@ -422,6 +432,10 @@ mod platform {
 
     /// Removes a symlink itself; what it points to is kept.
     pub fn remove_link(path: &Path) -> io::Result<()> {
+        // Something else took the name since the link was made: not ours to remove.
+        if !fs::symlink_metadata(path)?.file_type().is_symlink() {
+            return Err(super::not_a_link());
+        }
         fs::remove_file(path)
     }
 }

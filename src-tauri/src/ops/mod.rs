@@ -5,7 +5,7 @@
 
 use std::fs;
 use std::io::{self, ErrorKind};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 mod cross_volume;
 #[cfg(windows)]
@@ -372,11 +372,132 @@ impl Observe for Plain<'_> {
     }
 }
 
+/// Notes the links recreated in a copy whose target is inside the tree being copied, so
+/// they can be pointed at the copy once it has its final name.
+struct Retarget<'a> {
+    inner: &'a mut dyn Observe,
+    root: &'a Path,
+    /// Links to repoint: where each was in the source, and where it points, relative to
+    /// the root of the tree.
+    inside: Vec<(PathBuf, PathBuf)>,
+}
+
+impl Observe for Retarget<'_> {
+    fn made(&mut self) -> &mut Created {
+        self.inner.made()
+    }
+
+    fn skipped(&mut self) -> &mut Vec<PathBuf> {
+        self.inner.skipped()
+    }
+
+    fn copy_file(&mut self, src: &Path, dst: &Path) -> io::Result<()> {
+        self.inner.copy_file(src, dst)
+    }
+
+    fn link(&mut self, src: &Path, target: PathBuf) {
+        // The root itself, when it is a link, is copied as it is.
+        if src != self.root
+            && let Some(rest) = inside_tree(self.root, &target)
+        {
+            self.inside.push((src.to_path_buf(), rest));
+        }
+        self.inner.link(src, target);
+    }
+
+    fn folder(&mut self, src: &Path) {
+        self.inner.folder(src);
+    }
+
+    fn built(&mut self, temp: &Path) {
+        self.inner.built(temp);
+    }
+
+    fn renamed(&mut self, temp: &Path, target: &Path) {
+        self.inner.renamed(temp, target);
+    }
+}
+
+impl Retarget<'_> {
+    /// Points each link that led into the source tree at the same place in the copy at
+    /// `copy`. Best effort: a link that can't be repointed keeps its old target, which
+    /// still works, just through the original.
+    fn apply(&self, copy: &Path) {
+        // Absolute, so a symlink's new target doesn't depend on the working directory.
+        let Ok(copy) = std::path::absolute(copy) else {
+            return;
+        };
+        for (from, rest) in &self.inside {
+            let Ok(relative) = from.strip_prefix(self.root) else {
+                continue;
+            };
+            let at = copy.join(relative);
+            let _ = repoint_link(&copy.join(rest), &at);
+        }
+    }
+}
+
+/// Where the absolute `target` is inside the tree at `root`, relative to it. `None` for
+/// a relative target (it moves with the tree), one outside the tree, or one with `..`.
+fn inside_tree(root: &Path, target: &Path) -> Option<PathBuf> {
+    if !target.is_absolute() || target.components().any(|c| c == Component::ParentDir) {
+        return None;
+    }
+    let (root_text, target_text) = (comparable(root).ok()?, comparable(target).ok()?);
+    if !target_text.starts_with(&root_text) {
+        return None;
+    }
+    // Same spelling as the link had, not the lower-cased text compared above.
+    let depth = target_text.components().count() - root_text.components().count();
+    let full = std::path::absolute(target).ok()?;
+    let parts: Vec<_> = full.components().collect();
+    Some(parts[parts.len().checked_sub(depth)?..].iter().collect())
+}
+
+/// Replaces the link `at` with one of the same kind to `new_target`. The new link is made
+/// beside it first, so a failure leaves the old one.
+fn repoint_link(new_target: &Path, at: &Path) -> io::Result<()> {
+    let old_target = fs::read_link(at)?;
+    let temp = at.with_file_name(format!(
+        "{}.folio-retarget",
+        at.file_name().and_then(|n| n.to_str()).unwrap_or_default()
+    ));
+    copy_link(at, new_target, &temp)?;
+    let swapped = cross_volume::remove_link(at).and_then(|()| noclobber::rename(&temp, at));
+    if swapped.is_err() {
+        // Put back what was there, whatever state the swap stopped in.
+        if fs::symlink_metadata(at).is_err() {
+            let _ = copy_link(&temp, &old_target, at);
+        }
+        let _ = cross_volume::remove_link(&temp);
+    }
+    swapped
+}
+
 /// Copies `src` into `dest_dir` as `name`, or the next free name. The copy is built
 /// under a temporary `name.folio-partial` and renamed, without replacing anything,
 /// once complete; a failure removes what it created. Returns `None` for a link that
-/// can't be recreated.
+/// can't be recreated. Links inside the tree that lead back into it are pointed at the
+/// copy, not the original.
 fn copy_tree(
+    src: &Path,
+    dest_dir: &Path,
+    name: &str,
+    obs: &mut dyn Observe,
+) -> io::Result<Option<PathBuf>> {
+    let mut retarget = Retarget {
+        inner: obs,
+        root: src,
+        inside: Vec::new(),
+    };
+    let target = build_tree(src, dest_dir, name, &mut retarget)?;
+    if let Some(copy) = &target {
+        retarget.apply(copy);
+    }
+    Ok(target)
+}
+
+fn build_tree(
     src: &Path,
     dest_dir: &Path,
     name: &str,
