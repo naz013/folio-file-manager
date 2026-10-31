@@ -80,6 +80,27 @@ fn rename_in_place(dir: &Path, path: &Path, target: &Path) -> io::Result<()> {
     Err(e)
 }
 
+/// Adds to a failure in the middle of a batch which items were already done.
+fn batch_error(e: io::Error, verb: &str, done: &[PathBuf]) -> io::Error {
+    const SHOWN: usize = 5;
+    if done.is_empty() {
+        return e;
+    }
+    let mut names: Vec<_> = done
+        .iter()
+        .take(SHOWN)
+        .filter_map(|p| p.file_name())
+        .map(|n| format!("\"{}\"", n.to_string_lossy()))
+        .collect();
+    if done.len() > SHOWN {
+        names.push(format!("and {} more", done.len() - SHOWN));
+    }
+    io::Error::new(
+        e.kind(),
+        format!("{e}. Already {verb}: {}", names.join(", ")),
+    )
+}
+
 fn already_exists(name: &str) -> io::Error {
     io::Error::new(
         ErrorKind::AlreadyExists,
@@ -97,9 +118,12 @@ pub fn create_folder(parent: &Path, name: &str) -> io::Result<PathBuf> {
 pub fn copy_into(sources: &[PathBuf], dest_dir: &Path) -> io::Result<Copied> {
     let mut copied = Copied::default();
     for src in sources {
-        ensure_not_into_itself(src, dest_dir)?;
-        if let Some(target) = copy_new(src, dest_dir, &mut copied.skipped)? {
-            copied.paths.push(target);
+        let copy = ensure_not_into_itself(src, dest_dir)
+            .and_then(|()| copy_new(src, dest_dir, &mut copied.skipped));
+        match copy {
+            Ok(Some(target)) => copied.paths.push(target),
+            Ok(None) => {}
+            Err(e) => return Err(batch_error(e, "copied", &copied.paths)),
         }
     }
     Ok(copied)
@@ -133,13 +157,14 @@ pub fn move_into(sources: &[PathBuf], dest_dir: &Path) -> io::Result<Moved> {
     let mut moved = Moved::default();
     for src in sources {
         if let Err(e) = move_one(src, dest_dir, &mut moved) {
-            return Err(match moved.left_behind.len() {
+            let e = match moved.left_behind.len() {
                 0 => e,
                 n => io::Error::new(
                     e.kind(),
                     format!("{e}. Earlier, {n} item(s) stayed in the original folder"),
                 ),
-            });
+            };
+            return Err(batch_error(e, "moved", &moved.paths));
         }
     }
     Ok(moved)
@@ -291,9 +316,14 @@ fn comparable(path: &Path) -> io::Result<PathBuf> {
     Ok(PathBuf::from(text.to_lowercase()))
 }
 
-/// Copies `src` into `dest_dir` under its own name, or the next free one. The name is
-/// claimed first (the folder, or the file itself), so nothing is written to a name
-/// someone else took meanwhile. Returns `None` for a link that can't be recreated.
+/// Suffix of a copy in progress. A copy only gets its real name once it's complete, so
+/// a failed or interrupted one never looks like a finished copy.
+const PARTIAL: &str = ".folio-partial";
+
+/// Copies `src` into `dest_dir` under its own name, or the next free one. The copy is
+/// built under a temporary `name.folio-partial` and renamed, without replacing
+/// anything, once complete; a failure removes what it created. Returns `None` for a
+/// link that can't be recreated.
 fn copy_new(
     src: &Path,
     dest_dir: &Path,
@@ -302,38 +332,181 @@ fn copy_new(
     let name = file_name(src)?;
     let kind = fs::symlink_metadata(src)?.file_type();
     if kind.is_symlink() {
+        // A single link is created in one step: nothing partial to hide.
         let target = fs::read_link(src)?;
         let placed = noclobber::place(dest_dir, &name, |t| copy_link(&target, t));
         return skip_unsupported(placed, src, skipped);
     }
-    if kind.is_dir() {
-        let target = noclobber::place(dest_dir, &name, |t| fs::create_dir(t))?;
-        copy_contents(src, &target, skipped)?;
-        Ok(Some(target))
+    let mut created = Created::default();
+    let partial = partial_name(&name);
+    let temp = if kind.is_dir() {
+        noclobber::place(dest_dir, &partial, |t| fs::create_dir(t)).and_then(|temp| {
+            created.dir(&temp);
+            copy_contents(src, &temp, skipped, &mut created).map(|()| temp)
+        })
     } else {
-        noclobber::place(dest_dir, &name, |t| noclobber::copy_file(src, t)).map(Some)
+        noclobber::place(dest_dir, &partial, |t| noclobber::copy_file(src, t))
+            .and_then(|temp| created.file(&temp).map(|()| temp))
+    };
+    let temp = temp.map_err(|e| created.fail(e))?;
+    finish_copy(&temp, dest_dir, &name).map(Some)
+}
+
+/// The temporary name for a copy of `name`: `name.folio-partial`, or just
+/// `.folio-partial` where that would pass the usual 255-character name limit.
+fn partial_name(name: &str) -> String {
+    let named = format!("{name}{PARTIAL}");
+    // Room for the " (2)" a taken name gets.
+    if named.len() <= 240 {
+        named
+    } else {
+        PARTIAL.to_owned()
     }
 }
 
-fn copy_contents(src: &Path, dst: &Path, skipped: &mut Vec<PathBuf>) -> io::Result<()> {
+/// Gives the finished copy at `temp` its real name in `dest_dir`, never replacing
+/// anything. A rename blocked by a program holding a file inside (an indexer or
+/// antivirus) is retried; if it still fails, the complete copy stays at `temp` and the
+/// error says where, rather than throwing the finished work away.
+///
+/// On Unix file systems without a no-replace rename the final step falls back to
+/// check-then-rename and can lose a race (see `noclobber::rename`).
+fn finish_copy(temp: &Path, dest_dir: &Path, name: &str) -> io::Result<PathBuf> {
+    let mut wait = std::time::Duration::from_millis(50);
+    let mut retries = 5;
+    loop {
+        match noclobber::place(dest_dir, name, |t| noclobber::rename(temp, t)) {
+            Err(e) if e.kind() == ErrorKind::PermissionDenied && retries > 0 => {
+                retries -= 1;
+                std::thread::sleep(wait);
+                wait *= 2;
+            }
+            Err(e) => {
+                return Err(io::Error::new(
+                    e.kind(),
+                    format!("{e}. The complete copy is at \"{}\"", temp.display()),
+                ));
+            }
+            done => return done,
+        }
+    }
+}
+
+fn copy_contents(
+    src: &Path,
+    dst: &Path,
+    skipped: &mut Vec<PathBuf>,
+    created: &mut Created,
+) -> io::Result<()> {
     for entry in fs::read_dir(src)? {
         let entry = entry?;
-        copy_recursive(&entry.path(), &dst.join(entry.file_name()), skipped)?;
+        copy_recursive(
+            &entry.path(),
+            &dst.join(entry.file_name()),
+            skipped,
+            created,
+        )?;
     }
     Ok(())
 }
 
 /// Copies a tree without following links, so a link to an ancestor can't loop and a
 /// link to elsewhere can't pull in data from outside the selection.
-fn copy_recursive(src: &Path, dst: &Path, skipped: &mut Vec<PathBuf>) -> io::Result<()> {
+fn copy_recursive(
+    src: &Path,
+    dst: &Path,
+    skipped: &mut Vec<PathBuf>,
+    created: &mut Created,
+) -> io::Result<()> {
     let kind = fs::symlink_metadata(src)?.file_type();
     if kind.is_symlink() {
-        skip_unsupported(copy_link(&fs::read_link(src)?, dst), src, skipped).map(drop)
+        let copied = copy_link(&fs::read_link(src)?, dst);
+        if skip_unsupported(copied, src, skipped)?.is_some() {
+            created.file(dst)?;
+        }
+        Ok(())
     } else if kind.is_dir() {
         fs::create_dir(dst)?;
-        copy_contents(src, dst, skipped)
+        created.dir(dst);
+        copy_contents(src, dst, skipped, created)
     } else {
-        noclobber::copy_file(src, dst)
+        noclobber::copy_file(src, dst)?;
+        created.file(dst)
+    }
+}
+
+/// What one copy created at the destination, so a failed copy can remove exactly that
+/// and nothing someone else put there meanwhile. These are the operation's own new
+/// files, not the user's data, so they are removed, not sent to the trash (ADR 0003).
+#[derive(Default)]
+struct Created {
+    files: Vec<CreatedFile>,
+    /// Folders, parents before children.
+    dirs: Vec<PathBuf>,
+}
+
+impl Created {
+    fn file(&mut self, path: &Path) -> io::Result<()> {
+        let meta = fs::symlink_metadata(path)?;
+        self.files.push(CreatedFile {
+            path: path.to_path_buf(),
+            id: noclobber::file_id(path)?,
+            len: meta.len(),
+            modified: meta.modified().ok(),
+        });
+        Ok(())
+    }
+
+    fn dir(&mut self, path: &Path) {
+        self.dirs.push(path.to_path_buf());
+    }
+
+    /// Removes what was created, newest first, and returns `e`, naming what's left if
+    /// something couldn't be removed (it held someone else's file, say).
+    fn fail(self, e: io::Error) -> io::Error {
+        let top = self
+            .dirs
+            .first()
+            .or(self.files.first().map(|f| &f.path))
+            .cloned();
+        // Errors are ignored on purpose: whatever can't be removed stays, and the
+        // error below names the copy so it can be found.
+        for file in self.files.into_iter().rev() {
+            if file.is_still_ours() {
+                let _ = cross_volume::remove_even_read_only(&file.path, |p| fs::remove_file(p));
+            }
+        }
+        for dir in self.dirs.into_iter().rev() {
+            let _ = cross_volume::remove_even_read_only(&dir, |p| fs::remove_dir(p));
+        }
+        match top {
+            Some(top) if fs::symlink_metadata(&top).is_ok() => io::Error::new(
+                e.kind(),
+                format!("{e}. Part of the copy remains at \"{}\"", top.display()),
+            ),
+            _ => e,
+        }
+    }
+}
+
+/// A file or link one copy created, and what it looked like then.
+struct CreatedFile {
+    path: PathBuf,
+    id: (u64, u128),
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+}
+
+impl CreatedFile {
+    /// Still the file this copy created. Where file ids are unknown (0, on some
+    /// network shares) size and modified time must match too.
+    fn is_still_ours(&self) -> bool {
+        let Ok(meta) = fs::symlink_metadata(&self.path) else {
+            return false;
+        };
+        let same_id = noclobber::file_id(&self.path).is_ok_and(|now| now == self.id);
+        let same_look = meta.len() == self.len && meta.modified().ok() == self.modified;
+        same_id && (self.id.1 != 0 || same_look)
     }
 }
 

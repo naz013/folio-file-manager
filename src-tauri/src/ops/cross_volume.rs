@@ -1,6 +1,7 @@
 //! Moves between volumes, where a rename is impossible: copy the tree, then remove
 //! from the source only what was copied and has not changed since.
 //!
+//! The copy is built under a `.folio-partial` name and only renamed once complete.
 //! The source is never removed recursively. Files that appear or change during the
 //! move, and files that cannot be removed, stay where they are and are reported, so
 //! every file always has at least one complete copy.
@@ -67,6 +68,8 @@ pub struct CopyLog {
     links: Vec<CopiedLink>,
     /// Links that couldn't be recreated here; they stay in the source.
     skipped: Vec<PathBuf>,
+    /// Everything created at the destination, for removing a failed copy.
+    made: super::Created,
 }
 
 /// Moves `src` into `dest_dir` as `name` (or the next free name) across volumes.
@@ -82,8 +85,9 @@ pub fn move_by_copy(
 }
 
 /// Copies `src` into `dest_dir` as `name` (or the next free name), recording each
-/// file's stamp before it is read. The name is claimed before anything is written.
-/// Links are recreated, never followed (see [`super::copy_link`]).
+/// file's stamp before it is read. Like a plain copy it is built under a
+/// `.folio-partial` name and renamed once complete, and a failure removes what it
+/// created. Links are recreated, never followed (see [`super::copy_link`]).
 pub fn copy_tracked(
     src: &Path,
     dest_dir: &Path,
@@ -91,7 +95,7 @@ pub fn copy_tracked(
 ) -> io::Result<(Option<PathBuf>, CopyLog)> {
     let mut log = CopyLog::default();
     let kind = fs::symlink_metadata(src)?.file_type();
-    let target = if kind.is_symlink() {
+    if kind.is_symlink() {
         let link = fs::read_link(src)?;
         let placed = noclobber::place(dest_dir, name, |t| super::copy_link(&link, t));
         let placed = super::skip_unsupported(placed, src, &mut log.skipped)?;
@@ -101,17 +105,51 @@ pub fn copy_tracked(
                 target: link,
             });
         }
-        placed
-    } else if kind.is_dir() {
-        let target = noclobber::place(dest_dir, name, |t| fs::create_dir(t))?;
-        copy_contents(src, &target, &mut log)?;
-        Some(target)
+        return Ok((placed, log));
+    }
+    let partial = super::partial_name(name);
+    let temp = if kind.is_dir() {
+        noclobber::place(dest_dir, &partial, |t| fs::create_dir(t)).and_then(|temp| {
+            log.made.dir(&temp);
+            copy_contents(src, &temp, &mut log).map(|()| temp)
+        })
     } else {
-        Some(noclobber::place(dest_dir, name, |t| {
-            copy_file(src, t, &mut log)
-        })?)
+        noclobber::place(dest_dir, &partial, |t| copy_file(src, t, &mut log))
     };
-    Ok((target, log))
+    let temp = match temp {
+        Ok(temp) => temp,
+        Err(e) => return Err(std::mem::take(&mut log.made).fail(e)),
+    };
+    // A copied file is restamped after its rename only if nothing touched it in
+    // between, so a stranger's write is never taken for ours.
+    let untouched = log
+        .files
+        .iter()
+        .find(|f| f.dst == temp)
+        .is_some_and(|f| Stamp::of(&temp).is_ok_and(|s| s == f.dst_stamp));
+    let target = super::finish_copy(&temp, dest_dir, name)?;
+    log.renamed(&temp, &target, untouched);
+    Ok((Some(target), log))
+}
+
+impl CopyLog {
+    /// Points the record at the copy's final name. Renaming a file can change its own
+    /// stamp (NTFS updates the change time), so a renamed top-level file is restamped
+    /// when `restamp`; otherwise the old stamp stays and the copy is never taken back.
+    fn renamed(&mut self, temp: &Path, target: &Path, restamp: bool) {
+        for file in &mut self.files {
+            if let Ok(rest) = file.dst.strip_prefix(temp) {
+                if rest.as_os_str().is_empty() {
+                    file.dst = target.to_path_buf();
+                    if let Some(stamp) = restamp.then(|| Stamp::of(target).ok()).flatten() {
+                        file.dst_stamp = stamp;
+                    }
+                } else {
+                    file.dst = target.join(rest);
+                }
+            }
+        }
+    }
 }
 
 fn copy_entry(src: &Path, dst: &Path, log: &mut CopyLog) -> io::Result<()> {
@@ -121,6 +159,7 @@ fn copy_entry(src: &Path, dst: &Path, log: &mut CopyLog) -> io::Result<()> {
         let link = fs::read_link(src)?;
         let copied = super::copy_link(&link, dst);
         if super::skip_unsupported(copied, src, &mut log.skipped)?.is_some() {
+            log.made.file(dst)?;
             log.links.push(CopiedLink {
                 path: src.to_path_buf(),
                 target: link,
@@ -129,6 +168,7 @@ fn copy_entry(src: &Path, dst: &Path, log: &mut CopyLog) -> io::Result<()> {
         Ok(())
     } else if kind.is_dir() {
         fs::create_dir(dst)?;
+        log.made.dir(dst);
         copy_contents(src, dst, log)
     } else {
         copy_file(src, dst, log)
@@ -148,6 +188,7 @@ fn copy_contents(src: &Path, dst: &Path, log: &mut CopyLog) -> io::Result<()> {
 fn copy_file(src: &Path, dst: &Path, log: &mut CopyLog) -> io::Result<()> {
     let src_stamp = Stamp::of(src)?;
     noclobber::copy_file(src, dst)?;
+    log.made.file(dst)?;
     log.files.push(CopiedFile {
         src: src.to_path_buf(),
         dst: dst.to_path_buf(),
@@ -239,7 +280,10 @@ fn same_content(a: &Path, b: &Path) -> io::Result<bool> {
 
 /// Runs `remove`, and on Windows retries with the read-only attribute cleared if that
 /// is what blocks it. The attribute is restored when the remove still fails.
-fn remove_even_read_only(path: &Path, remove: impl Fn(&Path) -> io::Result<()>) -> io::Result<()> {
+pub(super) fn remove_even_read_only(
+    path: &Path,
+    remove: impl Fn(&Path) -> io::Result<()>,
+) -> io::Result<()> {
     let err = match remove(path) {
         Ok(()) => return Ok(()),
         Err(e) if cfg!(windows) && e.kind() == ErrorKind::PermissionDenied => e,
@@ -517,6 +561,49 @@ mod tests {
 
         assert_eq!(fs::read_to_string(&a).unwrap(), "A");
         assert_eq!(left, vec![a]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_failed_move_copy_removes_its_partial_and_keeps_the_source() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (t, src, _dst) = tree();
+        let dest = t.path().join("dest");
+        fs::create_dir(&dest).unwrap();
+        // No sharing at all: the copy of b.txt fails halfway through the tree.
+        let guard = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(src.join("sub").join("b.txt"))
+            .unwrap();
+
+        let res = super::move_by_copy(&src, &dest, "src");
+
+        drop(guard);
+        assert!(res.is_err());
+        assert_eq!(
+            fs::read_dir(&dest).unwrap().count(),
+            0,
+            "partial copy removed"
+        );
+        assert_eq!(fs::read_to_string(src.join("a.txt")).unwrap(), "a");
+        assert_eq!(
+            fs::read_to_string(src.join("sub").join("b.txt")).unwrap(),
+            "b"
+        );
+    }
+
+    #[test]
+    fn a_renamed_single_file_is_still_taken_back_when_its_source_stays() {
+        let (_t, src, dst) = tree();
+        let copied = copy_tracked(&src.join("a.txt"), &dst).unwrap();
+        let refuse = |_: &Path| Err(io::Error::other("in use"));
+
+        assert!(!remove_source_file(&copied.files[0], &refuse));
+        assert!(
+            !dst.exists(),
+            "the stamp follows the rename, so our copy is recognised"
+        );
     }
 
     #[test]

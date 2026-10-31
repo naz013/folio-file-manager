@@ -324,11 +324,10 @@ mod locked {
         assert_eq!(read(src.join("locked.bin")), "payload");
     }
 
-    /// Characterizes today's behavior when a copy fails halfway through a tree:
-    /// the error is reported, the source is untouched, but the destination folder
-    /// created before the failure (with the files copied so far) is left behind.
+    /// A copy failing halfway through a tree reports the error and leaves the source
+    /// untouched; the cleanup is checked by the next test.
     #[test]
-    fn copy_into_failing_mid_tree_reports_error_and_leaves_partial_destination() {
+    fn copy_into_failing_mid_tree_reports_error_and_keeps_source() {
         let t = tmp();
         let src = dir(t.path().join("src").join("tree"));
         let dest = dir(t.path().join("dest"));
@@ -340,13 +339,7 @@ mod locked {
         let res = copy_into(&one(&src), &dest);
 
         assert!(res.is_err());
-        // The locked file itself never produces a partial target file.
-        assert!(!dest.join("tree").join("b_locked.bin").exists());
-        // Current behavior: the half-built folder remains (see the ignored test below).
-        assert!(
-            dest.join("tree").is_dir(),
-            "characterization: partial destination folder is left behind"
-        );
+        assert!(!dest.join("tree").exists(), "never under its real name");
         drop(guard);
         assert_eq!(read(src.join("a.txt")), "a");
         assert_eq!(read(src.join("b_locked.bin")), "payload");
@@ -354,7 +347,6 @@ mod locked {
     }
 
     #[test]
-    #[ignore = "bug: copy_into leaves a partially copied destination folder when a file fails mid-tree"]
     fn copy_into_failing_mid_tree_cleans_up_partial_destination() {
         let t = tmp();
         let src = dir(t.path().join("src").join("tree"));
@@ -662,10 +654,11 @@ fn disk_full_cross_volume_move_into_errors_and_keeps_source() {
         8 * 1024 * 1024
     );
     assert_eq!(read(src.join("small.txt")), "small");
-    // Not asserted: that `dest` is left empty. A failed folder copy currently leaves
-    // the partially built destination behind (bug, see the ignored
-    // `copy_into_failing_mid_tree_cleans_up_partial_destination`). Once that is fixed,
-    // also assert `fs::read_dir(&dest)` is empty here.
+    assert_eq!(
+        fs::read_dir(&dest).unwrap().count(),
+        0,
+        "partial copy removed"
+    );
 }
 
 // ----------------------------------------------------------- 5. Read-only targets
@@ -1381,4 +1374,81 @@ fn move_onto_a_junction_to_its_own_parent_is_a_no_op() {
 
     assert_eq!(moved.paths, [parent.join("f.txt")]);
     assert_eq!(names_in(&parent), ["f.txt"]);
+}
+
+// ------------------------------------------------- 9. Partial copies (#63)
+
+#[test]
+fn a_finished_copy_leaves_no_partial_name_behind() {
+    let t = tmp();
+    let src = dir(t.path().join("src"));
+    write(src.join("f.txt"), "f");
+    let dest = dir(t.path().join("dest"));
+
+    copy_into(&[src.clone(), src.join("f.txt")], &dest).unwrap();
+
+    assert_eq!(names_in(&dest), ["f.txt", "src"]);
+}
+
+#[test]
+fn a_copy_in_progress_is_under_a_partial_name() {
+    let t = tmp();
+    let dest = dir(t.path().join("dest"));
+    // What a copy looks like while it's being built, or after a crash.
+    dir(dest.join("src.folio-partial"));
+    let src = dir(t.path().join("src"));
+    write(src.join("f.txt"), "f");
+
+    let out = copy_into(&one(&src), &dest).unwrap();
+
+    assert_eq!(out.paths, [dest.join("src")]);
+    assert_eq!(
+        names_in(&dest),
+        ["src", "src.folio-partial"],
+        "a stale partial is never reused"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn a_failed_batch_names_what_was_already_copied() {
+    let t = tmp();
+    let src = dir(t.path().join("src"));
+    write(src.join("done.txt"), "d");
+    write(src.join("locked.bin"), "l");
+    let dest = dir(t.path().join("dest"));
+    let guard = locked::lock(&src.join("locked.bin"));
+
+    let err = copy_into(&[src.join("done.txt"), src.join("locked.bin")], &dest).unwrap_err();
+
+    drop(guard);
+    assert!(
+        err.to_string().contains(r#"Already copied: "done.txt""#),
+        "{err}"
+    );
+    assert_eq!(names_in(&dest), ["done.txt"]);
+}
+
+#[test]
+fn a_name_near_the_length_limit_still_copies() {
+    let t = tmp();
+    let src = dir(t.path().join("src"));
+    let long = format!("{}.txt", "n".repeat(246));
+    write(src.join(&long), "long");
+    let dest = dir(t.path().join("dest"));
+
+    let out = copy_into(&one(&src.join(&long)), &dest).unwrap();
+
+    assert_eq!(out.paths, [dest.join(&long)]);
+    assert_eq!(names_in(&dest), [long]);
+}
+
+#[test]
+fn a_failed_batch_lists_at_most_five_names() {
+    let done: Vec<PathBuf> = (0..7).map(|i| PathBuf::from(format!("f{i}"))).collect();
+    let e = batch_error(io::Error::other("boom"), "copied", &done).to_string();
+    assert!(
+        e.ends_with(r#"Already copied: "f0", "f1", "f2", "f3", "f4", and 2 more"#),
+        "{e}"
+    );
 }
