@@ -376,20 +376,30 @@ fn finish_copy(temp: &Path, dest_dir: &Path, name: &str) -> io::Result<PathBuf> 
     let mut retries = 5;
     loop {
         match noclobber::place(dest_dir, name, |t| noclobber::rename(temp, t)) {
-            Err(e) if e.kind() == ErrorKind::PermissionDenied && retries > 0 => {
+            Err(e) if is_held_open(&e) && retries > 0 => {
                 retries -= 1;
                 std::thread::sleep(wait);
                 wait *= 2;
             }
             Err(e) => {
-                return Err(io::Error::new(
-                    e.kind(),
-                    format!("{e}. The complete copy is at \"{}\"", temp.display()),
-                ));
+                // A rename can take effect and still report failure (a network share
+                // losing the reply), so only point at the partial if it's there.
+                let at = if fs::symlink_metadata(temp).is_ok() {
+                    format!("The complete copy is at \"{}\"", temp.display())
+                } else {
+                    format!("The copy may already be in \"{}\"", dest_dir.display())
+                };
+                return Err(io::Error::new(e.kind(), format!("{e}. {at}")));
             }
             done => return done,
         }
     }
+}
+
+/// Another program has a file open in a way that blocks the rename for now.
+fn is_held_open(e: &io::Error) -> bool {
+    // ERROR_SHARING_VIOLATION isn't mapped to an `ErrorKind`.
+    e.kind() == ErrorKind::PermissionDenied || (cfg!(windows) && e.raw_os_error() == Some(32))
 }
 
 fn copy_contents(

@@ -1452,3 +1452,21 @@ fn a_failed_batch_lists_at_most_five_names() {
         "{e}"
     );
 }
+
+#[test]
+fn with_unknown_ids_a_changed_file_is_not_taken_for_ours() {
+    let t = tmp();
+    let f = t.path().join("f");
+    write(&f, "ours");
+    let meta = fs::metadata(&f).unwrap();
+    // As a network share reporting 0 ids would record it.
+    let record = CreatedFile {
+        path: f.clone(),
+        id: noclobber::file_id(&f).map(|(v, _)| (v, 0)).unwrap(),
+        len: meta.len(),
+        modified: meta.modified().ok(),
+    };
+    write(&f, "someone else's");
+
+    assert!(!record.is_still_ours());
+}
