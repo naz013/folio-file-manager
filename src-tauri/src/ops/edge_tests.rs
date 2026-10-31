@@ -1640,3 +1640,69 @@ fn a_very_deep_tree_is_moved_between_volumes() {
     assert_eq!(depth_of(&target.unwrap()), DEEP);
     assert!(!src.exists());
 }
+
+// ------------------------------------------- 11. Links of unknown kinds (#77)
+
+/// A link `fs::read_link` has no reader for: a file carrying the reparse tag WSL uses
+/// for its symlinks.
+#[cfg(windows)]
+fn wsl_symlink(path: &Path) {
+    const IO_REPARSE_TAG_LX_SYMLINK: u32 = 0xA000_001D;
+    write(path, "");
+    let mut data = IO_REPARSE_TAG_LX_SYMLINK.to_le_bytes().to_vec();
+    data.extend(5u16.to_le_bytes());
+    data.extend(0u16.to_le_bytes());
+    data.extend([2, 0, 0, 0, b'x']);
+    links::set_reparse_point(path, &data).unwrap();
+    let kind = fs::symlink_metadata(path).unwrap().file_type();
+    assert!(kind.is_symlink() && fs::read_link(path).is_err());
+}
+
+#[cfg(windows)]
+#[test]
+fn a_link_that_cannot_be_read_is_skipped_and_the_rest_is_copied() {
+    let t = tmp();
+    let src = dir(t.path().join("src"));
+    write(src.join("a.txt"), "a");
+    wsl_symlink(&src.join("b_wsl"));
+    write(src.join("c.txt"), "c");
+    let dest = dir(t.path().join("dest"));
+
+    let out = copy_into(&one(&src), &dest).unwrap();
+
+    assert_eq!(out.skipped, [src.join("b_wsl")]);
+    assert_eq!(read(dest.join("src").join("a.txt")), "a");
+    assert_eq!(read(dest.join("src").join("c.txt")), "c");
+    assert!(fs::symlink_metadata(dest.join("src").join("b_wsl")).is_err());
+}
+
+#[cfg(windows)]
+#[test]
+fn a_top_level_link_that_cannot_be_read_is_skipped() {
+    let t = tmp();
+    wsl_symlink(&t.path().join("link"));
+    let dest = dir(t.path().join("dest"));
+
+    let out = copy_into(&one(&t.path().join("link")), &dest).unwrap();
+
+    assert_eq!(out.paths, Vec::<PathBuf>::new());
+    assert_eq!(out.skipped, [t.path().join("link")]);
+}
+
+#[cfg(windows)]
+#[test]
+fn a_move_between_volumes_leaves_a_link_that_cannot_be_read_in_the_source() {
+    let t = tmp();
+    let src = dir(t.path().join("src"));
+    write(src.join("a.txt"), "a");
+    wsl_symlink(&src.join("b_wsl"));
+    let dest = dir(t.path().join("dest"));
+
+    let (target, left) = cross_volume::move_by_copy(&src, &dest, "src").unwrap();
+
+    assert_eq!(left, [src.join("b_wsl")]);
+    assert_eq!(read(target.unwrap().join("a.txt")), "a");
+    assert!(!src.join("a.txt").exists());
+    assert!(src.is_dir(), "the folder holding the link stays");
+    assert!(fs::symlink_metadata(src.join("b_wsl")).is_ok(), "link kept");
+}

@@ -44,6 +44,15 @@ pub fn copy(src: &Path, target: &Path, dst: &Path) -> io::Result<()> {
     }
 }
 
+/// Whether the link `path` is a kind [`copy`] can recreate: a junction or a symlink.
+pub fn is_recreatable(path: &Path) -> io::Result<bool> {
+    let (_, tag) = reparse_info(path)?;
+    Ok(matches!(
+        tag,
+        IO_REPARSE_TAG_MOUNT_POINT | IO_REPARSE_TAG_SYMLINK
+    ))
+}
+
 /// The attributes and reparse tag of the link `path` itself.
 fn reparse_info(path: &Path) -> io::Result<(u32, u32)> {
     let file = fs::OpenOptions::new()
@@ -148,7 +157,7 @@ fn mount_point_data(target: &Path) -> io::Result<Vec<u8>> {
     Ok(buffer)
 }
 
-fn set_reparse_point(dir: &Path, data: &[u8]) -> io::Result<()> {
+pub(super) fn set_reparse_point(dir: &Path, data: &[u8]) -> io::Result<()> {
     let folder = fs::OpenOptions::new()
         .access_mode(GENERIC_WRITE)
         .share_mode(FILE_SHARE_ALL)

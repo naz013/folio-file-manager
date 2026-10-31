@@ -386,7 +386,9 @@ fn copy_tree(
     if kind.is_symlink() {
         // Created under its real name: a link has no contents to leave half-built
         // (a junction is an empty folder for the instant before its reparse data).
-        let target = fs::read_link(src)?;
+        let Some(target) = read_link_or_skip(src, obs.skipped())? else {
+            return Ok(None);
+        };
         let placed = noclobber::place(dest_dir, name, |t| copy_link(src, &target, t));
         let placed = skip_unsupported(placed, src, obs.skipped())?;
         if placed.is_some() {
@@ -510,7 +512,9 @@ fn copy_entry(src: &Path, dst: &Path, obs: &mut dyn Observe) -> io::Result<Optio
     let kind = fs::symlink_metadata(src)?.file_type();
     if kind.is_symlink() {
         // Read once: the recorded target is what was recreated.
-        let target = fs::read_link(src)?;
+        let Some(target) = read_link_or_skip(src, obs.skipped())? else {
+            return Ok(None);
+        };
         let copied = copy_link(src, &target, dst);
         if skip_unsupported(copied, src, obs.skipped())?.is_some() {
             if let Err(e) = obs.made().file(dst) {
@@ -611,6 +615,20 @@ impl CreatedFile {
         let same_look = meta.len() == self.len && meta.modified().ok() == self.modified;
         same_id && (self.id.1 != 0 || same_look)
     }
+}
+
+/// Reads where the link `src` points. On Windows a link of a kind that can't be recreated
+/// (a WSL symlink, say) is skipped and reported, so it doesn't abort the copy of everything
+/// around it. Any other failure to read a link is a real error.
+fn read_link_or_skip(src: &Path, skipped: &mut Vec<PathBuf>) -> io::Result<Option<PathBuf>> {
+    #[cfg(windows)]
+    if !links::is_recreatable(src)? {
+        skipped.push(src.to_path_buf());
+        return Ok(None);
+    }
+    #[cfg(not(windows))]
+    let _ = skipped;
+    fs::read_link(src).map(Some)
 }
 
 /// Turns a link copy that this system or volume can't do into a skipped entry, so it
