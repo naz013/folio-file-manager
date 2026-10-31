@@ -68,18 +68,18 @@ Priorities: **P0** = required for 1.0, **P1** = shortly after 1.0, **P2** = late
 
 ### File operations
 
-| Feature                           | Priority     | Notes                                                                           |
-| --------------------------------- | ------------ | ------------------------------------------------------------------------------- |
-| Copy / move / rename / new folder | P0           | Background operations queue with progress, pause, cancel                        |
-| Conflict dialog                   | P0           | Replace / Skip / Keep both, "apply to all", side-by-side compare                |
-| Undo / redo (Ctrl Z)              | P0           | Move, rename, delete, new folder. Key differentiator vs Explorer                |
-| Drag & drop inside the app        | P0           | Tabs, sidebar, folders                                                          |
+| Feature                           | Priority     | Notes                                                                             |
+| --------------------------------- | ------------ | --------------------------------------------------------------------------------- |
+| Copy / move / rename / new folder | P0           | Background operations queue with progress, pause, cancel                          |
+| Conflict dialog                   | P0           | Replace / Skip / Keep both, "apply to all", side-by-side compare                  |
+| Undo / redo (Ctrl Z)              | P0           | Move, rename, delete, new folder. Key differentiator vs Explorer                  |
+| Drag & drop inside the app        | P0           | Tabs, sidebar, folders                                                            |
 | Spring-loaded navigation          | P0           | Hover a folder, breadcrumb, sidebar item or tab mid-drag to open it (2 s default) |
-| Clipboard shelf                   | P0           | Ctrl+X / Ctrl+C stack up across folders; floating panel; Ctrl+V pastes all       |
-| Drag & drop to/from other apps    | P0 (Windows) | Native OLE drag source/target; must work with Explorer, browsers, mail          |
-| Context menu                      | P0           | Own clean menu + "More options" opening the native shell menu (7-Zip, VS Code…) |
-| Batch rename                      | P1           | Find/replace, numbering, dates, live preview                                    |
-| Compress / extract zip            | P1           | Other formats later                                                             |
+| Clipboard shelf                   | P0           | Ctrl+X / Ctrl+C stack up across folders; floating panel; Ctrl+V pastes all        |
+| Drag & drop to/from other apps    | P0 (Windows) | Native OLE drag source/target; must work with Explorer, browsers, mail            |
+| Context menu                      | P0           | Own clean menu + "More options" opening the native shell menu (7-Zip, VS Code…)   |
+| Batch rename                      | P1           | Find/replace, numbering, dates, live preview                                      |
+| Compress / extract zip            | P1           | Other formats later                                                               |
 
 #### Spring-loaded navigation
 
@@ -147,15 +147,15 @@ suggestions only, always a review step, always to Recycle Bin/Trash, never syste
 
 ### Platform & polish
 
-| Feature                               | Priority | Notes                                                            |
-| ------------------------------------- | -------- | ---------------------------------------------------------------- |
-| Light / dark / system theme           | P0       | Driven by design tokens                                          |
-| Auto-update + signed installer        | P0       | Unsigned builds get blocked by SmartScreen                       |
+| Feature                               | Priority | Notes                                                                                        |
+| ------------------------------------- | -------- | -------------------------------------------------------------------------------------------- |
+| Light / dark / system theme           | P0       | Driven by design tokens                                                                      |
+| Auto-update + signed installer        | P0       | Unsigned builds get blocked by SmartScreen                                                   |
 | Minimal settings                      | P0       | Start location, hidden files, theme, default view, spring-loading delay, after-drop behavior |
-| Accessibility                         | P1       | Screen-reader labels, focus rings, reduced motion, high contrast |
-| Network drives, OneDrive placeholders | P1       | Never hydrate cloud-only files for thumbnails                    |
-| Set as default file manager           | P2       | Opt-in, off by default (fragile on Windows)                      |
-| macOS & Linux builds                  | 1.1      | See [ROADMAP](ROADMAP.md)                                        |
+| Accessibility                         | P1       | Screen-reader labels, focus rings, reduced motion, high contrast                             |
+| Network drives, OneDrive placeholders | P1       | Never hydrate cloud-only files for thumbnails                                                |
+| Set as default file manager           | P2       | Opt-in, off by default (fragile on Windows)                                                  |
+| macOS & Linux builds                  | 1.1      | See [ROADMAP](ROADMAP.md)                                                                    |
 
 ## Explicitly out of scope
 

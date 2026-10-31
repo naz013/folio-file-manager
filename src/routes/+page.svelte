@@ -43,6 +43,14 @@
   import Sidebar from "$lib/components/Sidebar.svelte";
   import TabBar from "$lib/components/TabBar.svelte";
   import Toolbar, { type View } from "$lib/components/Toolbar.svelte";
+  import {
+    applyTheme,
+    loadTheme,
+    nextTheme,
+    onThemeChange,
+    setTheme,
+    type Theme,
+  } from "$lib/theme";
   import FileView from "$lib/components/FileView.svelte";
   import { measureJumps, measureScroll, nextPaint, perfConfig, perfReport } from "$lib/perf";
 
@@ -51,6 +59,7 @@
   // Raw (not deeply proxied): listings are replaced wholesale, and proxying 50k objects is slow.
   let entries = $state.raw<Entry[]>([]);
   let view = $state<View>("grid");
+  let theme = $state<Theme>(loadTheme());
   let showHidden = $state(false);
 
   let back = $state<string[]>([]);
@@ -725,6 +734,11 @@
   }
 
   onMount(() => {
+    // Another window changed the theme: follow it.
+    const stopTheme = onThemeChange((t) => {
+      theme = t;
+      applyTheme(t);
+    });
     const unlistenQueue = onQueueUpdate(onJobUpdate);
     const unlistenBlocked = onCloseBlocked(() =>
       notify("Operations are still running. Wait for them, or cancel them, before closing.", true),
@@ -759,6 +773,7 @@
       }
     });
     return () => {
+      stopTheme();
       unlisten.then((u) => u());
       unlistenQueue.then((u) => u());
       unlistenBlocked.then((u) => u());
@@ -796,6 +811,11 @@
       onback={goBack}
       onforward={goForward}
       onnavigate={navigate}
+      {theme}
+      ontheme={() => {
+        theme = nextTheme(theme);
+        setTheme(theme);
+      }}
     />
     <FileView
       bind:this={fileView}

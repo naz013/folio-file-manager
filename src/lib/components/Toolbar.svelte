@@ -1,28 +1,34 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
   import { pathSegments } from "$lib/api/fs";
+  import type { Theme } from "$lib/theme";
 
   export type View = "grid" | "list";
 
   let {
     path,
     view = $bindable(),
+    theme,
     canBack,
     canForward,
     onback,
     onforward,
     onnavigate,
+    ontheme,
   }: {
     path: string;
     view: View;
+    theme: Theme;
     canBack: boolean;
     canForward: boolean;
     onback: () => void;
     onforward: () => void;
     onnavigate: (path: string) => void;
+    ontheme: () => void;
   } = $props();
 
   let segments = $derived(pathSegments(path));
+  const themeLabel = { system: "Theme: follow system", light: "Theme: light", dark: "Theme: dark" };
 </script>
 
 <header class="toolbar">
@@ -54,6 +60,15 @@
       <Icon name="list" size={15} />
     </button>
   </div>
+
+  <button
+    class="icon-btn"
+    onclick={ontheme}
+    aria-label={themeLabel[theme]}
+    title={themeLabel[theme]}
+  >
+    <Icon name={theme === "system" ? "monitor" : theme === "light" ? "sun" : "moon"} size={16} />
+  </button>
 </header>
 
 <style>
