@@ -1351,3 +1351,34 @@ fn move_onto_its_own_parent_spelled_differently_is_a_no_op() {
     assert_eq!(moved.paths, [parent.join("f.txt")]);
     assert_eq!(names_in(&parent), ["f.txt"]);
 }
+
+#[test]
+fn comparable_paths_ignore_spelling_differences() {
+    let t = tmp();
+    let a = dir(t.path().join("A"));
+    assert!(
+        comparable(&a.join("sub"))
+            .unwrap()
+            .starts_with(comparable(&a).unwrap())
+    );
+    #[cfg(windows)]
+    {
+        let verbatim = PathBuf::from(format!(r"\\?\{}", a.display()));
+        let lower = PathBuf::from(a.display().to_string().to_lowercase());
+        assert_eq!(comparable(&verbatim).unwrap(), comparable(&lower).unwrap());
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn move_onto_a_junction_to_its_own_parent_is_a_no_op() {
+    let t = tmp();
+    let parent = dir(t.path().join("parent"));
+    write(parent.join("f.txt"), "f");
+    junction(&t.path().join("door"), &parent);
+
+    let moved = move_into(&one(&parent.join("f.txt")), &t.path().join("door")).unwrap();
+
+    assert_eq!(moved.paths, [parent.join("f.txt")]);
+    assert_eq!(names_in(&parent), ["f.txt"]);
+}

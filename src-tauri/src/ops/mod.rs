@@ -146,11 +146,13 @@ pub fn move_into(sources: &[PathBuf], dest_dir: &Path) -> io::Result<Moved> {
 }
 
 fn move_one(src: &Path, dest_dir: &Path, moved: &mut Moved) -> io::Result<()> {
-    // Already there, however the destination is spelled.
-    let parent = src.parent();
-    if parent == Some(dest_dir)
-        || parent.is_some_and(|p| noclobber::same_file(p, dest_dir).unwrap_or(false))
-    {
+    // Already there, however the destination is spelled or linked to.
+    let already_there = src.parent().is_some_and(|p| {
+        p == dest_dir
+            || noclobber::same_file(p, dest_dir).unwrap_or(false)
+            || matches!((fs::canonicalize(p), fs::canonicalize(dest_dir)), (Ok(a), Ok(b)) if a == b)
+    });
+    if already_there {
         moved.paths.push(src.to_path_buf());
         return Ok(());
     }
@@ -240,6 +242,18 @@ fn ensure_not_into_itself(src: &Path, dest_dir: &Path) -> io::Result<()> {
     if !fs::symlink_metadata(src).is_ok_and(|m| m.is_dir()) {
         return Ok(());
     }
+    let into_itself = || {
+        io::Error::new(
+            ErrorKind::InvalidInput,
+            "Cannot copy or move a folder into itself",
+        )
+    };
+    // Baseline that needs nothing from the file system, for volumes where neither ids
+    // nor resolved paths are available.
+    let src_text = comparable(src)?;
+    if comparable(dest_dir)?.starts_with(&src_text) {
+        return Err(into_itself());
+    }
     let src_id = noclobber::file_id(src)?;
     // Some file system drivers can't resolve a final path; their ids still work.
     let mut dir = fs::canonicalize(dest_dir).or_else(|_| std::path::absolute(dest_dir))?;
@@ -247,22 +261,34 @@ fn ensure_not_into_itself(src: &Path, dest_dir: &Path) -> io::Result<()> {
     loop {
         let same = match noclobber::file_id(&dir) {
             Ok(id) if id.1 != 0 && src_id.1 != 0 => id == src_id,
-            // Some network redirectors report 0 for every id: compare resolved paths.
+            // Some network redirectors report 0 for every id: compare paths instead.
             _ => {
                 let real = src_real.get_or_insert_with(|| fs::canonicalize(src).ok());
-                real.as_deref() == Some(dir.as_path())
+                real.as_deref() == Some(dir.as_path()) || comparable(&dir)? == src_text
             }
         };
         if same {
-            return Err(io::Error::new(
-                ErrorKind::InvalidInput,
-                "Cannot copy or move a folder into itself",
-            ));
+            return Err(into_itself());
         }
         if !dir.pop() {
             return Ok(());
         }
     }
+}
+
+/// `path` made absolute and, on Windows, without a `\\?\` prefix and in lower case, so
+/// two spellings of one path compare equal as text.
+fn comparable(path: &Path) -> io::Result<PathBuf> {
+    let full = std::path::absolute(path)?;
+    if !cfg!(windows) {
+        return Ok(full);
+    }
+    let text = full.to_string_lossy();
+    let text = match text.strip_prefix(r"\\?\UNC\") {
+        Some(unc) => format!(r"\\{unc}"),
+        None => text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned(),
+    };
+    Ok(PathBuf::from(text.to_lowercase()))
 }
 
 /// Copies `src` into `dest_dir` under its own name, or the next free one. The name is
