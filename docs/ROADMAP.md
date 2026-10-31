@@ -36,6 +36,7 @@ Priorities (P0/P1/P2) refer to [PRODUCT.md](PRODUCT.md).
 - **Undo / redo** for move, rename, delete, new folder
 - Context menu (own + native "More options")
 - Drag & drop inside the app and to/from other apps
+- Spring-loaded navigation while dragging: folders, breadcrumb, sidebar, then tabs
 - Light / dark / system theme
 
 **Exit criteria**
@@ -50,6 +51,7 @@ Priorities (P0/P1/P2) refer to [PRODUCT.md](PRODUCT.md).
 
 - Color + named tags, tag filters (sidebar + header chips)
 - Ctrl K command palette
+- Clipboard shelf: stacked cut/copy with a floating paste panel
 - Inspector panel
 - Settings
 - Auto-update, code-signed installer

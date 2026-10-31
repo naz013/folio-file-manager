@@ -66,11 +66,41 @@ Priorities: **P0** = required for 1.0, **P1** = shortly after 1.0, **P2** = late
 | Copy / move / rename / new folder | P0           | Background operations queue with progress, pause, cancel                        |
 | Conflict dialog                   | P0           | Replace / Skip / Keep both, "apply to all", side-by-side compare                |
 | Undo / redo (Ctrl Z)              | P0           | Move, rename, delete, new folder. Key differentiator vs Explorer                |
-| Drag & drop inside the app        | P0           | Tabs, sidebar, folders; spring-loaded tabs                                      |
+| Drag & drop inside the app        | P0           | Tabs, sidebar, folders                                                          |
+| Spring-loaded navigation          | P0           | Hover a folder, breadcrumb, sidebar item or tab mid-drag to open it (2 s default) |
+| Clipboard shelf                   | P0           | Ctrl+X / Ctrl+C stack up across folders; floating panel; Ctrl+V pastes all       |
 | Drag & drop to/from other apps    | P0 (Windows) | Native OLE drag source/target; must work with Explorer, browsers, mail          |
 | Context menu                      | P0           | Own clean menu + "More options" opening the native shell menu (7-Zip, VS Code…) |
 | Batch rename                      | P1           | Find/replace, numbering, dates, live preview                                    |
 | Compress / extract zip            | P1           | Other formats later                                                             |
+
+#### Spring-loaded navigation
+
+- While dragging (from Folio or Explorer), hovering a folder tile/row, breadcrumb segment,
+  sidebar favorite or tab for the delay opens it in the same tab; repeat to go deeper.
+  Hovering **+** in the tab bar opens a new tab at the current folder.
+- A progress ring shows the countdown; **Space** opens immediately.
+- Dragging near the top or bottom edge auto-scrolls the list.
+- After a drop or cancel the tab **stays where the drop happened**. Setting: "Return to
+  start after drop" (off by default).
+- A whole spring-loaded trip adds one back/forward history entry.
+- Delay: 2 s default, 0.5–3 s or Off in Settings. Files and the dragged folder never open.
+
+#### Clipboard shelf
+
+- Ctrl+X and Ctrl+C **add** to a shelf instead of replacing it: items from many folders
+  and tabs, cut and copied mixed. Adding an item again updates its mode, no duplicates.
+- Collapsed: floating button with a count bubble. Expanded: floating panel grouped by source
+  folder (thumbnail, name, size, move/copy badge) with per-item and per-group remove,
+  move ↔ copy toggle, clear all; missing items are greyed out.
+- **Ctrl+V** pastes everything into the current folder through the operations queue and
+  **clears the shelf**. **Ctrl+Shift+V** opens the panel to paste a subset; items can also
+  be dragged from the panel onto any folder.
+- Nothing moves until paste, so removing items never touches files (ADR 0003). Undo
+  reverses a paste batch. Esc does not clear the shelf.
+- Persists across restarts (SQLite); stale paths are detected on startup.
+- Windows interop: the latest batch is mirrored to the system clipboard so Explorer can
+  paste it; files copied in Explorer arrive as a new group on Ctrl+V.
 
 ### Organization (tags)
 
@@ -114,7 +144,7 @@ suggestions only, always a review step, always to Recycle Bin/Trash, never syste
 | ------------------------------------- | -------- | ---------------------------------------------------------------- |
 | Light / dark / system theme           | P0       | Driven by design tokens                                          |
 | Auto-update + signed installer        | P0       | Unsigned builds get blocked by SmartScreen                       |
-| Minimal settings                      | P0       | Start location, hidden files, theme, default view                |
+| Minimal settings                      | P0       | Start location, hidden files, theme, default view, spring-loading delay, after-drop behavior |
 | Accessibility                         | P1       | Screen-reader labels, focus rings, reduced motion, high contrast |
 | Network drives, OneDrive placeholders | P1       | Never hydrate cloud-only files for thumbnails                    |
 | Set as default file manager           | P2       | Opt-in, off by default (fragile on Windows)                      |
