@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import {
     copyPaths,
     createFolder,
@@ -10,16 +11,21 @@
     movePaths,
     onDirChanged,
     openPath,
+    openWindow,
     parentOf,
+    pathSegments,
     renamePath,
     sameVolume,
+    saveTabs,
     showContextMenu,
     startDrag,
     trashPaths,
     watchDir,
+    windowTabs,
     type Entry,
   } from "$lib/api/fs";
   import Sidebar from "$lib/components/Sidebar.svelte";
+  import TabBar from "$lib/components/TabBar.svelte";
   import Toolbar, { type View } from "$lib/components/Toolbar.svelte";
   import FileView from "$lib/components/FileView.svelte";
   import { measureJumps, measureScroll, nextPaint, perfConfig, perfReport } from "$lib/perf";
@@ -33,6 +39,37 @@
 
   let back = $state<string[]>([]);
   let forward = $state<string[]>([]);
+
+  /**
+   * Tabs of this window. The active tab's live state is the page state above (path,
+   * history, selection); inactive tabs keep a plain, non-reactive memory and are
+   * re-listed on switch, so only one listing is ever held.
+   */
+  interface Tab {
+    id: number;
+    path: string;
+  }
+  interface TabMemory {
+    back: string[];
+    forward: string[];
+    selection: string[];
+    scrollTop: number;
+  }
+  let tabs = $state<Tab[]>([]);
+  let active = $state(-1);
+  let nextTabId = 0;
+  const memory = new Map<number, TabMemory>();
+  /** Bumped by every navigation. A listing that arrives after a newer one started is dropped. */
+  let navGen = 0;
+  /** Id of the tab whose listing is on screen; differs from the active tab while it loads. */
+  let shownTabId = -1;
+  /** Set once restored tabs are loaded, so the empty initial state is never saved. */
+  let restored = $state(false);
+  let saveTimer: ReturnType<typeof setTimeout>;
+
+  const folderName = (p: string) => pathSegments(p).at(-1)?.name ?? p;
+  let tabPaths = $derived(tabs.map((t) => t.path));
+  let tabList = $derived(tabs.map((t, i) => ({ id: t.id, title: folderName(tabPaths[i]) })));
 
   const selection = new SvelteSet<string>();
   let anchor = $state(-1);
@@ -62,12 +99,16 @@
 
   /** Reloads the current folder, keeping the selection for paths that still exist. */
   async function refresh(select?: string[]) {
+    const gen = navGen;
+    let list: Entry[];
     try {
-      entries = await listDir(path);
+      list = await listDir(path);
     } catch (e) {
       notify(String(e), true);
       return;
     }
+    if (gen !== navGen) return; // the tab switched or navigated meanwhile
+    entries = list;
     const existing = new Set(entries.map((e) => e.path));
     const keep = (select ?? [...selection]).filter((p) => existing.has(p));
     selection.clear();
@@ -76,14 +117,24 @@
     anchor = cursor;
   }
 
-  async function load(target: string) {
+  /** Shows `target` in the active tab. Resolves to false on error, null if a newer navigation took over. */
+  async function load(target: string): Promise<boolean | null> {
+    const gen = ++navGen;
+    let list: Entry[];
     try {
-      entries = await listDir(target);
+      list = await listDir(target);
     } catch (e) {
+      if (gen !== navGen) return null;
       notify(String(e), true);
       return false;
     }
+    if (gen !== navGen) return null;
+    entries = list;
     path = target;
+    if (tabs[active]) {
+      tabs[active].path = target;
+      shownTabId = tabs[active].id;
+    }
     selection.clear();
     anchor = cursor = -1;
     renaming = null;
@@ -105,16 +156,134 @@
     const prev = back.pop();
     if (!prev) return;
     const from = path;
-    if (await load(prev)) forward.push(from);
+    const ok = await load(prev);
+    if (ok) forward.push(from);
+    else if (ok === false) back.push(prev);
   }
 
   async function goForward() {
     const next = forward.pop();
-    if (next) {
-      const from = path;
-      if (await load(next)) back.push(from);
+    if (!next) return;
+    const from = path;
+    const ok = await load(next);
+    if (ok) back.push(from);
+    else if (ok === false) forward.push(next);
+  }
+
+  // ---- Tabs ----
+
+  const newTab = (p: string): Tab => ({ id: nextTabId++, path: p });
+
+  /** Remembers the live page state of the active tab before another tab takes over. */
+  function snapshot() {
+    const t = tabs[active];
+    if (!t) return;
+    // Switched away before this tab's listing arrived: the selection and scroll on
+    // screen belong to the previous tab, so keep what this tab remembered.
+    const live = t.id === shownTabId;
+    const prev = memory.get(t.id);
+    memory.set(t.id, {
+      back: [...back],
+      forward: [...forward],
+      selection: live ? [...selection] : (prev?.selection ?? []),
+      scrollTop: live ? (fileView?.scrollElement().scrollTop ?? 0) : (prev?.scrollTop ?? 0),
+    });
+  }
+
+  async function activate(index: number) {
+    if (index === active || !tabs[index]) return;
+    snapshot();
+    active = index;
+    const t = tabs[index];
+    const m = memory.get(t.id);
+    back = m ? [...m.back] : [];
+    forward = m ? [...m.forward] : [];
+    // A restored folder may be gone; fall back to home rather than an empty tab.
+    let ok = await load(t.path);
+    if (ok === false && t.path !== home) ok = await load(home);
+    if (ok === null) return; // a newer navigation took over
+    if (!ok) {
+      // Nothing could be listed: show an empty tab, not the previous tab's files.
+      entries = [];
+      path = t.path;
+      selection.clear();
+    }
+    if (!m) return;
+    const gen = navGen;
+    await tick();
+    if (gen !== navGen) return;
+    if (m.scrollTop) fileView.scrollElement().scrollTop = m.scrollTop;
+    if (!m.selection.length) return;
+    // Restore the selection after the folder has painted; on a huge selection it is the slow part.
+    await nextPaint();
+    if (gen !== navGen) return;
+    const existing = new Set(entries.map((e) => e.path));
+    const keep = m.selection.filter((p) => existing.has(p));
+    keep.forEach((p) => selection.add(p));
+    cursor = anchor = keep.length ? visible.findIndex((e) => e.path === keep[keep.length - 1]) : -1;
+  }
+
+  /** Opens `target` in a new tab right after the active one. */
+  function openTab(target: string, background = false) {
+    tabs.splice(active + 1, 0, newTab(target));
+    if (!background) activate(active + 1);
+  }
+
+  async function closeTab(index: number) {
+    if (tabs.length === 1) {
+      await closeWindow();
+      return;
+    }
+    const [closed] = tabs.splice(index, 1);
+    memory.delete(closed.id);
+    if (index < active) active--;
+    else if (index === active) {
+      active = -1; // the closed tab's state must not be snapshotted into its neighbour
+      await activate(Math.min(index, tabs.length - 1));
     }
   }
+
+  function moveTab(from: number, to: number) {
+    const activeId = tabs[active]?.id;
+    const [t] = tabs.splice(from, 1);
+    tabs.splice(to, 0, t);
+    active = tabs.findIndex((x) => x.id === activeId);
+  }
+
+  async function detachTab(index: number, x: number, y: number) {
+    if (tabs.length === 1) return;
+    const { id, path: target } = tabs[index];
+    try {
+      await openWindow([target], x, y);
+    } catch (e) {
+      notify(String(e), true);
+      return;
+    }
+    // Tabs may have changed while the window opened; close the detached one by id.
+    const now = tabs.findIndex((t) => t.id === id);
+    if (now >= 0) await closeTab(now);
+  }
+
+  function cycleTab(delta: number) {
+    if (tabs.length > 1) activate((active + delta + tabs.length) % tabs.length);
+  }
+
+  function persistTabs() {
+    clearTimeout(saveTimer);
+    return saveTabs(tabPaths, Math.max(active, 0)).catch((e) => console.warn("saving tabs failed", e));
+  }
+
+  /** Closing goes through the onCloseRequested handler in onMount, which saves first. */
+  const closeWindow = () => getCurrentWindow().close();
+
+  $effect(() => {
+    // Track the tab list and the active path; save shortly after they settle.
+    tabPaths;
+    active;
+    if (!restored) return;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(persistTabs, 300);
+  });
 
   function open(entry: Entry) {
     if (entry.isDir) navigate(entry.path);
@@ -281,10 +450,30 @@
   // ---- Keyboard ----
 
   function onkeydown(e: KeyboardEvent) {
-    if (renaming || (e.target as HTMLElement).tagName === "INPUT") return;
     const ctrl = e.ctrlKey || e.metaKey;
     const key = e.key;
     const handled = () => e.preventDefault();
+
+    // Tab shortcuts work everywhere, including while a text field has focus.
+    // Held-down Ctrl+T / Ctrl+W must not open or close tabs in a burst.
+    if (ctrl && (key.toLowerCase() === "t" || key.toLowerCase() === "w")) {
+      handled();
+      if (!restored || e.repeat) return;
+      return key.toLowerCase() === "t" ? openTab(home) : closeTab(active);
+    }
+    if (ctrl && (key === "Tab" || key === "PageDown" || key === "PageUp")) {
+      handled();
+      return cycleTab(key === "PageUp" || (key === "Tab" && e.shiftKey) ? -1 : 1);
+    }
+    if (ctrl && !e.shiftKey && key >= "1" && key <= "9") {
+      handled();
+      // Ctrl+9 is always the last tab, as in browsers.
+      return activate(key === "9" ? tabs.length - 1 : Math.min(Number(key) - 1, tabs.length - 1));
+    }
+
+    if (renaming || (e.target as HTMLElement).tagName === "INPUT") return;
+    // A tab focused from the keyboard handles its own keys; file shortcuts don't apply there.
+    if ((e.target as HTMLElement).closest?.("[role=tablist]")) return;
 
     if (e.altKey && key === "ArrowLeft") (handled(), goBack());
     else if (e.altKey && key === "ArrowRight") (handled(), goForward());
@@ -319,6 +508,8 @@
     const unlisten = onDirChanged((changed) => {
       if (changed === path && !renaming) refresh();
     });
+    // Flush pending tab changes before any close (button, Ctrl+W, Alt+F4, taskbar).
+    const unlistenClose = getCurrentWindow().onCloseRequested(() => persistTabs());
     const unlistenDrop = getCurrentWebview().onDragDropEvent(({ payload }) => {
       if (payload.type === "enter" || payload.type === "over") dropTarget = folderAt(payload.position);
       else if (payload.type === "drop") {
@@ -329,7 +520,10 @@
     });
     homeDir().then(async (h) => {
       home = h;
-      await load(h);
+      const saved = await windowTabs().catch(() => null);
+      tabs = saved ? saved.tabs.map(newTab) : [newTab(h)];
+      await activate(saved?.active ?? 0);
+      restored = true;
       // Benchmarks are optional; never let them break startup.
       const perf = await perfConfig().catch(() => null);
       if (perf?.enabled) {
@@ -342,6 +536,7 @@
     return () => {
       unlisten.then((u) => u());
       unlistenDrop.then((u) => u());
+      unlistenClose.then((u) => u());
     };
   });
 </script>
@@ -349,8 +544,16 @@
 <svelte:window {onkeydown} {oncontextmenu} />
 
 <div class="app">
-  <Sidebar {home} current={path} onnavigate={navigate} {dropTarget} />
+  <Sidebar {home} current={path} onnavigate={navigate} onopentab={(p) => openTab(p, true)} {dropTarget} />
   <main class="main">
+    <TabBar
+      tabs={tabList}
+      {active}
+      onselect={activate}
+      onclose={closeTab}
+      onnew={() => openTab(home)}
+      onmove={moveTab}
+      ondetach={detachTab} />
     <Toolbar
       {path}
       bind:view
@@ -373,6 +576,7 @@
       oncancelrename={() => (renaming = null)}
       ondragout={dragOut}
       onitemcontextmenu={itemContextMenu}
+      onopentab={(p) => openTab(p, true)}
       {dropTarget} />
     <footer class="status">
       <span>{plural(visible.length, "item")}{selection.size ? ` · ${selection.size} selected` : ""}</span>

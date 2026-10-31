@@ -36,6 +36,7 @@
     oncancelrename,
     ondragout,
     onitemcontextmenu,
+    onopentab,
     dropTarget,
   }: {
     entries: Entry[];
@@ -52,6 +53,8 @@
     /** Called once a press on an item moves far enough to become a drag. */
     ondragout: (paths: string[]) => void;
     onitemcontextmenu: (index: number, e: MouseEvent) => void;
+    /** Middle-click on a folder: open it in a new background tab. */
+    onopentab: (path: string) => void;
     /** Folder path currently under a native drag, highlighted as drop target. */
     dropTarget: string | null;
   } = $props();
@@ -170,6 +173,8 @@
         onclick={(e) => onitemclick(index, e)}
         ondblclick={() => onopen(entry)}
         onpointerdown={(e) => pointerDown(e, entry)}
+        onmousedown={(e) => e.button === 1 && e.preventDefault()}
+        onauxclick={(e) => e.button === 1 && entry.isDir && onopentab(entry.path)}
         oncontextmenu={(e) => {
           e.preventDefault();
           onitemcontextmenu(index, e);

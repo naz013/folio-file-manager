@@ -1,5 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 /** A directory entry (decoded from `fs::Entry` in src-tauri/src/fs/mod.rs). */
 export interface Entry {
@@ -59,9 +60,22 @@ export const copyPaths = (sources: string[], dest: string) =>
 export const movePaths = (sources: string[], dest: string) =>
   invoke<string[]>("move_paths", { sources, dest });
 
-/** Fires (debounced) when the watched folder changes on disk. */
+/** Fires (debounced) when the folder this window watches changes on disk. */
 export const onDirChanged = (cb: (path: string) => void): Promise<UnlistenFn> =>
-  listen<{ path: string }>("dir-changed", (e) => cb(e.payload.path));
+  getCurrentWebviewWindow().listen<{ path: string }>("dir-changed", (e) => cb(e.payload.path));
+
+/** Tabs saved for this window (`session::WindowTabs`), or null for a fresh window. */
+export interface WindowTabs {
+  tabs: string[];
+  active: number;
+}
+
+export const windowTabs = () => invoke<WindowTabs | null>("window_tabs");
+export const saveTabs = (tabs: string[], active: number) => invoke<void>("save_tabs", { tabs, active });
+
+/** Opens a new window showing `tabs`, its top-left corner at logical screen position (x, y). */
+export const openWindow = (tabs: string[], x: number, y: number) =>
+  invoke<void>("open_window", { tabs, x, y });
 
 export function separatorOf(path: string): string {
   return path.includes("\\") ? "\\" : "/";

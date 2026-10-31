@@ -4,6 +4,7 @@
 
 use crate::fs::{self, Entry};
 use crate::ops;
+use crate::session::{Session, WindowTabs};
 use crate::watch::DirWatcher;
 use std::path::PathBuf;
 use tauri::Manager;
@@ -44,12 +45,57 @@ pub fn home_dir(app: tauri::AppHandle) -> CmdResult<String> {
 #[tauri::command]
 pub fn watch_dir(
     app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     watcher: tauri::State<'_, DirWatcher>,
     path: String,
 ) -> CmdResult<()> {
     watcher
-        .watch(app, &PathBuf::from(path))
+        .watch(app, window.label(), &PathBuf::from(path))
         .map_err(|e| e.to_string())
+}
+
+/// Tabs to restore in the calling window, if the session has any for it.
+#[tauri::command]
+pub fn window_tabs(
+    window: tauri::WebviewWindow,
+    session: tauri::State<'_, Session>,
+) -> Option<WindowTabs> {
+    session.tabs(window.label())
+}
+
+/// Saves the calling window's tabs. The file write runs off the main thread.
+#[tauri::command]
+pub async fn save_tabs(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    tabs: Vec<String>,
+    active: usize,
+) -> CmdResult<()> {
+    let label = window.label().to_owned();
+    blocking(move || {
+        app.state::<Session>()
+            .update(&label, WindowTabs { tabs, active });
+        Ok(())
+    })
+    .await
+}
+
+/// Opens a new window with `tabs`, its top-left corner at logical screen position (x, y).
+/// Async: creating a window from a synchronous command deadlocks on Windows.
+#[tauri::command]
+pub async fn open_window(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, Session>,
+    tabs: Vec<String>,
+    x: f64,
+    y: f64,
+) -> CmdResult<()> {
+    let label = session.next_label();
+    session.open(&label, WindowTabs { tabs, active: 0 });
+    crate::window::open(&app, &label, Some((x, y))).map_err(|e| {
+        session.close(&label);
+        e.to_string()
+    })
 }
 
 #[tauri::command]
