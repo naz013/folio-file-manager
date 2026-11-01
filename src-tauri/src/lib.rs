@@ -7,6 +7,7 @@ mod platform;
 mod preview;
 mod queue;
 mod session;
+mod shelf;
 mod tags;
 mod thumbs;
 mod watch;
@@ -52,6 +53,27 @@ fn manage_tags(app: &tauri::App) {
     app.manage(open_tags(file.as_deref()));
 }
 
+/// Opens the tag index and the clipboard shelf, which live beside the session and journal.
+fn manage_stores(app: &tauri::App) {
+    manage_tags(app);
+    manage_shelf(app);
+}
+
+/// Opens the clipboard shelf in the app data directory. Like tags, a shelf that can't be
+/// opened is not worth stopping for: it just isn't kept.
+fn manage_shelf(app: &tauri::App) {
+    let file = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("shelf.sqlite"));
+    let shelf = shelf::Shelf::open(file.as_deref()).unwrap_or_else(|e| {
+        eprintln!("the shelf can't be opened ({e}); it won't be kept");
+        shelf::Shelf::open(None).expect("an in-memory shelf opens")
+    });
+    app.manage(shelf);
+}
+
 /// Tags are not worth stopping for: without an index they just aren't kept.
 fn open_tags(file: Option<&std::path::Path>) -> tags::Tags {
     tags::Tags::open(file).unwrap_or_else(|e| {
@@ -93,6 +115,10 @@ impl<R: tauri::Runtime> Protocols for tauri::Builder<R> {
 /// # Panics
 /// If the Tauri runtime fails to start; there is nothing to recover to.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the list of commands handed to Tauri grows with every feature"
+)]
 pub fn run() {
     perf::mark_start();
     tauri::Builder::default()
@@ -116,7 +142,7 @@ pub fn run() {
             // Without a journal nothing could be undone, and operations are refused, so
             // a journal that can't open is a failed start.
             app.manage(open_journal(journal_file.as_deref())?);
-            manage_tags(app);
+            manage_stores(app);
             // The main window comes from tauri.conf.json, hidden until it is back where
             // it was. Other saved windows open in the background so they don't hold up
             // the main window's start.
@@ -179,6 +205,11 @@ pub fn run() {
             commands::tag_delete,
             commands::tag_toggle,
             commands::tag_files,
+            commands::shelf_list,
+            commands::shelf_add,
+            commands::shelf_set_mode,
+            commands::shelf_remove,
+            commands::shelf_clear,
             commands::tags_in_dir,
             commands::read_text_preview,
             commands::show_context_menu,

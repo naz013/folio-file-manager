@@ -10,6 +10,12 @@
     tagCreate,
     tagDelete,
     tagList,
+    shelfAdd,
+    shelfClear,
+    shelfList,
+    shelfRemove,
+    shelfSetMode,
+    type ShelfItem,
     tagFiles,
     tagToggle,
     tagsInDir,
@@ -54,6 +60,7 @@
   import TagChips from "$lib/components/TagChips.svelte";
   import Inspector from "$lib/components/Inspector.svelte";
   import Palette, { type PaletteItem } from "$lib/components/Palette.svelte";
+  import ShelfPanel from "$lib/components/ShelfPanel.svelte";
   import { clearRecent, loadRecent, recordRecent } from "$lib/palette";
   import { tagColor } from "$lib/tags";
   import OpsPill from "$lib/components/OpsPill.svelte";
@@ -126,8 +133,16 @@
   let cursor = $state(-1);
   let renaming = $state<string | null>(null);
 
-  let clipboard = $state<{ mode: "copy" | "cut"; paths: string[] } | null>(null);
-  let cutSet = $derived(new Set(clipboard?.mode === "cut" ? clipboard.paths : []));
+  /** Items marked with Ctrl+X or Ctrl+C, kept until they are pasted or removed. */
+  let shelf = $state<ShelfItem[]>([]);
+  let shelfOpen = $state(false);
+  let cutSet = $derived(new Set(shelf.filter((i) => i.mode === "cut").map((i) => i.path)));
+  /** Set while an item pulled out of the shelf panel is being dragged. */
+  let shelfDrag: ShelfItem | null = null;
+
+  async function loadShelf() {
+    shelf = await shelfList().catch(() => shelf);
+  }
 
   /** Folder under a native drag (from Folio itself or another app). */
   let dropTarget = $state<string | null>(null);
@@ -458,27 +473,52 @@
     if (renamed) await refresh([renamed]);
   }
 
-  async function transfer(paths: string[], dest: string, copy: boolean) {
+  /** What a transfer did: whether the user cancelled, and which items were queued. */
+  type Transferred = { cancelled: boolean; started: string[] };
+
+  async function transfer(paths: string[], dest: string, copy: boolean): Promise<Transferred> {
+    return transferBatch([{ paths, copy }], dest);
+  }
+
+  /**
+   * Copies and moves several sets of items into `dest` after one round of questions about
+   * name clashes, so a cancel stops all of them.
+   */
+  async function transferBatch(
+    groups: { paths: string[]; copy: boolean }[],
+    dest: string,
+  ): Promise<Transferred> {
+    const cancelled = { cancelled: true, started: [] };
     // One question at a time.
-    if (asking) return;
-    const conflicts = await run(() => findConflicts(paths, dest));
-    if (!conflicts) return;
-    let sources = paths;
-    let replace: string[] = [];
-    let replaceIds: (string | null)[] = [];
+    if (asking) return cancelled;
+    const everything = groups.flatMap((g) => g.paths);
+    const conflicts = await run(() => findConflicts(everything, dest));
+    if (!conflicts) return cancelled;
+    let choices: Record<string, Choice> = {};
     if (conflicts.length) {
-      const choices = await askAboutConflicts(conflicts, copy ? "copy" : "move");
-      if (!choices) return;
-      sources = paths.filter((p) => choices[p] !== "skip");
-      replace = sources.filter((p) => choices[p] === "replace");
-      replaceIds = replace.map((p) => conflicts.find((c) => c.source === p)?.existingId ?? null);
-      if (!sources.length) return;
+      const asked = await askAboutConflicts(
+        conflicts,
+        groups.every((g) => g.copy) ? "copy" : "move",
+      );
+      if (!asked) return cancelled;
+      choices = asked;
     }
-    await run(() =>
-      copy
-        ? copyPaths(sources, dest, replace, replaceIds)
-        : movePaths(sources, dest, replace, replaceIds),
-    );
+    const started: string[] = [];
+    for (const { paths, copy } of groups) {
+      const sources = paths.filter((p) => choices[p] !== "skip");
+      if (!sources.length) continue;
+      const replace = sources.filter((p) => choices[p] === "replace");
+      const replaceIds = replace.map(
+        (p) => conflicts.find((c) => c.source === p)?.existingId ?? null,
+      );
+      const id = await run(() =>
+        copy
+          ? copyPaths(sources, dest, replace, replaceIds)
+          : movePaths(sources, dest, replace, replaceIds),
+      );
+      if (id !== undefined) started.push(...sources);
+    }
+    return { cancelled: false, started };
   }
 
   // ---- Name conflicts ----
@@ -591,12 +631,83 @@
     refresh(dest === path ? created : []);
   }
 
+  /** Pastes the shelf into the folder shown: what was cut moves, what was copied is copied. */
   async function paste() {
-    if (!clipboard) return;
+    // Another window may have used the shelf since it was last read.
+    await loadShelf();
+    await pasteItems(shelf);
+  }
+
+  /** Whether `inner` is `outer` or lies inside it. */
+  function isInside(inner: string, outer: string): boolean {
+    const norm = (p: string) => p.replace(/[\\/]+$/, "").toLowerCase();
+    const [i, o] = [norm(inner), norm(outer)];
+    return i === o || i.startsWith(o + "\\") || i.startsWith(o + "/");
+  }
+
+  /**
+   * Pastes `items` from the shelf into the folder shown, and takes off the shelf what was
+   * queued. An item that can't be pasted here stays on it.
+   */
+  async function pasteItems(items: ShelfItem[]) {
     if (tagView) return notify("Open a folder first: a tag's items are in many folders", true);
-    const { mode, paths } = clipboard;
-    if (mode === "cut") clipboard = null;
-    await transfer(paths, path, mode === "copy");
+    const dest = path;
+    const ready = items.filter((i) => i.exists);
+    if (!ready.length) return notify("Nothing on the shelf can be pasted", true);
+    // A folder can't go into itself, and what is inside another shelved item travels with it.
+    const usable = ready.filter(
+      (i) =>
+        !(i.isDir && isInside(dest, i.path)) &&
+        !ready.some((o) => o !== i && o.isDir && isInside(i.path, o.path)),
+    );
+    if (usable.length < ready.length) {
+      notify(
+        "Some items stay on the shelf: a folder can't go into itself, or is inside another item",
+        true,
+      );
+    }
+    const groups = (["cut", "copy"] as const)
+      .map((mode) => ({
+        copy: mode === "copy",
+        paths: usable.filter((i) => i.mode === mode).map((i) => i.path),
+      }))
+      .filter((g) => g.paths.length);
+    if (!groups.length) return;
+    const { started } = await transferBatch(groups, dest);
+    if (started.length) {
+      await run(() => shelfRemove(started));
+      await loadShelf();
+    }
+  }
+
+  async function shelfMark(mode: "copy" | "cut") {
+    const paths = selected().map((e) => e.path);
+    if (!paths.length) return;
+    await run(() => shelfAdd(paths, mode));
+    await loadShelf();
+    notify(
+      `Added ${plural(paths.length, "item")} to the shelf: ${mode === "cut" ? "move" : "copy"}`,
+    );
+  }
+
+  async function shelfRemoveItems(paths: string[]) {
+    await run(() => shelfRemove(paths));
+    await loadShelf();
+  }
+
+  /** A shelf item dropped on a folder: pasted there, by its own mode. */
+  async function pasteShelfItem(item: ShelfItem, dest: string) {
+    const { started } = await transfer([item.path], dest, item.mode === "copy");
+    if (started.length) {
+      await run(() => shelfRemove([item.path]));
+      await loadShelf();
+    }
+  }
+
+  /** An item pulled out of the shelf panel is dragged like a file in the list. */
+  function dragShelfItem(item: ShelfItem) {
+    shelfDrag = item;
+    dragOut([item.path]);
   }
 
   // ---- Native drag & drop ----
@@ -817,6 +928,7 @@
     window.removeEventListener("keydown", dragKey, true);
     window.removeEventListener("blur", dragCancel);
     inAppDrag = null;
+    shelfDrag = null;
   }
 
   function dragMove(e: PointerEvent) {
@@ -854,15 +966,24 @@
     swallowNextClick();
     const { paths } = inAppDrag;
     dragKeys = { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey };
-    const dest =
-      folderAt({ x: e.clientX * devicePixelRatio, y: e.clientY * devicePixelRatio }) ??
-      dropFallback();
+    const onFolder = folderAt({
+      x: e.clientX * devicePixelRatio,
+      y: e.clientY * devicePixelRatio,
+    });
+    const fromShelf = shelfDrag;
     stopInAppDrag();
     void dragEnded();
-    if (dest) dropPaths(paths, dest);
+    // A shelf item is pasted only where it was dropped on a folder, never just "here".
+    if (fromShelf) {
+      if (onFolder) pasteShelfItem(fromShelf, onFolder);
+    } else {
+      const dest = onFolder ?? dropFallback();
+      if (dest) dropPaths(paths, dest);
+    }
   }
 
   function dragCancel() {
+    shelfDrag = null;
     if (!inAppDrag) return;
     swallowNextClick();
     stopInAppDrag();
@@ -1022,7 +1143,8 @@
       ...action("New folder", "Ctrl+Shift+N", newFolder, !tagView),
       ...action("Copy", "Ctrl+C", copySelection, any),
       ...action("Cut", "Ctrl+X", cutSelection, any),
-      ...action("Paste", "Ctrl+V", paste, !!clipboard && !tagView),
+      ...action("Paste", "Ctrl+V", paste, shelf.length > 0 && !tagView),
+      ...action("Open the clipboard shelf", "Ctrl+Shift+V", () => (shelfOpen = true)),
       ...action("Open", "Enter", () => open(selected()[0]), one),
       ...action(
         "Open in new tab",
@@ -1043,7 +1165,7 @@
         () => nativeMenu(selected().map((e) => e.path)),
         any,
       ),
-      ...action("Clear selection", "Esc", clearSelectionAndClipboard, any || !!clipboard),
+      ...action("Clear selection", "Esc", clearSelectionAndClipboard, any),
       ...action(
         "Select all",
         "Ctrl+A",
@@ -1215,7 +1337,7 @@
   function backgroundMenu(): MenuItem[] {
     return [
       { label: "New folder", hint: "Ctrl+Shift+N", run: newFolder },
-      { label: "Paste", hint: "Ctrl+V", disabled: !clipboard, run: paste },
+      { label: "Paste", hint: "Ctrl+V", disabled: !shelf.length, run: paste },
       "separator",
       { label: "Refresh", run: () => refresh() },
       { label: "Select all", hint: "Ctrl+A", run: () => selectRange(0, visible.length - 1) },
@@ -1274,18 +1396,16 @@
   }
 
   function copySelection() {
-    const paths = selected().map((e) => e.path);
-    clipboard = { mode: "copy", paths };
-    notify(`Copied ${plural(paths.length, "item")} to clipboard`);
+    shelfMark("copy");
   }
 
   function cutSelection() {
-    clipboard = { mode: "cut", paths: selected().map((e) => e.path) };
+    shelfMark("cut");
   }
 
+  /** Esc clears the selection; the shelf keeps its items. */
   function clearSelectionAndClipboard() {
     selection.clear();
-    clipboard = null;
   }
 
   /** The menu key and Shift+F10: opens at the selected item, else the folder background. */
@@ -1346,6 +1466,8 @@
       if (key === "ArrowUp") return goUp;
     }
     if (ctrl && shift && key.toLowerCase() === "n") return newFolder;
+    // Paste a few of the shelf's items: open the panel to pick them.
+    if (ctrl && shift && key.toLowerCase() === "v") return () => (shelfOpen = !shelfOpen);
     // Holding the key must not undo one operation after another.
     if (ctrl && key.toLowerCase() === "z") return e.repeat ? null : () => stepHistory(shift);
     if (ctrl && !shift && key.toLowerCase() === "y")
@@ -1467,6 +1589,9 @@
       } else dragEnded();
     });
     loadTagDefs();
+    loadShelf();
+    const onFocus = () => loadShelf();
+    window.addEventListener("focus", onFocus);
     homeDir().then(async (h) => {
       home = h;
       const saved = await windowTabs().catch(() => null);
@@ -1484,6 +1609,7 @@
     });
     return () => {
       stopTheme();
+      window.removeEventListener("focus", onFocus);
       unlisten.then((u) => u());
       unlistenQueue.then((u) => u());
       unlistenBlocked.then((u) => u());
@@ -1577,12 +1703,6 @@
           ? ` · ${selection.size} selected`
           : ""}</span
       >
-      {#if clipboard}
-        <span class="clip"
-          >{plural(clipboard.paths.length, "item")}
-          {clipboard.mode === "cut" ? "to move" : "to copy"} · Ctrl+V to paste</span
-        >
-      {/if}
       <OpsPill
         {jobs}
         onpause={queuePause}
@@ -1603,6 +1723,23 @@
       ontoggle={toggleTag}
     />
   {/if}
+
+  <ShelfPanel
+    items={shelf}
+    open={shelfOpen}
+    ontoggle={() => (shelfOpen = !shelfOpen)}
+    onpaste={pasteItems}
+    onremove={shelfRemoveItems}
+    onmode={async (item, mode) => {
+      await run(() => shelfSetMode(item.path, mode));
+      await loadShelf();
+    }}
+    onclear={async () => {
+      await run(() => shelfClear());
+      await loadShelf();
+    }}
+    ondrag={dragShelfItem}
+  />
 
   {#if paletteOpen}
     <Palette items={paletteItems} onclose={() => (paletteOpen = false)} />
@@ -1694,10 +1831,6 @@
     font-size: 11.5px;
     font-weight: var(--font-weight-medium);
     color: var(--text-secondary);
-  }
-
-  .clip {
-    color: var(--accent-default);
   }
 
   .ghost {

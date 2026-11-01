@@ -11,6 +11,7 @@ use crate::journal::{self, Journal, Step};
 use crate::ops;
 use crate::queue::{self, Kind, Queue};
 use crate::session::{Session, WindowTabs};
+use crate::shelf::{Shelf, ShelfItem};
 use crate::tags::{Tag, Tags};
 use crate::watch::DirWatcher;
 use serde::Serialize;
@@ -667,6 +668,39 @@ pub fn tag_files(tags: tauri::State<'_, Tags>, tag: i64) -> Vec<(String, Entry, 
 #[tauri::command(async)]
 pub fn tags_in_dir(tags: tauri::State<'_, Tags>, dir: String) -> Vec<(String, Vec<i64>)> {
     tags.in_dir(&PathBuf::from(dir))
+}
+
+// ---- Clipboard shelf ----
+
+#[tauri::command(async)]
+pub fn shelf_list(shelf: tauri::State<'_, Shelf>) -> Vec<ShelfItem> {
+    shelf.list()
+}
+
+/// Puts `paths` on the shelf for copying or cutting; the files are not touched.
+#[tauri::command]
+pub fn shelf_add(
+    shelf: tauri::State<'_, Shelf>,
+    paths: Vec<String>,
+    mode: String,
+) -> CmdResult<()> {
+    shelf.add(&self::paths(paths), &mode)
+}
+
+#[tauri::command]
+pub fn shelf_set_mode(shelf: tauri::State<'_, Shelf>, path: String, mode: String) -> CmdResult<()> {
+    shelf.set_mode(&PathBuf::from(path), &mode)
+}
+
+/// Takes items off the shelf; the files are not touched.
+#[tauri::command]
+pub fn shelf_remove(shelf: tauri::State<'_, Shelf>, paths: Vec<String>) -> CmdResult<()> {
+    shelf.remove(&self::paths(paths))
+}
+
+#[tauri::command]
+pub fn shelf_clear(shelf: tauri::State<'_, Shelf>) -> CmdResult<()> {
+    shelf.clear()
 }
 
 #[tauri::command]

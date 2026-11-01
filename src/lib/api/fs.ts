@@ -69,6 +69,25 @@ export const releasePreview = () => invoke<void>("preview_allow", { path: null }
 export const readTextPreview = (path: string) =>
   invoke<{ text: string; truncated: boolean }>("read_text_preview", { path });
 
+/** An item on the clipboard shelf, checked against the disk when it was listed. */
+export interface ShelfItem {
+  path: string;
+  mode: "copy" | "cut";
+  /** False for an item that went missing after it was shelved. */
+  exists: boolean;
+  isDir: boolean;
+  size: number;
+}
+export const shelfList = () => invoke<ShelfItem[]>("shelf_list");
+/** Puts items on the shelf to copy or move later; the files are not touched. */
+export const shelfAdd = (paths: string[], mode: "copy" | "cut") =>
+  invoke<void>("shelf_add", { paths, mode });
+export const shelfSetMode = (path: string, mode: "copy" | "cut") =>
+  invoke<void>("shelf_set_mode", { path, mode });
+/** Takes items off the shelf; the files are not touched. */
+export const shelfRemove = (paths: string[]) => invoke<void>("shelf_remove", { paths });
+export const shelfClear = () => invoke<void>("shelf_clear");
+
 /** A tag: one of the seven colours, or a named tag with an optional colour. */
 export interface Tag {
   id: number;
