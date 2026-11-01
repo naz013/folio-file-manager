@@ -1103,6 +1103,14 @@ pub fn cleanup_trash(
     keep: Vec<String>,
 ) -> CleanupTrash {
     let home = app.path().home_dir().ok();
+    // A copy or move builds its result under a temporary name, and what it copies from may
+    // be what is listed here; nothing moves while one is going.
+    if queue.copy_running() {
+        return CleanupTrash {
+            job: None,
+            left_alone: items.len(),
+        };
+    }
     let still = cleanup::still_as_listed(&items, cleanup_skips(home.clone()));
     let ok: Vec<BigFile> = cleanup::without_aliases(still, &keep)
         .into_iter()
@@ -1205,6 +1213,102 @@ pub fn cleanup_trash_duplicates(
                     .get(path.to_string_lossy().as_ref())
                     .is_some_and(cleanup::keepers_still_there)
             })),
+        }
+    });
+    let job = submit_trash(&app, &window, &queue, targets, Some(pick));
+    CleanupTrash {
+        job: Some(job),
+        left_alone,
+    }
+}
+
+/// Unfinished copies (`*.folio-partial`) among the scanned folders, and files of 1 MB or more,
+/// that have been left alone for `older_than_days`, with their sizes. Only suggestions. Nothing is looked at
+/// while a copy or move is running, since the one that is running is building such a
+/// folder.
+#[tauri::command(async)]
+pub fn cleanup_partials(
+    app: tauri::AppHandle,
+    scanner: tauri::State<'_, Scanner>,
+    queue: tauri::State<'_, Arc<Queue>>,
+    older_than_days: u32,
+    limit: u32,
+) -> CmdResult<Vec<cleanup::PartialCopy>> {
+    if queue.copy_running() {
+        return Err(
+            "A copy or move is running. Unfinished copies are not looked at until it is done, \
+             since it is building one."
+                .into(),
+        );
+    }
+    let home = app.path().home_dir().ok();
+    cleanup::stale_partials(
+        &scanner,
+        cleanup_skips(home),
+        &cleanup::touched,
+        older_than_days,
+        limit as usize,
+        journal::unix_now(),
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Moves unfinished copies from a cleanup list to the Recycle Bin, those still exactly as
+/// listed and still left alone, and only while no copy or move is running. Anything else is
+/// left alone. Which of them fit in the drive's bin is decided when the job runs.
+#[tauri::command(async)]
+pub fn cleanup_trash_partials(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    queue: tauri::State<'_, Arc<Queue>>,
+    items: Vec<cleanup::PartialCopy>,
+) -> CleanupTrash {
+    let home = app.path().home_dir().ok();
+    let now = journal::unix_now();
+    let running = queue.copy_running();
+    let ok: Vec<cleanup::PartialCopy> = if running {
+        Vec::new()
+    } else {
+        cleanup::still_partials(&items, &cleanup_skips(home.clone()), &cleanup::touched, now)
+            .into_iter()
+            .cloned()
+            .collect()
+    };
+    let left_alone = items.len() - ok.len();
+    if ok.is_empty() {
+        return CleanupTrash {
+            job: None,
+            left_alone,
+        };
+    }
+    let targets: Vec<PathBuf> = ok.iter().map(|p| PathBuf::from(&p.path)).collect();
+    let watch = Arc::clone(&queue);
+    let pick: TrashFilter = Box::new(move |targets| {
+        // Looked at again now, when the job runs: a copy may have started meanwhile, and the
+        // room in the bin is whatever is left.
+        let wanted: Vec<BigFile> = if watch.copy_running() {
+            Vec::new()
+        } else {
+            let listed: Vec<cleanup::PartialCopy> = ok
+                .into_iter()
+                .filter(|p| targets.iter().any(|t| t.to_string_lossy() == p.path))
+                .collect();
+            cleanup::still_partials(
+                &listed,
+                &cleanup_skips(home),
+                &cleanup::touched,
+                journal::unix_now(),
+            )
+            .into_iter()
+            .map(BigFile::from)
+            .collect()
+        };
+        let fits = cleanup::within_bin(wanted.iter().collect(), crate::platform::recycle_limit);
+        let no_room = wanted.len() - fits.len();
+        Picked {
+            paths: fits.iter().map(|f| PathBuf::from(&f.path)).collect(),
+            no_room,
+            last_look: None,
         }
     });
     let job = submit_trash(&app, &window, &queue, targets, Some(pick));

@@ -231,6 +231,15 @@ impl Queue {
             .any(|j| j.window == window && !lock(&j.live).state.is_finished())
     }
 
+    /// Whether a copy or move is waiting, running or paused, in any window. The folders
+    /// such a job is filling are named like unfinished copies, so nothing may be called a
+    /// leftover while one is.
+    pub fn copy_running(&self) -> bool {
+        lock(&self.jobs).iter().any(|j| {
+            matches!(j.kind, Kind::Copy | Kind::Move) && !lock(&j.live).state.is_finished()
+        })
+    }
+
     /// Whether any job at all is waiting, running or paused.
     pub fn is_busy(&self) -> bool {
         lock(&self.jobs)

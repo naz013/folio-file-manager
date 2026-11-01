@@ -225,22 +225,25 @@ fn same_place(a: &Path, b: &Path) -> bool {
     norm(a) == norm(b)
 }
 
-/// A OneDrive-style placeholder whose content is not on this disk: reading it would
-/// download it, and removing it is not freeing local space.
+/// Whether an entry's attributes say its content is not on this disk: a OneDrive-style
+/// placeholder. Reading one would download it, listing a folder of them makes the sync
+/// provider fetch it, and removing it is not freeing local space.
 #[cfg(windows)]
-fn is_cloud_only(path: &Path) -> bool {
+fn cloud_only_attributes(meta: &std::fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
     const OFFLINE: u32 = 0x1000;
     const RECALL_ON_OPEN: u32 = 0x4_0000;
     const RECALL_ON_DATA_ACCESS: u32 = 0x40_0000;
-    std::fs::symlink_metadata(path).is_ok_and(|m| {
-        m.file_attributes() & (OFFLINE | RECALL_ON_OPEN | RECALL_ON_DATA_ACCESS) != 0
-    })
+    meta.file_attributes() & (OFFLINE | RECALL_ON_OPEN | RECALL_ON_DATA_ACCESS) != 0
 }
 
 #[cfg(not(windows))]
-fn is_cloud_only(_path: &Path) -> bool {
+fn cloud_only_attributes(_meta: &std::fs::Metadata) -> bool {
     false
+}
+
+fn is_cloud_only(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|m| cloud_only_attributes(&m))
 }
 
 /// Seconds in a day.
@@ -254,6 +257,14 @@ pub const MAX_LIST: usize = 1000;
 /// `skip` refuses it, either as listed or once its links are resolved: a scan through a
 /// junction or a `subst` drive lists a system folder under another name.
 fn on_disk(path: &Path, skip: &impl Fn(&Path, u64) -> bool) -> Option<(u64, i64)> {
+    // An unfinished copy, or a file inside one, may be a copy still being built: the list of
+    // unfinished copies is the only way to it, and it looks at whether a copy is running.
+    if path
+        .components()
+        .any(|c| is_partial_name(&c.as_os_str().to_string_lossy()))
+    {
+        return None;
+    }
     let meta = std::fs::symlink_metadata(path).ok()?;
     if !meta.is_file() {
         return None;
@@ -928,6 +939,180 @@ pub fn without_aliases<'a>(items: Vec<&'a BigFile>, keep: &[String]) -> Vec<&'a 
         .collect()
 }
 
+/// The suffix of a copy in progress (`name.folio-partial`, or just `.folio-partial` for a
+/// name too long to add it to). A copy is built under it and only given its real name once
+/// complete, so one left behind is an unfinished copy.
+pub const PARTIAL_SUFFIX: &str = crate::ops::PARTIAL;
+
+/// Whether `name` is the name of an unfinished copy.
+pub fn is_partial_name(name: &str) -> bool {
+    name.to_lowercase().ends_with(PARTIAL_SUFFIX)
+}
+
+/// The shortest time an unfinished copy must have been left alone to be suggested, whatever
+/// it is asked: a copy that is still going keeps changing it.
+pub const MIN_PARTIAL_DAYS: u32 = 3;
+/// Most entries looked at to size and date one unfinished copy; a bigger tree is not judged.
+const PARTIAL_WALK: usize = 100_000;
+
+/// An unfinished copy left behind: a file, or a folder with everything in it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PartialCopy {
+    pub path: String,
+    /// All of it, in bytes.
+    pub size: u64,
+    /// When anything in it last changed (seconds since 1970).
+    pub modified: i64,
+    pub is_dir: bool,
+}
+
+/// When an entry last had anything done to it: the later of its change time and its creation
+/// time. A copy keeps the change time of what it copies, so a file made a moment ago can look
+/// old by that alone; the creation time is when it came to be here.
+pub fn touched(meta: &std::fs::Metadata) -> i64 {
+    let secs = |t: std::io::Result<std::time::SystemTime>| {
+        t.ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(i64::MAX, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+    };
+    // If either time is unknown the entry counts as touched now: it is never called old on
+    // a guess.
+    secs(meta.modified()).max(secs(meta.created()))
+}
+
+impl From<&PartialCopy> for BigFile {
+    fn from(p: &PartialCopy) -> Self {
+        Self {
+            path: p.path.clone(),
+            size: p.size,
+            modified: p.modified,
+        }
+    }
+}
+
+/// The size of `path` and the last time anything in it was touched (`stamp` of every file
+/// and folder in it), links not followed. `None` if it is a link, can't be read, or is too
+/// big a tree to judge.
+fn measure(path: &Path, stamp: &dyn Fn(&std::fs::Metadata) -> i64) -> Option<(u64, i64)> {
+    let secs = stamp;
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    if meta.file_type().is_symlink() || cloud_only_attributes(&meta) {
+        return None;
+    }
+    if meta.is_file() {
+        return Some((meta.len(), secs(&meta)));
+    }
+    if !meta.is_dir() {
+        return None;
+    }
+    let (mut size, mut newest, mut seen) = (0u64, secs(&meta), 0usize);
+    let mut todo = vec![path.to_path_buf()];
+    while let Some(dir) = todo.pop() {
+        for entry in std::fs::read_dir(&dir).ok()?.flatten() {
+            seen += 1;
+            if seen > PARTIAL_WALK {
+                return None;
+            }
+            let kind = entry.file_type().ok()?;
+            let meta = entry.metadata().ok()?;
+            // One file only in the cloud spoils the whole: its size frees nothing here and
+            // moving the folder would remove it from the cloud too. Nothing is opened to
+            // find out; the attributes come with the listing.
+            if cloud_only_attributes(&meta) {
+                return None;
+            }
+            newest = newest.max(secs(&meta));
+            if kind.is_dir() {
+                todo.push(entry.path());
+            } else if kind.is_file() {
+                size = size.saturating_add(meta.len());
+            }
+        }
+    }
+    Some((size, newest))
+}
+
+/// An unfinished copy as it is on disk now: its size and when anything in it last changed,
+/// or `None` if it is gone, is not named like one, is a link, or `skip` refuses it, as listed
+/// or once its links are resolved (as for [`on_disk`]).
+fn partial_on_disk(
+    path: &Path,
+    skip: &impl Fn(&Path, u64) -> bool,
+    stamp: &dyn Fn(&std::fs::Metadata) -> i64,
+) -> Option<(u64, i64)> {
+    if !is_partial_name(&path.file_name()?.to_string_lossy()) {
+        return None;
+    }
+    let (size, newest) = measure(path, stamp)?;
+    if skip(path, size) {
+        return None;
+    }
+    let resolved = std::fs::canonicalize(path).ok()?;
+    let same_drive = drive_of(path).is_none() || drive_of(path) == drive_of(&resolved);
+    (same_drive && !skip(&resolved, size)).then_some((size, newest))
+}
+
+/// Unfinished copies among the scanned folders and files that nothing has touched for
+/// `older_than_days`, biggest first. The scan cache says where they are; each is measured on
+/// disk again. One inside another is left to the outer one. A copy that is still running is
+/// not told apart here: the caller must not ask while one is (see `Queue::copy_running`).
+pub fn stale_partials(
+    scanner: &Scanner,
+    skip: impl Fn(&Path, u64) -> bool,
+    stamp: &dyn Fn(&std::fs::Metadata) -> i64,
+    older_than_days: u32,
+    limit: usize,
+    now: i64,
+) -> rusqlite::Result<Vec<PartialCopy>> {
+    let before = now - i64::from(older_than_days.max(MIN_PARTIAL_DAYS)) * DAY;
+    let mut candidates = scanner.partial_candidates(5000)?;
+    candidates.sort();
+    let mut found: Vec<PartialCopy> = Vec::new();
+    let mut outer: Vec<String> = Vec::new();
+    for path in candidates {
+        let place = same_spelling(Path::new(&path));
+        if outer.iter().any(|o| place.starts_with(&format!("{o}/"))) {
+            continue;
+        }
+        let is_dir = Path::new(&path).is_dir();
+        if let Some((size, newest)) = partial_on_disk(Path::new(&path), &skip, stamp)
+            && newest <= before
+        {
+            outer.push(place);
+            found.push(PartialCopy {
+                path,
+                size,
+                modified: newest,
+                is_dir,
+            });
+        }
+    }
+    found.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.path.cmp(&b.path)));
+    found.truncate(limit.min(MAX_LIST));
+    Ok(found)
+}
+
+/// The items of a list shown earlier that are still unfinished copies exactly as listed (same
+/// size, nothing changed since) and have still been left alone for the minimum time. Anything
+/// else is not moved.
+pub fn still_partials<'a>(
+    items: &'a [PartialCopy],
+    skip: &impl Fn(&Path, u64) -> bool,
+    stamp: &dyn Fn(&std::fs::Metadata) -> i64,
+    now: i64,
+) -> Vec<&'a PartialCopy> {
+    let before = now - i64::from(MIN_PARTIAL_DAYS) * DAY;
+    items
+        .iter()
+        .filter(|f| {
+            partial_on_disk(Path::new(&f.path), skip, stamp).is_some_and(|(size, newest)| {
+                size == f.size && newest <= f.modified && newest <= before
+            })
+        })
+        .collect()
+}
+
 /// The items of a list shown earlier that are still exactly as listed, safe to move: same
 /// size, not changed since, not protected. Anything else is left alone.
 pub fn still_as_listed(items: &[BigFile], skip: impl Fn(&Path, u64) -> bool) -> Vec<&BigFile> {
@@ -1546,6 +1731,145 @@ mod tests {
         std::fs::write(&b, vec![2u8; 50]).unwrap();
         let (ok, _) = removable_copies(&[group], &none, &none, true);
         assert_eq!(ok.len(), 0);
+    }
+
+    /// Dates by change time only, and none for a folder: a folder made a moment ago in a
+    /// test is not the file that is old in it.
+    fn by_change_time(meta: &std::fs::Metadata) -> i64 {
+        if meta.is_dir() {
+            return 0;
+        }
+        meta.modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            .try_into()
+            .unwrap()
+    }
+
+    #[test]
+    fn other_lists_never_offer_an_unfinished_copy_or_what_is_in_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let scanner = scanned(&dir, |sub| {
+            // Old and big, as a copy that keeps the source's change date would look.
+            put_bytes(sub, "movie.mkv.folio-partial", 1, 2 * MB_LEN, 900);
+            let tree = sub.join("Photos.folio-partial");
+            std::fs::create_dir_all(&tree).unwrap();
+            put_bytes(&tree, "inside.bin", 2, 2 * MB_LEN, 900);
+            put_bytes(sub, "ordinary.bin", 3, 2 * MB_LEN, 900);
+            // The same bytes as the partials, so a duplicate search would pair them.
+            put_bytes(sub, "copy-of-movie.mkv", 1, 2 * MB_LEN, 900);
+            put_bytes(sub, "copy-of-inside.bin", 2, 2 * MB_LEN, 900);
+        });
+        let now = crate::journal::unix_now();
+        let large = large_old(&scanner, |_, _| false, MB, 30, 100, now).unwrap();
+        let mut names: Vec<String> = large
+            .iter()
+            .map(|f| {
+                Path::new(&f.path)
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            ["copy-of-inside.bin", "copy-of-movie.mkv", "ordinary.bin"]
+        );
+        let found = duplicates_with(&scanner, |_, _| false, MB, &|| false).unwrap();
+        assert_eq!(found.groups.len(), 0);
+    }
+
+    #[test]
+    fn a_file_made_just_now_counts_as_touched_now_whatever_its_change_date() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = put_bytes(dir.path(), "x.bin", 1, 10, 400);
+        let meta = std::fs::metadata(&path).unwrap();
+        // Changed 400 days ago, created a moment ago: touched a moment ago.
+        assert!(touched(&meta) >= crate::journal::unix_now() - 60);
+    }
+
+    #[test]
+    fn unfinished_copies_are_named_by_their_suffix() {
+        assert!(is_partial_name("report.pdf.folio-partial"));
+        assert!(is_partial_name(".folio-partial"));
+        assert!(is_partial_name("Photos.FOLIO-PARTIAL"));
+        assert!(!is_partial_name("folio-partial.txt"));
+        assert!(!is_partial_name("notes.partial"));
+    }
+
+    #[test]
+    fn only_old_unfinished_copies_are_suggested_with_their_whole_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let scanner = scanned(&dir, |sub| {
+            put_bytes(sub, "movie.mkv.folio-partial", 1, 2 * MB_LEN, 40);
+            put_bytes(sub, ".folio-partial", 2, 2 * MB_LEN, 40);
+            let tree = sub.join("Photos.folio-partial");
+            std::fs::create_dir_all(tree.join("2019")).unwrap();
+            put_bytes(&tree, "a.jpg", 3, 100, 40);
+            put_bytes(&tree.join("2019"), "b.jpg", 3, 300, 41);
+            // Another one inside: left to the outer.
+            let inner = tree.join("inner.folio-partial");
+            std::fs::create_dir(&inner).unwrap();
+            put_bytes(&inner, "c.jpg", 3, 50, 40);
+            // Still being written, a real file, and a name that only looks like one.
+            put_bytes(sub, "fresh.zip.folio-partial", 4, 2 * MB_LEN, 1);
+            put_bytes(sub, "real.zip", 5, 2 * MB_LEN, 400);
+            put_bytes(sub, "folio-partial.txt", 6, 2 * MB_LEN, 400);
+        });
+        let now = crate::journal::unix_now();
+        let found = stale_partials(&scanner, |_, _| false, &by_change_time, 7, 100, now).unwrap();
+        let names: Vec<(String, u64, bool)> = found
+            .iter()
+            .map(|p| {
+                (
+                    Path::new(&p.path)
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                    p.size,
+                    p.is_dir,
+                )
+            })
+            .collect();
+        assert_eq!(
+            names,
+            [
+                // Equal sizes go by path.
+                (".folio-partial".to_owned(), 2 * MB, false),
+                ("movie.mkv.folio-partial".to_owned(), 2 * MB, false),
+                ("Photos.folio-partial".to_owned(), 450, true),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_partial_copy_that_changed_after_it_was_listed_or_is_protected_is_not_moved() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("Videos");
+        let scanner = scanned(&dir, |sub| {
+            let tree = sub.join("Photos.folio-partial");
+            std::fs::create_dir_all(&tree).unwrap();
+            put_bytes(&tree, "a.jpg", 3, MB_LEN, 40);
+            put_bytes(sub, "movie.mkv.folio-partial", 1, MB_LEN, 40);
+        });
+        let now = crate::journal::unix_now();
+        let listed = stale_partials(&scanner, |_, _| false, &by_change_time, 7, 100, now).unwrap();
+        assert_eq!(listed.len(), 2);
+        // Another file lands in the folder after the list was made.
+        put_bytes(&sub.join("Photos.folio-partial"), "late.jpg", 3, 10, 0);
+        let ok = still_partials(&listed, &|_, _| false, &by_change_time, now);
+        assert_eq!(ok.len(), 1);
+        assert!(ok[0].path.ends_with("movie.mkv.folio-partial"));
+        // And a deny list that has come to refuse them stops both.
+        assert_eq!(
+            still_partials(&listed, &|_, _| true, &by_change_time, now).len(),
+            0
+        );
     }
 
     #[test]

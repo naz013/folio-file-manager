@@ -280,6 +280,8 @@ pub fn run() {
             commands::cleanup_large_old,
             commands::cleanup_old_downloads,
             commands::cleanup_trash,
+            commands::cleanup_partials,
+            commands::cleanup_trash_partials,
             commands::cleanup_duplicates,
             commands::cleanup_duplicates_cancel,
             commands::cleanup_trash_duplicates,

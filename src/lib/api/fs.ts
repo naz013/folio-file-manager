@@ -132,6 +132,16 @@ export const cleanupLargeOld = (minBytes: number, olderThanDays: number, limit: 
 /** Installers and archives in Downloads untouched for a while, biggest first. */
 export const cleanupOldDownloads = (olderThanDays: number, limit: number) =>
   invoke<BigFile[]>("cleanup_old_downloads", { olderThanDays, limit });
+/** An unfinished copy left behind (`*.folio-partial`): a file, or a folder with all in it. */
+export interface PartialCopy extends BigFile {
+  isDir: boolean;
+}
+/** Unfinished copies left alone for a while. Fails while a copy or move is running. */
+export const cleanupPartials = (olderThanDays: number, limit: number) =>
+  invoke<PartialCopy[]>("cleanup_partials", { olderThanDays, limit });
+/** Moves listed unfinished copies to the Recycle Bin, those still exactly as listed. */
+export const cleanupTrashPartials = (items: PartialCopy[]) =>
+  invoke<CleanupTrash>("cleanup_trash_partials", { items });
 /** Copies of one file: same size and same content, newest first. */
 export interface DuplicateGroup {
   id: string;

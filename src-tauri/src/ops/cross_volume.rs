@@ -223,6 +223,11 @@ fn remove_source_file(file: &CopiedFile, remove: &dyn Fn(&Path) -> io::Result<()
         // Changed since the copy, or no longer a file: the copy is stale, keep the source.
         _ => return false,
     }
+    // The source goes only if the copy is still there: someone (a cleanup, another program)
+    // may have removed it while the move ran, and then the source is the only copy.
+    if !fs::symlink_metadata(&file.dst).is_ok_and(|m| m.is_file()) {
+        return false;
+    }
     // Without a change time or file id (FAT, `exFAT`: most USB sticks and SD cards) a
     // same-size save inside the 2 s mtime resolution would pass, so compare contents.
     if !file.src_stamp.change.is_strong() && !same_content(&file.src, &file.dst).unwrap_or(false) {
@@ -462,6 +467,23 @@ mod platform {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn a_source_stays_when_its_copy_was_removed_before_it_could_go() {
+        let t = tempfile::tempdir().unwrap();
+        let (src, dst) = (t.path().join("a.txt"), t.path().join("b.txt"));
+        fs::write(&src, "a").unwrap();
+        fs::write(&dst, "a").unwrap();
+        let file = CopiedFile {
+            src_stamp: Stamp::of(&src).unwrap(),
+            dst_stamp: Stamp::of(&dst).unwrap(),
+            src: src.clone(),
+            dst: dst.clone(),
+        };
+        fs::remove_file(&dst).unwrap();
+        assert!(!remove_source_file(&file, &|p| fs::remove_file(p)));
+        assert!(src.exists());
+    }
 
     fn tree() -> (tempfile::TempDir, PathBuf, PathBuf) {
         let t = tempfile::tempdir().unwrap();

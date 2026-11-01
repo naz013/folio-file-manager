@@ -474,7 +474,7 @@ pub(crate) fn comparable(path: &Path) -> io::Result<PathBuf> {
 
 /// Suffix of a copy in progress. A copy only gets its real name once it's complete, so
 /// a failed or interrupted one never looks like a finished copy.
-const PARTIAL: &str = ".folio-partial";
+pub(crate) const PARTIAL: &str = ".folio-partial";
 
 /// What a tree copy reports to its caller. The walk itself lives in [`copy_tree`]; a
 /// caller that needs more than the copy (a move between drives records what it copied)

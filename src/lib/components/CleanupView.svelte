@@ -5,8 +5,10 @@
     cleanupDuplicatesCancel,
     cleanupLargeOld,
     cleanupOldDownloads,
+    cleanupPartials,
     cleanupTrash,
     cleanupTrashDuplicates,
+    cleanupTrashPartials,
     listDrives,
     onQueueUpdate,
     parentOf,
@@ -14,12 +16,14 @@
     type BigFile,
     type DuplicateGroup,
     type Drive,
+    type PartialCopy,
   } from "$lib/api/fs";
   import { formatDate, formatSize } from "$lib/format";
   import {
     CLEANUP_AGES_DAYS,
     DOWNLOAD_AGES_DAYS,
     DUPLICATE_SIZES_MB,
+    PARTIAL_AGES_DAYS,
     CLEANUP_SIZES_MB,
     settings,
     updateSettings,
@@ -32,7 +36,7 @@
     onopen,
   }: {
     /** Which list to open on. */
-    start?: "large" | "downloads" | "duplicates";
+    start?: "large" | "downloads" | "duplicates" | "partials";
     onclose: () => void;
     /** Show this folder in the browser. */
     onopen: (path: string) => void;
@@ -47,7 +51,11 @@
 
   /** The two plain lists, kept while the person looks at another one, so what was picked
    * in them counts toward the move. */
-  let lists = $state.raw<{ large: BigFile[]; downloads: BigFile[] }>({ large: [], downloads: [] });
+  let lists = $state.raw<{ large: BigFile[]; downloads: BigFile[]; partials: PartialCopy[] }>({
+    large: [],
+    downloads: [],
+    partials: [],
+  });
   let drives = $state.raw<Drive[]>([]);
   let moving = $state(false);
   /** Nothing is picked until the person picks it: cleanup only suggests (ADR 0003). */
@@ -59,7 +67,7 @@
   // `start` only picks the list the view opens on; after that the person switches it.
   // What is looked for: big files nobody touches, or installers and archives in Downloads.
   // svelte-ignore state_referenced_locally
-  let mode = $state<"large" | "downloads" | "duplicates">(start);
+  let mode = $state<"large" | "downloads" | "duplicates" | "partials">(start);
   const files = $derived(mode === "duplicates" ? [] : lists[mode]);
   /** The Recycle Bin jobs started from here; the lists refresh when they have all ended. */
   let trashJobs = $state<number[]>([]);
@@ -69,7 +77,12 @@
   /** Which categories the move includes. */
   // Duplicates join the move once the person has looked at them (opened that list).
   // svelte-ignore state_referenced_locally
-  const included = $state({ large: true, downloads: true, duplicates: start === "duplicates" });
+  const included = $state({
+    large: true,
+    downloads: true,
+    duplicates: start === "duplicates",
+    partials: start === "partials",
+  });
   /** What each list was last loaded for, so switching back doesn't search again. */
   const loadedFor: Record<string, string> = {};
 
@@ -97,7 +110,7 @@
   );
 
   type Category = {
-    id: "large" | "downloads" | "duplicates";
+    id: "large" | "downloads" | "duplicates" | "partials";
     label: string;
     count: number;
     bytes: number;
@@ -120,7 +133,7 @@
     }
     const taken: Record<string, true> = {};
     let heldBack = 0;
-    const take = (list: BigFile[]) =>
+    const take = <T extends BigFile>(list: T[]) =>
       list.filter((f) => {
         if (!picked[f.path] || taken[f.path] || going[f.path]) return false;
         if (kept[f.path]) {
@@ -132,6 +145,7 @@
       });
     const large = included.large ? take(lists.large) : [];
     const downloads = included.downloads ? take(lists.downloads) : [];
+    const partials = included.partials ? take(lists.partials) : [];
     const singles = [...large, ...downloads];
     const dupGroups = included.duplicates ? dupRemoval.filter((g) => g.remove.length) : [];
     const dupFiles = dupGroups.flatMap((g) => g.files.filter((f) => g.remove.includes(f.path)));
@@ -140,8 +154,9 @@
       { id: "large", label: "Large & old files", count: large.length, bytes: sum(large) },
       { id: "downloads", label: "Old downloads", count: downloads.length, bytes: sum(downloads) },
       { id: "duplicates", label: "Duplicates", count: dupFiles.length, bytes: sum(dupFiles) },
+      { id: "partials", label: "Unfinished copies", count: partials.length, bytes: sum(partials) },
     ];
-    const all = [...singles, ...dupFiles];
+    const all = [...singles, ...dupFiles, ...partials];
     // Per drive, so the space it gives back can be shown against what it has free.
     const byDrive: Record<string, number> = {};
     for (const f of all) {
@@ -150,6 +165,7 @@
     }
     return {
       singles,
+      partials,
       dupGroups,
       categories,
       count: all.length,
@@ -177,7 +193,9 @@
         ? [settings.cleanupMinMb, settings.cleanupAgeDays]
         : list === "downloads"
           ? [settings.cleanupDownloadsDays]
-          : [settings.cleanupDupMinMb],
+          : list === "partials"
+            ? [settings.cleanupPartialDays]
+            : [settings.cleanupDupMinMb],
     );
 
   async function load() {
@@ -214,7 +232,9 @@
       const [found, roots] = await Promise.all([
         target === "large"
           ? cleanupLargeOld(settings.cleanupMinMb * 1024 * 1024, settings.cleanupAgeDays, LIMIT)
-          : cleanupOldDownloads(settings.cleanupDownloadsDays, LIMIT),
+          : target === "partials"
+            ? cleanupPartials(settings.cleanupPartialDays, LIMIT)
+            : cleanupOldDownloads(settings.cleanupDownloadsDays, LIMIT),
         scanRoots().catch(() => []),
       ]);
       if (id !== loadId) return;
@@ -224,10 +244,15 @@
       loadedFor[target] = key;
       // Only what is still listed in one of the lists can stay picked.
       for (const path of Object.keys(picked)) {
-        if (![...lists.large, ...lists.downloads].some((f) => f.path === path)) delete picked[path];
+        if (![...lists.large, ...lists.downloads, ...lists.partials].some((f) => f.path === path))
+          delete picked[path];
       }
     } catch (e) {
-      if (id === loadId) error = String(e);
+      if (id === loadId) {
+        error = String(e);
+        // What could not be looked at has no list, not an old one.
+        if (target !== "duplicates") lists = { ...lists, [target]: [] };
+      }
     } finally {
       if (id === loadId) loading = false;
     }
@@ -239,6 +264,7 @@
     void settings.cleanupAgeDays;
     void settings.cleanupDownloadsDays;
     void settings.cleanupDupMinMb;
+    void settings.cleanupPartialDays;
     void mode;
     // Back on a list already looked up for these settings: nothing to do.
     if (loadedFor[mode] !== settingsKey()) load();
@@ -246,7 +272,7 @@
 
   /** Everything is out of date once files have moved: forget the lists and look again. */
   async function refreshAll() {
-    lists = { large: [], downloads: [] };
+    lists = { large: [], downloads: [], partials: [] };
     groups = [];
     for (const key of Object.keys(keep)) delete keep[key];
     for (const key of Object.keys(skipped)) delete skipped[key];
@@ -261,7 +287,7 @@
     if (busy || !plan.count) return;
     // What the button promised, taken before anything is sent; the inputs are locked while
     // it runs.
-    const { singles, dupGroups, heldBack, keptPaths } = plan;
+    const { singles, partials, dupGroups, heldBack, keptPaths } = plan;
     moving = true;
     error = "";
     const jobs: number[] = [];
@@ -276,6 +302,12 @@
         leftAlone += done.leftAlone;
         if (done.job !== null) jobs.push(done.job);
         for (const f of singles) delete picked[f.path];
+      }
+      if (partials.length) {
+        const done = await cleanupTrashPartials(partials);
+        leftAlone += done.leftAlone;
+        if (done.job !== null) jobs.push(done.job);
+        for (const f of partials) delete picked[f.path];
       }
       if (dupGroups.length) {
         const done = await cleanupTrashDuplicates(dupGroups);
@@ -386,6 +418,16 @@
     >
       Duplicates
     </button>
+    <button
+      class:chosen={mode === "partials"}
+      aria-pressed={mode === "partials"}
+      onclick={() => {
+        mode = "partials";
+        included.partials = true;
+      }}
+    >
+      Unfinished copies
+    </button>
   </div>
 
   <div class="filters">
@@ -398,6 +440,18 @@
         >
           {#each DUPLICATE_SIZES_MB as mb (mb)}
             <option value={mb}>{sizeLabel(mb)}</option>
+          {/each}
+        </select>
+      </label>
+    {:else if mode === "partials"}
+      <label>
+        Left alone for
+        <select
+          value={settings.cleanupPartialDays}
+          onchange={(e) => updateSettings({ cleanupPartialDays: Number(e.currentTarget.value) })}
+        >
+          {#each PARTIAL_AGES_DAYS as days (days)}
+            <option value={days}>{ageLabel(days)}</option>
           {/each}
         </select>
       </label>
@@ -537,7 +591,10 @@
         </p>
       {:else if !files.length}
         <p class="empty" role="status">
-          {#if mode === "downloads"}
+          {#if mode === "partials"}
+            No unfinished copy has been left alone for {ageLabel(settings.cleanupPartialDays)},
+            among the scanned folders and files of 1 MB or more.
+          {:else if mode === "downloads"}
             No installer or archive in Downloads has been untouched for {ageLabel(
               settings.cleanupDownloadsDays,
             )}.
@@ -548,7 +605,15 @@
           {/if}
         </p>
       {:else}
-        {#if mode === "downloads"}
+        {#if mode === "partials"}
+          <p class="note">
+            A copy leaves one of these behind when it is stopped before it finishes. Check each one
+            before you move it: if Folio told you a copy could not be renamed and is complete at a
+            name ending in .folio-partial, that one is your copy, not a leftover. Nothing is listed
+            while a copy or move is running. A folder is moved whole. Only scanned folders are
+            searched, and a single file under 1 MB is not listed.
+          </p>
+        {:else if mode === "downloads"}
           <p class="note">
             Archives can be the only copy of something. A folder with other files in it (an unpacked
             program) is skipped.
@@ -574,6 +639,7 @@
                   <span class="fname">{name(f.path)}</span>
                   <span class="where">{parentOf(f.path) ?? ""}</span>
                 </span>
+                {#if "isDir" in f && f.isDir}<span class="muted">folder</span>{/if}
                 <span class="muted">{formatDate(f.modified * 1000)}</span>
                 <span class="size">{formatSize(f.size)}</span>
               </label>

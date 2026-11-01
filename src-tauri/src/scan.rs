@@ -730,6 +730,18 @@ impl Scanner {
         .collect()
     }
 
+    /// Scanned folders and files (of 1 MB or more) whose names say they are unfinished copies,
+    /// as the scan spelled them, up to `limit`.
+    pub fn partial_candidates(&self, limit: usize) -> rusqlite::Result<Vec<String>> {
+        let db = self.db();
+        let mut stmt = db.prepare(
+            "SELECT display FROM dirs WHERE path LIKE '%.folio-partial'
+             UNION SELECT display FROM big WHERE path LIKE '%.folio-partial' LIMIT ?1",
+        )?;
+        stmt.query_map([i64::try_from(limit).unwrap_or(i64::MAX)], |r| r.get(0))?
+            .collect()
+    }
+
     /// Every scanned root, with its size.
     pub fn roots(&self) -> rusqlite::Result<Vec<RootInfo>> {
         let db = self.db();

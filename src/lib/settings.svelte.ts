@@ -13,6 +13,8 @@ export const CLEANUP_SIZES_MB = [10, 50, 100, 500, 1000, 5000] as const;
 export const CLEANUP_AGES_DAYS = [30, 90, 180, 365, 730] as const;
 /** The smallest file a duplicate search looks at, in MB (the scan keeps files from 1 MB). */
 export const DUPLICATE_SIZES_MB = [1, 10, 50, 100, 500] as const;
+/** How long an unfinished copy must have been left alone to be suggested. */
+export const PARTIAL_AGES_DAYS = [3, 7, 14, 30, 90] as const;
 export const DOWNLOAD_AGES_DAYS = [14, 30, 60, 90, 180, 365] as const;
 
 export interface Settings {
@@ -36,6 +38,8 @@ export interface Settings {
   cleanupDownloadsDays: number;
   /** Duplicates are looked for among files at least this many MB big. */
   cleanupDupMinMb: number;
+  /** Unfinished copies untouched for this many days are suggested. */
+  cleanupPartialDays: number;
 }
 
 export const DEFAULTS: Settings = {
@@ -50,6 +54,7 @@ export const DEFAULTS: Settings = {
   cleanupAgeDays: 365,
   cleanupDownloadsDays: 90,
   cleanupDupMinMb: 10,
+  cleanupPartialDays: 7,
 };
 
 /** The allowed delay closest to `ms`, so a hand-edited value still shows in the list. */
@@ -95,6 +100,9 @@ function read(): Settings {
     cleanupDupMinMb: (DUPLICATE_SIZES_MB as readonly unknown[]).includes(saved.cleanupDupMinMb)
       ? (saved.cleanupDupMinMb as number)
       : DEFAULTS.cleanupDupMinMb,
+    cleanupPartialDays: (PARTIAL_AGES_DAYS as readonly unknown[]).includes(saved.cleanupPartialDays)
+      ? (saved.cleanupPartialDays as number)
+      : DEFAULTS.cleanupPartialDays,
     pinnedFolders: Array.isArray(saved.pinnedFolders)
       ? saved.pinnedFolders.filter(
           (p, i, all): p is string => typeof p === "string" && !!p && all.indexOf(p) === i,

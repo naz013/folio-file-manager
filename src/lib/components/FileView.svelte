@@ -89,6 +89,9 @@
     folderTint: (path: string) => string | null;
   } = $props();
 
+  /** Folio builds a copy under this name and only renames it once it is complete. */
+  const isPartial = (name: string) => name.toLowerCase().endsWith(".folio-partial");
+
   let scroller: HTMLDivElement;
   let scrollTop = $state(0);
   let width = $state(0);
@@ -391,9 +394,11 @@
         {:else}
           {@const dots = tagColors(entry.path)}
           <span class="name"
-            >{entry.name}{#if dots.length}<span
-                class="dots"
-                title={dots.map((d) => d.name).join(", ")}
+            >{entry.name}{#if isPartial(entry.name)}<span
+                class="partial"
+                title="An unfinished copy made by Folio. It is left behind when a copy is stopped, and can be cleaned up from Cleanup."
+                >incomplete copy</span
+              >{/if}{#if dots.length}<span class="dots" title={dots.map((d) => d.name).join(", ")}
                 >{#each dots as d (d.name)}<i style:background={d.color}></i>{/each}</span
               >{/if}</span
           >
@@ -439,6 +444,17 @@
   .tile,
   .row {
     position: absolute;
+  }
+
+  .partial {
+    margin-left: var(--space-xs);
+    padding: 0 var(--space-xs);
+    border-radius: var(--radius-xs);
+    background: var(--bg-control);
+    color: var(--text-secondary);
+    font-size: var(--font-size-caption);
+    vertical-align: middle;
+    white-space: nowrap;
   }
 
   .dots {
