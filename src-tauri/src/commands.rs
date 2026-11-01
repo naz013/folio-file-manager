@@ -1091,16 +1091,20 @@ pub struct CleanupTrash {
 
 /// Moves files from a cleanup list to the Recycle Bin, but only those still exactly as
 /// listed (same size, not changed since) and still allowed: the list may be old. Anything
-/// else is left alone. Which of them fit in the drive's bin is decided when the job runs.
+/// else is left alone, as is a file that is one of the `keep` paths (the copies groups of
+/// duplicates keep) or the same file as another item. Which of them fit in the drive's bin
+/// is decided when the job runs.
 #[tauri::command(async)]
 pub fn cleanup_trash(
     app: tauri::AppHandle,
     window: tauri::WebviewWindow,
     queue: tauri::State<'_, Arc<Queue>>,
     items: Vec<BigFile>,
+    keep: Vec<String>,
 ) -> CleanupTrash {
     let home = app.path().home_dir().ok();
-    let ok: Vec<BigFile> = cleanup::still_as_listed(&items, cleanup_skips(home.clone()))
+    let still = cleanup::still_as_listed(&items, cleanup_skips(home.clone()));
+    let ok: Vec<BigFile> = cleanup::without_aliases(still, &keep)
         .into_iter()
         .map(|f| BigFile {
             path: f.path.clone(),
@@ -1122,7 +1126,10 @@ pub fn cleanup_trash(
             .into_iter()
             .filter(|f| targets.iter().any(|t| t.to_string_lossy() == f.path))
             .collect();
-        let still = cleanup::still_as_listed(&wanted, cleanup_skips(home));
+        let still = cleanup::without_aliases(
+            cleanup::still_as_listed(&wanted, cleanup_skips(home)),
+            &keep,
+        );
         let fits = cleanup::within_bin(still.clone(), crate::platform::recycle_limit);
         let no_room = still.len() - fits.len();
         Picked {

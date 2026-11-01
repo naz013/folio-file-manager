@@ -790,6 +790,38 @@ pub fn removable_copies(
     (ok, held_back)
 }
 
+/// `items` with repeats taken out (the same file under two spellings or two lists) and
+/// without any file that is, or is a link to, one of the `keep` paths: the copies that
+/// groups of duplicates keep. Moving one of those with a plain list would take the copy
+/// a group relies on.
+pub fn without_aliases<'a>(items: Vec<&'a BigFile>, keep: &[String]) -> Vec<&'a BigFile> {
+    let kept_places: Vec<String> = keep.iter().map(|p| same_spelling(Path::new(p))).collect();
+    let kept_ids: Vec<String> = keep
+        .iter()
+        .filter_map(|p| crate::ops::identity(Path::new(p)))
+        .collect();
+    let mut seen_places: Vec<String> = Vec::new();
+    let mut seen_ids: Vec<String> = Vec::new();
+    items
+        .into_iter()
+        .filter(|f| {
+            let path = Path::new(&f.path);
+            let place = same_spelling(path);
+            let id = crate::ops::identity(path);
+            let is_kept =
+                kept_places.contains(&place) || id.as_ref().is_some_and(|id| kept_ids.contains(id));
+            let repeat =
+                seen_places.contains(&place) || id.as_ref().is_some_and(|id| seen_ids.contains(id));
+            if is_kept || repeat {
+                return false;
+            }
+            seen_places.push(place);
+            seen_ids.extend(id);
+            true
+        })
+        .collect()
+}
+
 /// The items of a list shown earlier that are still exactly as listed, safe to move: same
 /// size, not changed since, not protected. Anything else is left alone.
 pub fn still_as_listed(items: &[BigFile], skip: impl Fn(&Path, u64) -> bool) -> Vec<&BigFile> {
@@ -1241,6 +1273,22 @@ mod tests {
                 .map(|p| p.to_string_lossy().into_owned())
                 .collect(),
         }
+    }
+
+    #[test]
+    fn a_plain_list_never_takes_the_copy_a_group_keeps_or_the_same_file_twice() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = put_bytes(dir.path(), "a.bin", 1, 100, 30);
+        let b = put_bytes(dir.path(), "b.bin", 1, 100, 20);
+        let link = dir.path().join("b-link.bin");
+        std::fs::hard_link(&b, &link).unwrap();
+        let listed = reviewed(&[&a, &b, &link], &[]).files;
+        let items: Vec<&BigFile> = listed.iter().chain(listed.iter().take(1)).collect();
+        let keep = vec![b.to_string_lossy().into_owned()];
+        let left = without_aliases(items, &keep);
+        // `a` once (it was listed twice); `b` and its hard link are the copy that stays.
+        assert_eq!(left.len(), 1);
+        assert!(left[0].path.ends_with("a.bin"));
     }
 
     #[test]

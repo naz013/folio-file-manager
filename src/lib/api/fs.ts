@@ -164,7 +164,9 @@ export interface CleanupTrash {
   leftAlone: number;
 }
 /** Moves cleanup-listed files to the Recycle Bin, those still exactly as listed. */
-export const cleanupTrash = (items: BigFile[]) => invoke<CleanupTrash>("cleanup_trash", { items });
+/** `keep` are the copies groups of duplicates keep: never moved from a plain list. */
+export const cleanupTrash = (items: BigFile[], keep: string[]) =>
+  invoke<CleanupTrash>("cleanup_trash", { items, keep });
 export interface Drive {
   path: string;
   total: number;
