@@ -208,6 +208,13 @@
     ),
   );
 
+  /** A rubber band over the empty space selects these items. */
+  function bandSelect(paths: string[]) {
+    selection.clear();
+    for (const p of paths) selection.add(p);
+    cursor = anchor = paths.length ? visible.findIndex((e) => e.path === paths.at(-1)) : -1;
+  }
+
   /** Clicking a header sorts by it; clicking it again reverses the order. */
   function sortBy(key: SortKey) {
     keepCursor(() => {
@@ -1825,6 +1832,7 @@
       {springPath}
       {springMs}
       {tagColors}
+      onband={bandSelect}
       {sort}
       onsort={sortBy}
       folderSize={(p) => folderSizes[sizeKey(p)]}

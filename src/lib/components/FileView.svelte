@@ -8,6 +8,9 @@
   const GRID_PAD_Y = 20;
   // List geometry (matches "File Row").
   const ROW_H = 32;
+  /** How close to the top or bottom edge (px) a rubber band scrolls the list, and how fast. */
+  const EDGE_ZONE = 24;
+  const EDGE_STEP = 24;
   const LIST_PAD_X = 16;
   const LIST_PAD_Y = 4;
   /** Extra rows rendered above and below the viewport. */
@@ -44,10 +47,13 @@
     springPath,
     springMs,
     tagColors,
+    onband,
     sort,
     onsort,
     folderSize,
   }: {
+    /** The selection a rubber band drawn over the empty space gives: these paths. */
+    onband: (paths: string[]) => void;
     /** What the list is ordered by, shown on the column headers. */
     sort: SortState;
     onsort: (key: SortKey) => void;
@@ -85,6 +91,14 @@
   let width = $state(0);
   let height = $state(0);
   let press: { x: number; y: number; entry: Entry } | null = null;
+  let canvas: HTMLDivElement;
+
+  /** A rubber band being drawn, in canvas coordinates (scrolling included). */
+  let band = $state<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  /** Where a press on the empty space began, until it has moved far enough to be a band. */
+  let bandStart: { x: number; y: number; base: string[] } | null = null;
+  /** The click that ends a band must not clear what the band selected. */
+  let banded = false;
 
   let grid = $derived(view === "grid");
   let padX = $derived(grid ? GRID_PAD_X : LIST_PAD_X);
@@ -122,7 +136,107 @@
   }
 
   function backgroundClick(e: MouseEvent) {
+    if (banded) {
+      banded = false;
+      return;
+    }
     if (!(e.target as HTMLElement).closest(".tile, .row")) onbackgroundclick();
+  }
+
+  /** The point under the pointer in canvas coordinates. */
+  function canvasPoint(e: PointerEvent) {
+    const box = canvas.getBoundingClientRect();
+    return { x: e.clientX - box.left, y: e.clientY - box.top };
+  }
+
+  function bandDown(e: PointerEvent) {
+    // Only the empty space starts a band, and not the scrollbar.
+    const bare = e.target === scroller || e.target === canvas;
+    if (e.button !== 0 || !bare || e.offsetX > scroller.clientWidth) return;
+    // Starting a band takes focus off a rename field or the path bar.
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    const { x, y } = canvasPoint(e);
+    // With Ctrl or Shift the band adds to what is selected.
+    bandStart = { x, y, base: e.ctrlKey || e.shiftKey || e.metaKey ? [...selection] : [] };
+    scroller.setPointerCapture(e.pointerId);
+  }
+
+  /** The items a rectangle touches, from the layout alone, so no item needs to be on screen. */
+  function indicesIn(left: number, top: number, right: number, bottom: number): number[] {
+    const found: number[] = [];
+    const first = Math.max(0, Math.floor((top - padY) / rowH));
+    const last = Math.min(rows - 1, Math.floor((bottom - padY) / rowH));
+    for (let r = first; r <= last; r++) {
+      const itemTop = padY + r * rowH;
+      if (bottom < itemTop || top > itemTop + (grid ? TILE_H : ROW_H)) continue;
+      for (let c = 0; c < cols; c++) {
+        if (grid) {
+          const itemLeft = padX + c * (TILE_W + GAP_X);
+          if (right < itemLeft || left > itemLeft + TILE_W) continue;
+        }
+        const index = r * cols + c;
+        if (index < entries.length) found.push(index);
+      }
+    }
+    return found;
+  }
+
+  /** Where the pointer was last seen, in client coordinates, while a band is being drawn. */
+  let lastPointer = { x: 0, y: 0 };
+  let bandFrame = 0;
+
+  /** Redraws the band and the selection from the last pointer position. */
+  function updateBand() {
+    if (!bandStart) return;
+    const box = canvas.getBoundingClientRect();
+    const x = lastPointer.x - box.left;
+    const y = lastPointer.y - box.top;
+    if (!band && Math.hypot(x - bandStart.x, y - bandStart.y) < DRAG_THRESHOLD) return;
+    band = { x0: bandStart.x, y0: bandStart.y, x1: x, y1: y };
+    const hit = indicesIn(
+      Math.min(band.x0, band.x1),
+      Math.min(band.y0, band.y1),
+      Math.max(band.x0, band.x1),
+      Math.max(band.y0, band.y1),
+    ).map((i) => entries[i].path);
+    onband([...new Set([...bandStart.base, ...hit])]);
+  }
+
+  /** While a band is drawn the list scrolls when the pointer rests near an edge, and the band
+   * follows the list however it scrolled (the wheel included). */
+  function bandLoop() {
+    bandFrame = 0;
+    if (!bandStart) return;
+    if (band) {
+      const box = scroller.getBoundingClientRect();
+      if (lastPointer.y < box.top + EDGE_ZONE) scroller.scrollTop -= EDGE_STEP;
+      else if (lastPointer.y > box.bottom - EDGE_ZONE) scroller.scrollTop += EDGE_STEP;
+      updateBand();
+    }
+    bandFrame = requestAnimationFrame(bandLoop);
+  }
+
+  function bandMove(e: PointerEvent) {
+    if (!bandStart) return;
+    if (!(e.buttons & 1)) {
+      bandUp();
+      return;
+    }
+    lastPointer = { x: e.clientX, y: e.clientY };
+    updateBand();
+    if (!bandFrame) bandFrame = requestAnimationFrame(bandLoop);
+  }
+
+  function bandUp() {
+    cancelAnimationFrame(bandFrame);
+    bandFrame = 0;
+    if (band) {
+      // The click that ends the drag comes right after; it must not clear the selection.
+      banded = true;
+      setTimeout(() => (banded = false), 0);
+    }
+    band = null;
+    bandStart = null;
   }
 
   function position(index: number) {
@@ -190,6 +304,14 @@
   bind:this={scroller}
   bind:clientWidth={width}
   bind:clientHeight={height}
+  onpointerdown={bandDown}
+  onmousedown={(e) => {
+    // No text selection while a band is drawn over the empty space.
+    if (e.target === scroller || e.target === canvas) e.preventDefault();
+  }}
+  onpointermove={bandMove}
+  onpointerup={bandUp}
+  onpointercancel={bandUp}
   onscroll={() => (scrollTop = scroller.scrollTop)}
   onclick={backgroundClick}
   oncontextmenu={(e) => {
@@ -198,7 +320,16 @@
   }}
   role="presentation"
 >
-  <div class="canvas" style:height="{padY * 2 + rows * rowH}px">
+  <div class="canvas" bind:this={canvas} style:height="{padY * 2 + rows * rowH}px">
+    {#if band}
+      <div
+        class="band"
+        style:left="{Math.min(band.x0, band.x1)}px"
+        style:top="{Math.min(band.y0, band.y1)}px"
+        style:width="{Math.abs(band.x1 - band.x0)}px"
+        style:height="{Math.abs(band.y1 - band.y0)}px"
+      ></div>
+    {/if}
     {#each visible as { entry, index } (entry.path)}
       {@const selected = selection.has(entry.path)}
       <!-- Keyboard navigation for items is handled at window level in +page.svelte. -->
@@ -286,6 +417,16 @@
     flex: 1;
     overflow-y: auto;
     overflow-x: hidden;
+  }
+
+  .band {
+    position: absolute;
+    z-index: 2;
+    border: 1px solid var(--accent-default);
+    border-radius: var(--radius-xs);
+    background: var(--accent-subtle);
+    opacity: 0.6;
+    pointer-events: none;
   }
 
   .canvas {
