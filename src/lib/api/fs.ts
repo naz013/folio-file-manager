@@ -104,6 +104,23 @@ export const scanCancel = () => invoke<void>("scan_cancel");
 export const scanChildren = (dir: string) => invoke<SizedDir[]>("scan_children", { dir });
 export const scanLarge = (min: number, limit: number) =>
   invoke<BigFile[]>("scan_large", { min, limit });
+export interface Drive {
+  path: string;
+  total: number;
+  free: number;
+}
+export const listDrives = () => invoke<Drive[]>("list_drives");
+/** Bytes per category in a scanned folder: Documents, Images, Video, Audio, Archives, Apps, Other. */
+export const scanCategories = (dir: string) => invoke<number[]>("scan_categories", { dir });
+export const SCAN_CATEGORIES = [
+  "Documents",
+  "Images",
+  "Video",
+  "Audio",
+  "Archives",
+  "Apps",
+  "Other",
+] as const;
 export const scanRunning = () => invoke<boolean>("scan_running");
 /** The size of a scanned folder: [bytes, files], or null if it hasn't been scanned. */
 export const scanSize = (dir: string) => invoke<[number, number] | null>("scan_size", { dir });

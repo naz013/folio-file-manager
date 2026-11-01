@@ -82,6 +82,7 @@
   import { settings, startPath, updateSettings } from "$lib/settings.svelte";
   import SettingsDialog from "$lib/components/SettingsDialog.svelte";
   import CrashPrompt from "$lib/components/CrashPrompt.svelte";
+  import StorageView from "$lib/components/StorageView.svelte";
   import {
     applyTheme,
     loadTheme,
@@ -102,6 +103,7 @@
   let view = $derived<View>(settings.defaultView);
 
   let settingsOpen = $state(false);
+  let storageOpen = $state(false);
   /** A size scan is running (it is shared by every window). */
   let scanning = $state(false);
 
@@ -1293,6 +1295,7 @@
         theme !== "system",
       ),
       ...action("Settings", "Ctrl+,", () => (settingsOpen = true)),
+      ...action("Storage breakdown", "", () => (storageOpen = true)),
       ...action("Scan this folder for sizes", "", startScan, !scanning && !tagView),
       ...action("Cancel the size scan", "", () => scanCancel(), scanning),
     ];
@@ -1611,7 +1614,8 @@
 
   function onkeydown(e: KeyboardEvent) {
     // A dialog handles its own keys; nothing behind it may act on them.
-    if (asking || menu || settingsOpen || askCrash || tagsOpen || paletteOpen) return;
+    if (asking || menu || settingsOpen || askCrash || storageOpen || tagsOpen || paletteOpen)
+      return;
     if (look) {
       // Quick Look owns the keyboard, but the audio and video controls keep Space and the
       // arrows (play, seek, volume).
@@ -1849,6 +1853,17 @@
       oncreate={createTag}
       ondelete={removeTag}
       onclose={() => (tagsOpen = false)}
+    />
+  {/if}
+
+  {#if storageOpen}
+    <StorageView
+      start={path}
+      onclose={() => (storageOpen = false)}
+      onopen={(p) => {
+        storageOpen = false;
+        navigate(p);
+      }}
     />
   {/if}
 

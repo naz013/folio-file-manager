@@ -46,11 +46,43 @@ fn parent_key(path: &Path) -> Option<String> {
     path.parent().map(key)
 }
 
+/// What the space breakdown sorts files into, by extension.
+pub const CATEGORIES: [&str; 7] = [
+    "Documents",
+    "Images",
+    "Video",
+    "Audio",
+    "Archives",
+    "Apps",
+    "Other",
+];
+
+/// The index into [`CATEGORIES`] of a file name.
+fn category(name: &std::ffi::OsStr) -> usize {
+    let ext = Path::new(name)
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "doc" | "docx" | "odt" | "rtf" | "txt" | "md" | "pdf" | "xls" | "xlsx" | "ods" | "csv"
+        | "ppt" | "pptx" | "odp" | "epub" => 0,
+        "jpg" | "jpeg" | "png" | "gif" | "bmp" | "webp" | "heic" | "tif" | "tiff" | "svg"
+        | "raw" | "cr2" | "nef" | "psd" => 1,
+        "mp4" | "mkv" | "avi" | "mov" | "wmv" | "webm" | "m4v" | "flv" => 2,
+        "mp3" | "wav" | "flac" | "aac" | "ogg" | "m4a" | "wma" | "opus" => 3,
+        "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz" | "iso" | "cab" => 4,
+        "exe" | "dll" | "msi" | "sys" | "apk" | "appx" | "msix" | "jar" => 5,
+        _ => 6,
+    }
+}
+
 /// What was found directly in one folder.
 #[derive(Default, Clone)]
 struct Acc {
     own: u64,
     own_files: u64,
+    /// Bytes per category.
+    cats: [u64; CATEGORIES.len()],
 }
 
 struct Big {
@@ -105,17 +137,19 @@ fn walk(root: &Path, cancel: &AtomicBool, progress: &dyn Fn(u64, u64)) -> Result
         } else if file_type.is_file() {
             let (size, mtime) = entry.client_state.unwrap_or((0, 0));
             let dir = entry.parent_path();
+            let cat = category(entry.file_name());
             if let Some(acc) = tree.dirs.get_mut(dir) {
                 acc.own += size;
                 acc.own_files += 1;
+                acc.cats[cat] += size;
             } else {
-                tree.dirs.insert(
-                    dir.to_path_buf(),
-                    Acc {
-                        own: size,
-                        own_files: 1,
-                    },
-                );
+                let mut acc = Acc {
+                    own: size,
+                    own_files: 1,
+                    ..Acc::default()
+                };
+                acc.cats[cat] = size;
+                tree.dirs.insert(dir.to_path_buf(), acc);
             }
             tree.files += 1;
             tree.bytes += size;
@@ -159,6 +193,9 @@ fn totals(tree: &Tree) -> HashMap<&Path, (u64, u64)> {
     sums
 }
 
+/// Bumped when the cache gains data that older scans lack.
+const SCHEMA_VERSION: i64 = 1;
+
 const SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS roots(
         root TEXT PRIMARY KEY, display TEXT NOT NULL, scanned_at INTEGER NOT NULL);
@@ -172,6 +209,9 @@ const SCHEMA: &str = "
         path TEXT PRIMARY KEY, display TEXT NOT NULL, dir TEXT NOT NULL, root TEXT NOT NULL,
         size INTEGER NOT NULL, mtime INTEGER NOT NULL);
     CREATE INDEX IF NOT EXISTS big_dir ON big(dir);
+    CREATE TABLE IF NOT EXISTS dir_cats(
+        path TEXT NOT NULL, cat INTEGER NOT NULL, bytes INTEGER NOT NULL,
+        PRIMARY KEY (path, cat)) WITHOUT ROWID;
     CREATE INDEX IF NOT EXISTS big_size ON big(size DESC);
 ";
 
@@ -220,6 +260,7 @@ fn name_of(path: &str) -> String {
 struct Folder {
     own: u64,
     own_files: u64,
+    cats: [u64; CATEGORIES.len()],
     big: Vec<(PathBuf, u64, i64)>,
     subdirs: HashMap<String, PathBuf>,
 }
@@ -230,6 +271,7 @@ fn read_folder(dir: &Path) -> Option<Folder> {
     let mut folder = Folder {
         own: 0,
         own_files: 0,
+        cats: [0; CATEGORIES.len()],
         big: Vec::new(),
         subdirs: HashMap::new(),
     };
@@ -244,6 +286,7 @@ fn read_folder(dir: &Path) -> Option<Folder> {
             let (size, mtime) = entry.metadata().map_or((0, 0), |m| (m.len(), mtime_of(&m)));
             folder.own += size;
             folder.own_files += 1;
+            folder.cats[category(&entry.file_name())] += size;
             if size >= BIG_MIN {
                 folder.big.push((entry.path(), size, mtime));
             }
@@ -285,6 +328,15 @@ impl Scanner {
              PRAGMA busy_timeout = 5000;",
         )?;
         db.execute_batch(SCHEMA)?;
+        // A cache from before the category sums has none for what it holds: drop it, so
+        // the roots are scanned again rather than shown with a wrong breakdown.
+        let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if version < SCHEMA_VERSION {
+            db.execute_batch(
+                "DELETE FROM roots; DELETE FROM dirs; DELETE FROM big; DELETE FROM dir_cats;",
+            )?;
+            db.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;
+        }
         Ok(Self {
             inner: Arc::new(Inner {
                 db: Mutex::new(db),
@@ -452,6 +504,7 @@ impl Scanner {
         let Some(Folder {
             own,
             own_files,
+            cats,
             big,
             subdirs,
         }) = read_folder(dir)
@@ -514,21 +567,7 @@ impl Scanner {
             "UPDATE dirs SET own = ?2, own_files = ?3 WHERE path = ?1",
             params![dir_key, as_i64(own), as_i64(own_files)],
         )?;
-        tx.execute("DELETE FROM big WHERE dir = ?1", [&dir_key])?;
-        for (path, size, mtime) in &big {
-            tx.execute(
-                "INSERT OR REPLACE INTO big (path, display, dir, root, size, mtime)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    key(path),
-                    path.to_string_lossy(),
-                    dir_key,
-                    root_key,
-                    as_i64(*size),
-                    mtime
-                ],
-            )?;
-        }
+        replace_own(&tx, &dir_key, &root_key, &cats, &big)?;
         add_to_ancestors(&tx, dir, delta_bytes, delta_files)?;
         tx.commit()
     }
@@ -561,6 +600,28 @@ impl Scanner {
                 |r| Ok((as_u64(r.get(0)?), as_u64(r.get(1)?))),
             )
             .ok()
+    }
+
+    /// Bytes per category ([`CATEGORIES`]) in `dir` and everything below it.
+    pub fn categories(&self, dir: &Path) -> rusqlite::Result<Vec<u64>> {
+        let dir_key = key(dir);
+        let (start, end) = prefix_range(&dir_key);
+        let db = self.db();
+        let mut stmt = db.prepare(
+            "SELECT cat, SUM(bytes) FROM dir_cats
+             WHERE path = ?1 OR (path >= ?2 AND path < ?3) GROUP BY cat",
+        )?;
+        let mut out = vec![0; CATEGORIES.len()];
+        let rows = stmt.query_map(params![dir_key, start, end], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+        })?;
+        for row in rows {
+            let (cat, bytes) = row?;
+            if let Some(slot) = usize::try_from(cat).ok().and_then(|c| out.get_mut(c)) {
+                *slot = as_u64(bytes);
+            }
+        }
+        Ok(out)
     }
 
     /// The biggest files of at least `min` bytes, largest first.
@@ -681,6 +742,15 @@ fn insert_tree(
             as_i64(total_files),
         ])?;
     }
+    let mut cats = tx
+        .prepare_cached("INSERT OR REPLACE INTO dir_cats (path, cat, bytes) VALUES (?1, ?2, ?3)")?;
+    for (path, acc) in &tree.dirs {
+        for (cat, bytes) in acc.cats.iter().enumerate() {
+            if *bytes > 0 {
+                cats.execute(params![key(path), as_i64(cat as u64), as_i64(*bytes)])?;
+            }
+        }
+    }
     let mut big = tx.prepare_cached(
         "INSERT OR REPLACE INTO big (path, display, dir, root, size, mtime)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -694,6 +764,41 @@ fn insert_tree(
             as_i64(f.size),
             f.mtime
         ])?;
+    }
+    Ok(())
+}
+
+/// Replaces the category sums and big files kept for the files directly in one folder.
+fn replace_own(
+    tx: &rusqlite::Transaction<'_>,
+    dir_key: &str,
+    root_key: &str,
+    cats: &[u64],
+    big: &[(PathBuf, u64, i64)],
+) -> rusqlite::Result<()> {
+    tx.execute("DELETE FROM dir_cats WHERE path = ?1", [dir_key])?;
+    for (cat, bytes) in cats.iter().enumerate() {
+        if *bytes > 0 {
+            tx.execute(
+                "INSERT INTO dir_cats (path, cat, bytes) VALUES (?1, ?2, ?3)",
+                params![dir_key, as_i64(cat as u64), as_i64(*bytes)],
+            )?;
+        }
+    }
+    tx.execute("DELETE FROM big WHERE dir = ?1", [dir_key])?;
+    for (path, size, mtime) in big {
+        tx.execute(
+            "INSERT OR REPLACE INTO big (path, display, dir, root, size, mtime)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                key(path),
+                path.to_string_lossy(),
+                dir_key,
+                root_key,
+                as_i64(*size),
+                mtime
+            ],
+        )?;
     }
     Ok(())
 }
@@ -720,6 +825,10 @@ fn delete_subtree(tx: &rusqlite::Transaction<'_>, dir_key: &str) -> rusqlite::Re
         "DELETE FROM big WHERE dir = ?1 OR (dir >= ?2 AND dir < ?3)",
         params![dir_key, start, end],
     )?;
+    tx.execute(
+        "DELETE FROM dir_cats WHERE path = ?1 OR (path >= ?2 AND path < ?3)",
+        params![dir_key, start, end],
+    )?;
     Ok(())
 }
 
@@ -741,6 +850,10 @@ fn remove_subtree(db: &mut Connection, dir: &Path, dir_key: &str) -> rusqlite::R
     )?;
     tx.execute(
         "DELETE FROM big WHERE dir = ?1 OR (dir >= ?2 AND dir < ?3)",
+        params![dir_key, start, end],
+    )?;
+    tx.execute(
+        "DELETE FROM dir_cats WHERE path = ?1 OR (path >= ?2 AND path < ?3)",
         params![dir_key, start, end],
     )?;
     tx.execute(
@@ -897,6 +1010,41 @@ mod tests {
         }));
         assert!(caught.is_err());
         assert!(!s.is_running());
+    }
+
+    #[test]
+    fn bytes_are_sorted_into_categories_below_a_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        write(&dir.path().join("a.jpg"), 100);
+        write(&dir.path().join("sub/b.PNG"), 50);
+        write(&dir.path().join("sub/c.mp4"), 1_000);
+        write(&dir.path().join("sub/d.unknown"), 7);
+        let s = scanned(dir.path());
+        let all = s.categories(dir.path()).unwrap();
+        assert_eq!(all, [0, 150, 1_000, 0, 0, 0, 7]);
+        let sub = s.categories(&dir.path().join("sub")).unwrap();
+        assert_eq!(sub, [0, 50, 1_000, 0, 0, 0, 7]);
+        // A refresh keeps them current.
+        write(&dir.path().join("sub/e.mp3"), 30);
+        fs::remove_file(dir.path().join("sub/c.mp4")).unwrap();
+        s.refresh_dir(&dir.path().join("sub")).unwrap();
+        assert_eq!(s.categories(dir.path()).unwrap(), [0, 150, 0, 30, 0, 0, 7]);
+    }
+
+    #[test]
+    fn a_cache_from_before_the_categories_is_dropped() {
+        let dir = sample();
+        let file = tempfile::tempdir().unwrap();
+        let file = file.path().join("scan.sqlite");
+        {
+            let s = Scanner::open(Some(&file)).unwrap();
+            let flag = s.begin().unwrap();
+            s.scan(dir.path(), &flag, &|_, _| {}).unwrap();
+            s.db().execute_batch("PRAGMA user_version = 0").unwrap();
+        }
+        let s = Scanner::open(Some(&file)).unwrap();
+        assert_eq!(s.roots().unwrap(), []);
+        assert_eq!(s.size_of(dir.path()), None);
     }
 
     #[test]

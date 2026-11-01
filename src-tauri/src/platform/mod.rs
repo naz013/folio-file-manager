@@ -6,6 +6,8 @@ use std::path::Path;
 #[cfg(windows)]
 mod clipboard;
 #[cfg(windows)]
+mod drives;
+#[cfg(windows)]
 mod win;
 #[cfg(windows)]
 mod win_menu;
@@ -20,6 +22,36 @@ pub fn show_context_menu(
 ) -> Result<(), String> {
     let hwnd = ::windows::Win32::Foundation::HWND(hwnd as *mut std::ffi::c_void);
     win_menu::show(hwnd, paths, extended).map_err(|e| e.to_string())
+}
+
+/// A drive's root, capacity and free space in bytes.
+pub struct DriveInfo {
+    pub path: String,
+    pub total: u64,
+    pub free: u64,
+}
+
+/// The drives the space breakdown can scan. Elsewhere there is one root, `/`.
+pub fn list_drives() -> Vec<DriveInfo> {
+    #[cfg(windows)]
+    {
+        drives::list()
+            .into_iter()
+            .map(|d| DriveInfo {
+                path: d.path,
+                total: d.total,
+                free: d.free,
+            })
+            .collect()
+    }
+    #[cfg(not(windows))]
+    {
+        vec![DriveInfo {
+            path: "/".into(),
+            total: 0,
+            free: 0,
+        }]
+    }
 }
 
 /// Puts `paths` on the system clipboard as files, for another program to paste: moved if

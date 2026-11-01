@@ -268,6 +268,8 @@ pub fn run() {
             commands::scan_running,
             commands::scan_size,
             commands::scan_roots,
+            commands::scan_categories,
+            commands::list_drives,
             commands::crash_state,
             commands::crash_set,
             commands::crash_clear,

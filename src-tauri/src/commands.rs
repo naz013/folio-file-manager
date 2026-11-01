@@ -779,6 +779,34 @@ pub fn scan_large(
     scanner.large(min, limit).map_err(|e| e.to_string())
 }
 
+/// A drive with its capacity and free space.
+#[derive(Serialize)]
+pub struct Drive {
+    path: String,
+    total: u64,
+    free: u64,
+}
+
+#[tauri::command(async)]
+pub fn list_drives() -> Vec<Drive> {
+    crate::platform::list_drives()
+        .into_iter()
+        .map(|d| Drive {
+            path: d.path,
+            total: d.total,
+            free: d.free,
+        })
+        .collect()
+}
+
+/// Bytes per category in a scanned folder, in the order of [`crate::scan::CATEGORIES`].
+#[tauri::command(async)]
+pub fn scan_categories(scanner: tauri::State<'_, Scanner>, dir: String) -> CmdResult<Vec<u64>> {
+    scanner
+        .categories(&PathBuf::from(dir))
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command(async)]
 pub fn scan_roots(scanner: tauri::State<'_, Scanner>) -> CmdResult<Vec<RootInfo>> {
     scanner.roots().map_err(|e| e.to_string())
