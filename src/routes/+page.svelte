@@ -47,6 +47,8 @@
     queuePause,
     queueResume,
     renamePath,
+    renameMany,
+    type RenamePlan,
     sameVolume,
     saveTabs,
     modifierKeys,
@@ -70,6 +72,7 @@
   import ContextMenu, { type MenuItem } from "$lib/components/ContextMenu.svelte";
   import QuickLook from "$lib/components/QuickLook.svelte";
   import TagDialog from "$lib/components/TagDialog.svelte";
+  import BulkRenameDialog from "$lib/components/BulkRenameDialog.svelte";
   import TagChips from "$lib/components/TagChips.svelte";
   import Inspector from "$lib/components/Inspector.svelte";
   import Palette, { type PaletteItem } from "$lib/components/Palette.svelte";
@@ -1231,6 +1234,26 @@
     return out;
   });
 
+  let bulkOpen = $state(false);
+
+  // The selection changed under the dialog: it renames what it was opened with, so close it.
+  $effect(() => {
+    if (bulkOpen && selection.size < 2) bulkOpen = false;
+  });
+
+  /** Renames the batch in one undo step; resolves to an error message or null. */
+  async function renameBatch(plan: RenamePlan[]): Promise<string | null> {
+    try {
+      const to = await renameMany(plan);
+      notify(`Renamed ${plan.length} items`);
+      await refresh(to);
+      return null;
+    } catch (e) {
+      await refresh();
+      return String(e);
+    }
+  }
+
   async function createTag(name: string, color: string | null): Promise<string | null> {
     try {
       await tagCreate(name, color);
@@ -1324,6 +1347,7 @@
         one && selected()[0].isDir,
       ),
       ...action("Rename", "F2", () => (renaming = selected()[0]?.path ?? null), one),
+      ...action("Rename selected items…", "F2", () => (bulkOpen = true), selected().length > 1),
       ...action("Move to Recycle Bin", "Del", trashSelected, any),
       ...action("Quick Look", "Space", openQuickLook, any),
       ...action("Tags…", undefined, () => (tagsOpen = true), any),
@@ -1505,6 +1529,9 @@
       { label: "Cut", hint: "Ctrl+X", run: cutSelection },
       { label: "Copy", hint: "Ctrl+C", run: copySelection },
       ...(one ? [{ label: "Rename", hint: "F2", run: () => (renaming = one.path) }] : []),
+      ...(picked.length > 1
+        ? [{ label: "Rename…", hint: "F2", run: () => (bulkOpen = true) }]
+        : []),
       { label: "Tags…", run: () => (tagsOpen = true) },
       { label: "Move to Recycle Bin", hint: "Del", danger: true, run: trashSelected },
       "separator",
@@ -1704,6 +1731,7 @@
         if (shift || e.altKey || !selection.size) return null;
         return e.repeat ? ignore : () => toggleTag(Number(key));
       case "F2":
+        if (selection.size > 1 && !tagView) return () => (bulkOpen = true);
         return cursor >= 0 ? () => (renaming = visible[cursor].path) : null;
       case "Delete":
         return trashSelected;
@@ -1727,6 +1755,7 @@
       storageOpen ||
       binOpen ||
       tagsOpen ||
+      bulkOpen ||
       paletteOpen
     )
       return;
@@ -1989,6 +2018,10 @@
       ondelete={removeTag}
       onclose={() => (tagsOpen = false)}
     />
+  {/if}
+
+  {#if bulkOpen}
+    <BulkRenameDialog items={selected()} onapply={renameBatch} onclose={() => (bulkOpen = false)} />
   {/if}
 
   {#if binOpen}

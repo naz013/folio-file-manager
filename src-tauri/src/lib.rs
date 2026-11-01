@@ -248,6 +248,8 @@ pub fn run() {
             commands::show_context_menu,
             commands::trash_paths,
             commands::rename_path,
+            commands::check_renames,
+            commands::rename_many,
             commands::create_folder,
             commands::create_file,
             commands::open_terminal,

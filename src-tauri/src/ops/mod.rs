@@ -7,6 +7,7 @@ use std::fs;
 use std::io::{self, ErrorKind};
 use std::path::{Component, Path, PathBuf};
 
+pub mod bulk_rename;
 pub mod conflicts;
 mod cross_volume;
 #[cfg(windows)]

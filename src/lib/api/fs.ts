@@ -237,6 +237,16 @@ export const redoOperation = () => invoke<string>("redo");
 export const trashPaths = (targets: string[]) => invoke<number>("trash_paths", { targets });
 export const renamePath = (path: string, newName: string) =>
   invoke<string>("rename_path", { path, newName });
+/** One item of a batch rename and the name it should get. */
+export interface RenamePlan {
+  path: string;
+  newName: string;
+}
+/** Why each rename of the batch can't be done (null where it can), in order. */
+export const checkRenames = (plan: RenamePlan[]) =>
+  invoke<(string | null)[]>("check_renames", { plan });
+/** Renames the batch as one undo step; resolves to each item's new path. */
+export const renameMany = (plan: RenamePlan[]) => invoke<string[]>("rename_many", { plan });
 export const createFile = (parent: string, name: string) =>
   invoke<string>("create_file", { parent, name });
 export const openTerminal = (dir: string) => invoke<void>("open_terminal", { dir });

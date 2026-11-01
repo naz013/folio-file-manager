@@ -15,7 +15,7 @@ use crate::session::{Session, WindowTabs};
 use crate::shelf::{Shelf, ShelfItem};
 use crate::tags::{Tag, Tags};
 use crate::watch::DirWatcher;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::Manager;
@@ -399,6 +399,74 @@ pub async fn rename_path(
         result
             .map(|p| p.to_string_lossy().into_owned())
             .map_err(|e| e.to_string())
+    })
+    .await
+}
+
+/// One item of a batch rename and the name it should get.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenamePlan {
+    path: String,
+    new_name: String,
+}
+
+fn planned(plan: Vec<RenamePlan>) -> Vec<ops::bulk_rename::Planned> {
+    plan.into_iter()
+        .map(|p| ops::bulk_rename::Planned {
+            path: PathBuf::from(p.path),
+            new_name: p.new_name,
+        })
+        .collect()
+}
+
+/// Why each rename of a batch can't be done (`null` where it can), checked as a whole.
+#[tauri::command]
+pub async fn check_renames(plan: Vec<RenamePlan>) -> CmdResult<Vec<Option<String>>> {
+    blocking(move || Ok(ops::bulk_rename::check(&planned(plan)))).await
+}
+
+/// Renames a batch as one undo step. Nothing changes if any name is refused, and a batch
+/// that fails part way is put back. Returns the new path of each item, in order.
+#[tauri::command]
+pub async fn rename_many(app: tauri::AppHandle, plan: Vec<RenamePlan>) -> CmdResult<Vec<String>> {
+    blocking(move || {
+        let plan = planned(plan);
+        let journal = app.state::<Journal>();
+        let items: Vec<PathBuf> = plan.iter().map(|p| p.path.clone()).collect();
+        let pending = begin(&journal, &describe("Rename", &items))?;
+        let (done, result) = ops::bulk_rename::apply(&plan);
+        // An item parked under a temporary name is no longer there, so its identity is
+        // read from where it ended up: the later step that takes it from the temp name.
+        let mut ids: std::collections::HashMap<&PathBuf, Option<String>> =
+            std::collections::HashMap::new();
+        let mut steps: Vec<Step> = done
+            .iter()
+            .rev()
+            .map(|(from, to)| {
+                let id = ops::identity(to).or_else(|| ids.get(to).cloned().flatten());
+                ids.insert(from, id.clone());
+                Step::Rename {
+                    from: from.clone(),
+                    to: to.clone(),
+                    id,
+                }
+            })
+            .collect();
+        steps.reverse();
+        journal.finish(pending, &steps);
+        app.state::<Tags>().relocated_all(&done);
+        result?;
+        Ok(plan
+            .iter()
+            .map(|p| {
+                p.path
+                    .parent()
+                    .map_or_else(|| PathBuf::from(&p.new_name), |d| d.join(&p.new_name))
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect())
     })
     .await
 }
