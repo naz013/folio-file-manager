@@ -29,6 +29,32 @@ jobs:
         run: |
           v=$(node -p "require('./src-tauri/tauri.conf.json').version")
           [ "${GITHUB_REF_NAME}" = "v$v" ] || { echo "tag ${GITHUB_REF_NAME} != v$v"; exit 1; }
+      # Signing is on when the certificate secrets exist, and the build still works without
+      # them (an unsigned installer, which SmartScreen warns about). The certificate is
+      # imported for this job only; the runner is thrown away afterwards.
+      - name: Prepare code signing
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $config = '{}'
+          if ($env:WINDOWS_CERTIFICATE) {
+            $pfx = Join-Path $env:RUNNER_TEMP 'folio.pfx'
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+            $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+            $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+            Remove-Item $pfx
+            $config = @{ bundle = @{ windows = @{
+              certificateThumbprint = $cert.Thumbprint
+              digestAlgorithm = 'sha256'
+              timestampUrl = 'http://timestamp.digicert.com'
+            } } } | ConvertTo-Json -Depth 5
+            "SIGNED=true" >> $env:GITHUB_ENV
+          } else {
+            Write-Warning 'No WINDOWS_CERTIFICATE secret: this installer will NOT be signed.'
+          }
+          Set-Content -Path src-tauri/tauri.signing.conf.json -Value $config
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -41,4 +67,20 @@ jobs:
           releaseName: Folio ${{ github.ref_name }}
           releaseDraft: true
           includeUpdaterJson: true
-          args: --config src-tauri/tauri.release.conf.json
+          args: --config src-tauri/tauri.release.conf.json --config src-tauri/tauri.signing.conf.json
+
+      - name: Check the installer
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem src-tauri/target/release/bundle/nsis/*.exe | Select-Object -First 1
+          if (-not $installer) { throw 'No installer was built.' }
+          $mb = [math]::Round($installer.Length / 1MB, 1)
+          Write-Output "$($installer.Name): $mb MB"
+          if ($installer.Length -ge 15MB) { throw "Installer is $mb MB; the limit is 15 MB." }
+          if ($env:SIGNED -eq 'true') {
+            foreach ($file in @($installer.FullName, 'src-tauri/target/release/folio.exe')) {
+              $sig = Get-AuthenticodeSignature $file
+              if ($sig.Status -ne 'Valid') { throw "$file is not signed correctly: $($sig.Status)" }
+              if (-not $sig.TimeStamperCertificate) { throw "$file has no timestamp." }
+            }
+          }

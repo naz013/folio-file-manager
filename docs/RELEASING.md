@@ -25,6 +25,22 @@ The update endpoint is `releases/latest/download/latest.json` of the public rele
 repository named in `tauri.conf.json`. A private repository does not work: the app cannot sign
 in to download from it.
 
+## Code signing (Windows)
+
+An unsigned installer makes SmartScreen warn users. Signing is automatic when two more Actions
+secrets exist: `WINDOWS_CERTIFICATE` (the `.pfx` file, base64: `[Convert]::ToBase64String([IO.File]::ReadAllBytes("cert.pfx"))`)
+and `WINDOWS_CERTIFICATE_PASSWORD`. Without them the release still builds, unsigned, with a
+warning in the log. With them the workflow signs `folio.exe` and the installer with a timestamp
+and fails the build if either signature is not valid.
+
+This covers an OV or EV certificate exported as a `.pfx`. Most EV certificates and Azure Trusted
+Signing cannot be exported; for those, replace the "Prepare code signing" step with one that
+sets `bundle.windows.signCommand` in `tauri.signing.conf.json` (see the Tauri Windows signing
+guide) and keep the checks that follow. A new certificate starts with no SmartScreen reputation
+unless it is EV.
+
+The workflow also fails if the installer is 15 MB or more.
+
 ## Making a release
 
 1. Set the new version in `package.json`, `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`.
