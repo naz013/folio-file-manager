@@ -69,6 +69,12 @@ export const releasePreview = () => invoke<void>("preview_allow", { path: null }
 export const readTextPreview = (path: string) =>
   invoke<{ text: string; truncated: boolean }>("read_text_preview", { path });
 
+/** Puts the latest cut or copy on the system clipboard, so Explorer can paste it too. */
+export const clipboardMirror = (paths: string[], cut: boolean) =>
+  invoke<void>("clipboard_mirror", { paths, cut });
+/** Files cut or copied in another program since the last look, if any. */
+export const clipboardTake = () => invoke<[string[], boolean] | null>("clipboard_take");
+
 /** An item on the clipboard shelf, checked against the disk when it was listed. */
 export interface ShelfItem {
   path: string;

@@ -670,6 +670,20 @@ pub fn tags_in_dir(tags: tauri::State<'_, Tags>, dir: String) -> Vec<(String, Ve
     tags.in_dir(&PathBuf::from(dir))
 }
 
+// ---- System clipboard (Windows) ----
+
+/// Mirrors the latest cut or copy to the system clipboard so Explorer can paste it.
+#[tauri::command(async)]
+pub fn clipboard_mirror(paths: Vec<String>, cut: bool) -> CmdResult<()> {
+    crate::platform::clipboard_write_files(&self::paths(paths), cut)
+}
+
+/// Files cut or copied in another program since the last look: (paths, cut).
+#[tauri::command(async)]
+pub fn clipboard_take() -> Option<(Vec<String>, bool)> {
+    crate::platform::clipboard_take_files().map(|(paths, cut)| (strings(paths), cut))
+}
+
 // ---- Clipboard shelf ----
 
 #[tauri::command(async)]

@@ -205,6 +205,8 @@ pub fn run() {
             commands::tag_delete,
             commands::tag_toggle,
             commands::tag_files,
+            commands::clipboard_mirror,
+            commands::clipboard_take,
             commands::shelf_list,
             commands::shelf_add,
             commands::shelf_set_mode,

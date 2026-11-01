@@ -4,6 +4,8 @@
 use std::path::Path;
 
 #[cfg(windows)]
+mod clipboard;
+#[cfg(windows)]
 mod win;
 #[cfg(windows)]
 mod win_menu;
@@ -18,6 +20,34 @@ pub fn show_context_menu(
 ) -> Result<(), String> {
     let hwnd = ::windows::Win32::Foundation::HWND(hwnd as *mut std::ffi::c_void);
     win_menu::show(hwnd, paths, extended).map_err(|e| e.to_string())
+}
+
+/// Puts `paths` on the system clipboard as files, for another program to paste: moved if
+/// `cut`, else copied. Only Windows has a file clipboard to mirror to so far.
+pub fn clipboard_write_files(paths: &[std::path::PathBuf], cut: bool) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        clipboard::write_files(paths, cut)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (paths, cut);
+        Ok(())
+    }
+}
+
+/// Files another program put on the system clipboard since the last look, as (paths,
+/// whether they were cut). What Folio wrote itself is never returned, and neither is the
+/// same clipboard twice.
+pub fn clipboard_take_files() -> Option<(Vec<std::path::PathBuf>, bool)> {
+    #[cfg(windows)]
+    {
+        clipboard::take_files()
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
 }
 
 /// Renders the OS thumbnail (or file icon when no thumbnail exists) as PNG,

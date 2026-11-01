@@ -10,6 +10,8 @@
     tagCreate,
     tagDelete,
     tagList,
+    clipboardMirror,
+    clipboardTake,
     shelfAdd,
     shelfClear,
     shelfList,
@@ -633,6 +635,9 @@
 
   /** Pastes the shelf into the folder shown: what was cut moves, what was copied is copied. */
   async function paste() {
+    // Files cut or copied in Explorer since the last look arrive as a group on the shelf.
+    const outside = await clipboardTake().catch(() => null);
+    if (outside) await run(() => shelfAdd(outside[0], outside[1] ? "cut" : "copy"));
     // Another window may have used the shelf since it was last read.
     await loadShelf();
     await pasteItems(shelf);
@@ -684,6 +689,10 @@
     const paths = selected().map((e) => e.path);
     if (!paths.length) return;
     await run(() => shelfAdd(paths, mode));
+    // The latest batch also goes to the system clipboard, for Explorer.
+    await clipboardMirror(paths, mode === "cut").catch(() =>
+      notify("Could not put the files on the system clipboard", true),
+    );
     await loadShelf();
     notify(
       `Added ${plural(paths.length, "item")} to the shelf: ${mode === "cut" ? "move" : "copy"}`,
@@ -1143,7 +1152,7 @@
       ...action("New folder", "Ctrl+Shift+N", newFolder, !tagView),
       ...action("Copy", "Ctrl+C", copySelection, any),
       ...action("Cut", "Ctrl+X", cutSelection, any),
-      ...action("Paste", "Ctrl+V", paste, shelf.length > 0 && !tagView),
+      ...action("Paste", "Ctrl+V", paste, !tagView),
       ...action("Open the clipboard shelf", "Ctrl+Shift+V", () => (shelfOpen = true)),
       ...action("Open", "Enter", () => open(selected()[0]), one),
       ...action(
@@ -1337,7 +1346,7 @@
   function backgroundMenu(): MenuItem[] {
     return [
       { label: "New folder", hint: "Ctrl+Shift+N", run: newFolder },
-      { label: "Paste", hint: "Ctrl+V", disabled: !shelf.length, run: paste },
+      { label: "Paste", hint: "Ctrl+V", run: paste },
       "separator",
       { label: "Refresh", run: () => refresh() },
       { label: "Select all", hint: "Ctrl+A", run: () => selectRange(0, visible.length - 1) },
