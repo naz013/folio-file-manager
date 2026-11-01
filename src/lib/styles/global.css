@@ -50,3 +50,37 @@ button {
   border-radius: var(--radius-full);
   background-clip: padding-box;
 }
+
+/* Spring-loaded navigation: a ring that fills while the drag hovers a folder. */
+@property --spring {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0;
+}
+
+@keyframes spring-fill {
+  to {
+    --spring: 1;
+  }
+}
+
+.springing {
+  position: relative;
+}
+
+.springing::after {
+  content: "";
+  position: absolute;
+  top: var(--space-xs);
+  right: var(--space-xs);
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: conic-gradient(
+    var(--accent-default) calc(var(--spring) * 360deg),
+    var(--border-strong) 0
+  );
+  mask: radial-gradient(circle, transparent 5px, #000 6px);
+  animation: spring-fill var(--spring-ms) linear forwards;
+  pointer-events: none;
+}

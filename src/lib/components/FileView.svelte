@@ -39,6 +39,8 @@
     onbackgroundcontextmenu,
     onopentab,
     dropTarget,
+    springPath,
+    springMs,
   }: {
     entries: Entry[];
     view: View;
@@ -60,6 +62,9 @@
     onopentab: (path: string) => void;
     /** Folder path currently under a native drag, highlighted as drop target. */
     dropTarget: string | null;
+    /** Folder whose spring-loading countdown is running, and its length. */
+    springPath: string | null;
+    springMs: number;
   } = $props();
 
   let scroller: HTMLDivElement;
@@ -178,7 +183,8 @@
         class:selected
         class:cut={cut.has(entry.path)}
         class:drop={dropTarget === entry.path}
-        style={position(index)}
+        class:springing={springPath === entry.path}
+        style="{position(index)};--spring-ms:{springMs}ms"
         data-drop-path={entry.isDir ? entry.path : undefined}
         role="option"
         tabindex="-1"

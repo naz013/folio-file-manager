@@ -8,6 +8,8 @@
     onnavigate,
     onopentab,
     dropTarget,
+    springPath,
+    springMs,
   }: {
     home: string;
     current: string;
@@ -16,6 +18,8 @@
     onopentab: (path: string) => void;
     /** Folder path currently under a native drag. */
     dropTarget: string | null;
+    springPath: string | null;
+    springMs: number;
   } = $props();
 
   const favorites: { label: string; icon: IconName; sub: string | null }[] = [
@@ -50,6 +54,8 @@
       class="item"
       class:selected={path === current}
       class:drop={dropTarget === path}
+      class:springing={springPath === path}
+      style:--spring-ms="{springMs}ms"
       data-drop-path={path}
       onclick={() => onnavigate(path)}
       onmousedown={(e) => e.button === 1 && e.preventDefault()}

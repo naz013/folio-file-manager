@@ -172,6 +172,8 @@ pub async fn start_drag(window: tauri::WebviewWindow, paths: Vec<String>) -> Cmd
 pub struct Modifiers {
     ctrl: bool,
     shift: bool,
+    /// Space is not a modifier, but a drag owns the keyboard, so the page asks for it here.
+    space: bool,
 }
 
 /// The modifier keys held now. A native drop reaches the page without them, so the page
@@ -181,7 +183,9 @@ pub struct Modifiers {
 pub fn modifier_keys() -> Modifiers {
     #[cfg(windows)]
     {
-        use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_SHIFT};
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            GetAsyncKeyState, VK_CONTROL, VK_SHIFT, VK_SPACE,
+        };
         // The high bit of the result is set while the key is down.
         let down = |key: u16| {
             // SAFETY: plain query of the keyboard state; no pointers are involved.
@@ -190,6 +194,7 @@ pub fn modifier_keys() -> Modifiers {
         Modifiers {
             ctrl: down(VK_CONTROL.0),
             shift: down(VK_SHIFT.0),
+            space: down(VK_SPACE.0),
         }
     }
     #[cfg(not(windows))]
@@ -197,6 +202,7 @@ pub fn modifier_keys() -> Modifiers {
         Modifiers {
             ctrl: false,
             shift: false,
+            space: false,
         }
     }
 }

@@ -45,6 +45,7 @@
   import Sidebar from "$lib/components/Sidebar.svelte";
   import TabBar from "$lib/components/TabBar.svelte";
   import Toolbar, { type View } from "$lib/components/Toolbar.svelte";
+  import { createSpring, loadSpring } from "$lib/spring";
   import {
     applyTheme,
     loadTheme,
@@ -570,19 +571,119 @@
   }
 
   /**
-   * The modifier keys as of the last drag-over. People often let go of Ctrl or Shift as they
-   * drop, so reading them after the drop arrives would see them already up.
+   * The modifier keys as of the last poll during the drag. People often let go of Ctrl or
+   * Shift as they drop, so reading them after the drop arrives would see them already up.
    */
   let dragKeys = { ctrl: false, shift: false };
-  let dragKeysAt = 0;
 
-  function sampleDragKeys() {
-    const now = performance.now();
-    if (now - dragKeysAt < 50) return;
-    dragKeysAt = now;
-    modifierKeys()
-      .then((keys) => (dragKeys = keys))
-      .catch(() => {});
+  // ---- Spring-loaded folders ----
+
+  const springSettings = loadSpring();
+  /** The folder whose countdown is running, for the ring. */
+  let springPath = $state<string | null>(null);
+  let springMs = $state(0);
+  /** What is being dragged; those folders never spring open. */
+  let dragPaths: string[] = [];
+  /** Where the drag is, in CSS pixels, for auto-scroll and for re-checking after a spring. */
+  let dragPos: { x: number; y: number } | null = null;
+  /** Where the tab was when a spring-loaded trip began; the trip is one history entry. */
+  let trip: { from: string } | null = null;
+  let dragTimer: ReturnType<typeof setInterval> | undefined;
+  let spaceWasDown: boolean | null = null;
+
+  const spring = createSpring({
+    delayMs: () => springSettings.delayMs,
+    eligible: (target) => target !== path && !dragPaths.includes(target),
+    open: springOpen,
+    ring: (target, ms) => {
+      springPath = target;
+      springMs = ms;
+    },
+  });
+
+  /** Counts drags, so work that outlives its drag can tell. */
+  let dragId = 0;
+
+  async function springOpen(target: string) {
+    const from = path;
+    const id = dragId;
+    if (await load(target, true)) {
+      if (id === dragId) {
+        trip ??= { from };
+      } else if (!springSettings.returnAfterDrop) {
+        // The drag ended while this was loading: its trip is over, so record it now.
+        back.push(from);
+        forward = [];
+      }
+      // The list under the pointer changed: whatever is there now starts its own countdown.
+      await nextPaint();
+      if (id === dragId && dragPos) hoverAt(dragPos);
+    }
+  }
+
+  function hoverAt(pos: { x: number; y: number }) {
+    dragPos = pos;
+    dropTarget = folderAt({ x: pos.x * devicePixelRatio, y: pos.y * devicePixelRatio });
+    spring.hover(dropTarget);
+  }
+
+  const EDGE = 48;
+  const MAX_SCROLL = 24;
+
+  /** Scrolls the list while the drag is near its top or bottom edge. */
+  function autoScroll() {
+    if (!dragPos || !fileView) return;
+    const list = fileView.scrollElement();
+    const box = list.getBoundingClientRect();
+    if (dragPos.x < box.left || dragPos.x > box.right) return;
+    const above = box.top + EDGE - dragPos.y;
+    const below = dragPos.y - (box.bottom - EDGE);
+    const before = list.scrollTop;
+    if (above > 0) list.scrollBy(0, -Math.min(MAX_SCROLL, (above / EDGE) * MAX_SCROLL));
+    else if (below > 0) list.scrollBy(0, Math.min(MAX_SCROLL, (below / EDGE) * MAX_SCROLL));
+    // Different items are under the pointer now.
+    if (list.scrollTop !== before) hoverAt(dragPos);
+  }
+
+  async function dragTick() {
+    autoScroll();
+    // An in-app drag gets real key events; only a native one needs the keys polled.
+    if (inAppDrag) return;
+    const keys = await modifierKeys().catch(() => null);
+    if (!keys) return;
+    dragKeys = keys;
+    // A drag owns the keyboard, so Space is read from here rather than a key event. The
+    // first sample only says whether it was already down.
+    if (spaceWasDown !== null && keys.space && !spaceWasDown) spring.openNow();
+    spaceWasDown = keys.space;
+  }
+
+  function dragStarted(paths: string[]) {
+    dragId++;
+    dragPaths = paths;
+    if (dragTimer === undefined) dragTimer = setInterval(dragTick, 50);
+  }
+
+  /** The drag ended, dropped or cancelled. Settles where the tab stays. */
+  async function dragEnded() {
+    dragId++;
+    clearInterval(dragTimer);
+    dragTimer = undefined;
+    spaceWasDown = null;
+    dragPos = null;
+    dragPaths = [];
+    spring.stop();
+    dropTarget = null;
+    const started = trip;
+    trip = null;
+    if (!started) return;
+    if (springSettings.returnAfterDrop) {
+      await load(started.from, true);
+    } else if (path !== started.from) {
+      // The whole trip is one step back.
+      back.push(started.from);
+      forward = [];
+    }
   }
 
   async function dropPaths(paths: string[], dest: string) {
@@ -596,8 +697,95 @@
     await transfer(sources, dest, copyOnDrop(keys, sources, dest));
   }
 
+  // ---- Dragging items ----
+  //
+  // A drag starts inside the page, where it gets live pointer and key events: that is what
+  // lets folders spring open, the list auto-scroll and Ctrl / Shift pick copy or move. A
+  // native OS drag runs a modal loop that holds back the page's events, so it only takes
+  // over once the pointer leaves the window, to drop into Explorer and other apps.
+
+  /** The in-page drag in progress: what is dragged and where its label is drawn. */
+  let inAppDrag = $state<{ paths: string[]; x: number; y: number } | null>(null);
+
   function dragOut(paths: string[]) {
-    startDrag(paths).catch((e) => notify(String(e), true));
+    inAppDrag = { paths, x: -999, y: -999 };
+    dragStarted(paths);
+    window.addEventListener("pointermove", dragMove);
+    window.addEventListener("pointerup", dragUp);
+    window.addEventListener("pointercancel", dragCancel);
+    window.addEventListener("keydown", dragKey, true);
+    window.addEventListener("blur", dragCancel);
+  }
+
+  function stopInAppDrag() {
+    window.removeEventListener("pointermove", dragMove);
+    window.removeEventListener("pointerup", dragUp);
+    window.removeEventListener("pointercancel", dragCancel);
+    window.removeEventListener("keydown", dragKey, true);
+    window.removeEventListener("blur", dragCancel);
+    inAppDrag = null;
+  }
+
+  function dragMove(e: PointerEvent) {
+    if (!inAppDrag) return;
+    dragKeys = { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey };
+    const outside =
+      e.clientX < 0 || e.clientY < 0 || e.clientX >= innerWidth || e.clientY >= innerHeight;
+    if (!(e.buttons & 1) || outside) {
+      // Left the window with the button down: the OS takes the drag from here.
+      const paths = inAppDrag.paths;
+      stopInAppDrag();
+      void dragEnded();
+      if (e.buttons & 1) startDrag(paths).catch((err) => notify(String(err), true));
+      return;
+    }
+    inAppDrag.x = e.clientX;
+    inAppDrag.y = e.clientY;
+    hoverAt({ x: e.clientX, y: e.clientY });
+  }
+
+  /** The click that follows a drag must not change the selection. */
+  function swallowNextClick() {
+    const stop = (e: Event) => e.stopPropagation();
+    window.addEventListener("click", stop, true);
+    setTimeout(() => window.removeEventListener("click", stop, true));
+  }
+
+  function dragUp(e: PointerEvent) {
+    if (!inAppDrag) return;
+    // Letting go outside the window is not a drop here.
+    if (e.clientX < 0 || e.clientY < 0 || e.clientX >= innerWidth || e.clientY >= innerHeight) {
+      dragCancel();
+      return;
+    }
+    swallowNextClick();
+    const { paths } = inAppDrag;
+    dragKeys = { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey };
+    const dest =
+      folderAt({ x: e.clientX * devicePixelRatio, y: e.clientY * devicePixelRatio }) ?? path;
+    stopInAppDrag();
+    void dragEnded();
+    dropPaths(paths, dest);
+  }
+
+  function dragCancel() {
+    if (!inAppDrag) return;
+    swallowNextClick();
+    stopInAppDrag();
+    void dragEnded();
+  }
+
+  function dragKey(e: KeyboardEvent) {
+    if (!inAppDrag) return;
+    // Nothing else acts on keys mid-drag.
+    e.stopImmediatePropagation();
+    if (e.key === "Escape") {
+      e.preventDefault();
+      dragCancel();
+    } else if (e.key === " ") {
+      e.preventDefault();
+      spring.openNow();
+    }
   }
 
   // ---- Context menu ----
@@ -854,14 +1042,21 @@
     // Flush pending tab changes before any close (button, Ctrl+W, Alt+F4, taskbar).
     const unlistenClose = getCurrentWindow().onCloseRequested(() => persistTabs());
     const unlistenDrop = getCurrentWebview().onDragDropEvent(({ payload }) => {
-      if (payload.type === "enter" || payload.type === "over") {
-        dropTarget = folderAt(payload.position);
-        sampleDragKeys();
+      const at = {
+        x: "position" in payload ? payload.position.x / devicePixelRatio : 0,
+        y: "position" in payload ? payload.position.y / devicePixelRatio : 0,
+      };
+      if (payload.type === "enter") {
+        dragStarted(payload.paths);
+        hoverAt(at);
+      } else if (payload.type === "over") {
+        hoverAt(at);
       } else if (payload.type === "drop") {
         const dest = folderAt(payload.position) ?? path;
-        dropTarget = null;
+        // Settle the trip first: the drop's own transfer then lands in the folder shown.
+        dragEnded();
         dropPaths(payload.paths, dest);
-      } else dropTarget = null;
+      } else dragEnded();
     });
     homeDir().then(async (h) => {
       home = h;
@@ -898,6 +1093,8 @@
     onnavigate={navigate}
     onopentab={(p) => openTab(p, true)}
     {dropTarget}
+    {springPath}
+    {springMs}
   />
   <main class="main">
     <TabBar
@@ -918,6 +1115,9 @@
       onback={goBack}
       onforward={goForward}
       onnavigate={navigate}
+      {dropTarget}
+      {springPath}
+      {springMs}
       {theme}
       ontheme={() => {
         theme = nextTheme(theme);
@@ -941,6 +1141,8 @@
       onbackgroundcontextmenu={backgroundContextMenu}
       onopentab={(p) => openTab(p, true)}
       {dropTarget}
+      {springPath}
+      {springMs}
     />
     <footer class="status">
       <span
@@ -963,6 +1165,12 @@
       />
     </footer>
   </main>
+
+  {#if inAppDrag}
+    <div class="ghost" style:left="{inAppDrag.x + 14}px" style:top="{inAppDrag.y + 14}px">
+      {plural(inAppDrag.paths.length, "item")}
+    </div>
+  {/if}
 
   {#if menu}
     <ContextMenu items={menu.items} x={menu.x} y={menu.y} onclose={() => (menu = null)} />
@@ -1015,6 +1223,18 @@
 
   .clip {
     color: var(--accent-default);
+  }
+
+  .ghost {
+    position: fixed;
+    z-index: 70;
+    padding: var(--space-2xs) var(--space-sm);
+    border-radius: var(--radius-md);
+    background: var(--accent-default);
+    color: var(--text-on-accent);
+    box-shadow: var(--shadow-popover);
+    font-weight: var(--font-weight-medium);
+    pointer-events: none;
   }
 
   .toast {

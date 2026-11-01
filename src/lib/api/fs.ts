@@ -38,7 +38,8 @@ export const openPath = (path: string) => invoke<void>("open_path", { path });
 export const startDrag = (paths: string[]) => invoke<void>("start_drag", { paths });
 
 /** The modifier keys held right now; a native drop doesn't report them. */
-export const modifierKeys = () => invoke<{ ctrl: boolean; shift: boolean }>("modifier_keys");
+export const modifierKeys = () =>
+  invoke<{ ctrl: boolean; shift: boolean; space: boolean }>("modifier_keys");
 
 /** Shows the native OS context menu for `paths` at the cursor (Windows only for now). */
 export const showContextMenu = (paths: string[], extended: boolean) =>

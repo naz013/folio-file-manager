@@ -10,6 +10,9 @@
     path,
     view = $bindable(),
     theme,
+    dropTarget,
+    springPath,
+    springMs,
     canBack,
     canForward,
     onback,
@@ -20,6 +23,10 @@
     path: string;
     view: View;
     theme: Theme;
+    /** Folder under a native drag, and the one whose spring-loading countdown is running. */
+    dropTarget: string | null;
+    springPath: string | null;
+    springMs: number;
     canBack: boolean;
     canForward: boolean;
     onback: () => void;
@@ -274,6 +281,10 @@
         <button
           class="crumb"
           class:last={i === segments.length - 1}
+          class:drop={dropTarget === seg.path}
+          class:springing={springPath === seg.path}
+          style:--spring-ms="{springMs}ms"
+          data-drop-path={seg.path}
           onclick={() => onnavigate(seg.path)}
         >
           {seg.name}
@@ -486,6 +497,10 @@
 
   .crumb:hover {
     background: var(--bg-hover);
+  }
+
+  .crumb.drop {
+    background: var(--accent-subtle);
   }
 
   .crumb.last {
