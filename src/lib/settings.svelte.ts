@@ -11,6 +11,8 @@ export type ViewMode = "grid" | "list";
 /** The thresholds cleanup offers for "large" (MB) and "old" (days). */
 export const CLEANUP_SIZES_MB = [10, 50, 100, 500, 1000, 5000] as const;
 export const CLEANUP_AGES_DAYS = [30, 90, 180, 365, 730] as const;
+/** The smallest file a duplicate search looks at, in MB (the scan keeps files from 1 MB). */
+export const DUPLICATE_SIZES_MB = [1, 10, 50, 100, 500] as const;
 export const DOWNLOAD_AGES_DAYS = [14, 30, 60, 90, 180, 365] as const;
 
 export interface Settings {
@@ -32,6 +34,8 @@ export interface Settings {
   cleanupAgeDays: number;
   /** Installers and archives in Downloads older than this many days are suggested. */
   cleanupDownloadsDays: number;
+  /** Duplicates are looked for among files at least this many MB big. */
+  cleanupDupMinMb: number;
 }
 
 export const DEFAULTS: Settings = {
@@ -45,6 +49,7 @@ export const DEFAULTS: Settings = {
   cleanupMinMb: 100,
   cleanupAgeDays: 365,
   cleanupDownloadsDays: 90,
+  cleanupDupMinMb: 10,
 };
 
 /** The allowed delay closest to `ms`, so a hand-edited value still shows in the list. */
@@ -87,6 +92,9 @@ function read(): Settings {
     )
       ? (saved.cleanupDownloadsDays as number)
       : DEFAULTS.cleanupDownloadsDays,
+    cleanupDupMinMb: (DUPLICATE_SIZES_MB as readonly unknown[]).includes(saved.cleanupDupMinMb)
+      ? (saved.cleanupDupMinMb as number)
+      : DEFAULTS.cleanupDupMinMb,
     pinnedFolders: Array.isArray(saved.pinnedFolders)
       ? saved.pinnedFolders.filter(
           (p, i, all): p is string => typeof p === "string" && !!p && all.indexOf(p) === i,

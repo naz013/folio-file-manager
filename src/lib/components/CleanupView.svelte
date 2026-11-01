@@ -1,18 +1,23 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
+    cleanupDuplicates,
+    cleanupDuplicatesCancel,
     cleanupLargeOld,
     cleanupOldDownloads,
     cleanupTrash,
+    cleanupTrashDuplicates,
     onQueueUpdate,
     parentOf,
     scanRoots,
     type BigFile,
+    type DuplicateGroup,
   } from "$lib/api/fs";
   import { formatDate, formatSize } from "$lib/format";
   import {
     CLEANUP_AGES_DAYS,
     DOWNLOAD_AGES_DAYS,
+    DUPLICATE_SIZES_MB,
     CLEANUP_SIZES_MB,
     settings,
     updateSettings,
@@ -25,7 +30,7 @@
     onopen,
   }: {
     /** Which list to open on. */
-    start?: "large" | "downloads";
+    start?: "large" | "downloads" | "duplicates";
     onclose: () => void;
     /** Show this folder in the browser. */
     onopen: (path: string) => void;
@@ -48,7 +53,7 @@
   // `start` only picks the list the view opens on; after that the person switches it.
   // What is looked for: big files nobody touches, or installers and archives in Downloads.
   // svelte-ignore state_referenced_locally
-  let mode = $state<"large" | "downloads">(start);
+  let mode = $state<"large" | "downloads" | "duplicates">(start);
   /** The Recycle Bin job started from here; the list refreshes when it ends. */
   let trashJob = $state<number | null>(null);
 
@@ -57,15 +62,67 @@
   const ageLabel = (days: number) =>
     days >= 365 ? `${days / 365} ${days === 365 ? "year" : "years"}` : `${days} days`;
 
+  /** Duplicate groups, each with the copy to keep (the newest, until another is chosen) and
+   * whether the person left the group alone. */
+  let groups = $state.raw<DuplicateGroup[]>([]);
+  let complete = $state(true);
+  let unreadable = $state(0);
+  const keep = $state<Record<string, string>>({});
+  const skipped = $state<Record<string, boolean>>({});
+  const keptIn = (g: DuplicateGroup) => keep[g.id] ?? g.files[0].path;
+  /** What would move: in each group not left alone, every copy but the kept one. */
+  const dupRemoval = $derived(
+    groups
+      .filter((g) => !skipped[g.id])
+      .map((g) => ({
+        files: g.files,
+        remove: g.files.filter((f) => f.path !== keptIn(g)).map((f) => f.path),
+      })),
+  );
+
   const chosen = $derived(files.filter((f) => picked[f.path]));
-  const chosenBytes = $derived(chosen.reduce((sum, f) => sum + f.size, 0));
+  const chosenCount = $derived(
+    mode === "duplicates" ? dupRemoval.reduce((n, g) => n + g.remove.length, 0) : chosen.length,
+  );
+  const chosenBytes = $derived(
+    mode === "duplicates"
+      ? dupRemoval.reduce(
+          (sum, g) =>
+            sum + g.files.filter((f) => g.remove.includes(f.path)).reduce((s, f) => s + f.size, 0),
+          0,
+        )
+      : chosen.reduce((sum, f) => sum + f.size, 0),
+  );
   const totalBytes = $derived(files.reduce((sum, f) => sum + f.size, 0));
 
   async function load() {
     const id = ++loadId;
+    // A search for duplicates still running is of no use to a list that replaces it.
+    if (mode !== "duplicates") cleanupDuplicatesCancel().catch(() => {});
     loading = true;
     error = "";
     try {
+      if (mode === "duplicates") {
+        const [found, roots] = await Promise.all([
+          cleanupDuplicates(settings.cleanupDupMinMb * 1024 * 1024),
+          scanRoots().catch(() => []),
+        ]);
+        if (id !== loadId) return;
+        groups = found.groups;
+        complete = found.complete;
+        unreadable = found.unreadable;
+        files = [];
+        scannedAny = roots.length > 0;
+        // Choices only stay for groups that are still there.
+        for (const key of Object.keys(keep)) {
+          const g = found.groups.find((x) => x.id === key);
+          if (!g || !g.files.some((f) => f.path === keep[key])) delete keep[key];
+        }
+        for (const key of Object.keys(skipped)) {
+          if (!found.groups.some((x) => x.id === key)) delete skipped[key];
+        }
+        return;
+      }
       const [found, roots] = await Promise.all([
         mode === "large"
           ? cleanupLargeOld(settings.cleanupMinMb * 1024 * 1024, settings.cleanupAgeDays, LIMIT)
@@ -74,6 +131,7 @@
       ]);
       if (id !== loadId) return;
       files = found;
+      groups = [];
       // Only the large-file list comes from the scan; Downloads is read directly.
       scannedAny = mode === "downloads" || roots.length > 0;
       // Only what is still listed can stay picked.
@@ -92,6 +150,7 @@
     void settings.cleanupMinMb;
     void settings.cleanupAgeDays;
     void settings.cleanupDownloadsDays;
+    void settings.cleanupDupMinMb;
     void mode;
     load();
   });
@@ -99,12 +158,16 @@
   let moving = $state(false);
 
   async function trash() {
-    if (moving || !chosen.length) return;
+    if (moving || !chosenCount) return;
     moving = true;
     try {
       // The core moves only files still exactly as listed and still allowed, as a normal
       // Recycle Bin job (so it can be undone). The list is looked at again when it ends.
-      const done = await cleanupTrash(chosen);
+      // For duplicates it also makes sure a copy of each group stays.
+      const done =
+        mode === "duplicates"
+          ? await cleanupTrashDuplicates(dupRemoval.filter((g) => g.remove.length))
+          : await cleanupTrash(chosen);
       for (const f of chosen) delete picked[f.path];
       if (done.leftAlone) {
         error = `${done.leftAlone === 1 ? "1 file was" : `${done.leftAlone} files were`} left alone: changed since the list was made, or not safe to move. Files that do not fit in the Recycle Bin are reported when the move ends.`;
@@ -127,6 +190,7 @@
       load();
     });
     return () => {
+      cleanupDuplicatesCancel().catch(() => {});
       unlisten.then((u) => u());
       opener?.focus?.();
     };
@@ -188,10 +252,29 @@
     >
       Old downloads
     </button>
+    <button
+      class:chosen={mode === "duplicates"}
+      aria-pressed={mode === "duplicates"}
+      onclick={() => (mode = "duplicates")}
+    >
+      Duplicates
+    </button>
   </div>
 
   <div class="filters">
-    {#if mode === "downloads"}
+    {#if mode === "duplicates"}
+      <label>
+        Files bigger than
+        <select
+          value={settings.cleanupDupMinMb}
+          onchange={(e) => updateSettings({ cleanupDupMinMb: Number(e.currentTarget.value) })}
+        >
+          {#each DUPLICATE_SIZES_MB as mb (mb)}
+            <option value={mb}>{sizeLabel(mb)}</option>
+          {/each}
+        </select>
+      </label>
+    {:else if mode === "downloads"}
       <label>
         Installers and archives not changed for
         <select
@@ -231,7 +314,87 @@
 
   {#if error}<p class="error" role="alert">{error}</p>{/if}
 
-  {#if loading && !files.length}
+  {#if mode === "duplicates"}
+    {#if loading && !groups.length}
+      <p class="empty" role="status">Comparing files. This can take a while for big files…</p>
+    {:else if !scannedAny}
+      <p class="empty" role="status">
+        Nothing has been scanned yet. Scan a drive in Storage first; duplicates are looked for among
+        the scanned files.
+      </p>
+    {:else if !groups.length}
+      <p class="empty" role="status">No identical files found.</p>
+    {:else}
+      <p class="summary" role="status">
+        {groups.length}
+        {groups.length === 1 ? "group" : "groups"} of identical files. The newest copy of each is kept
+        (not one in Downloads, Desktop or Temp, if there is another) unless you pick another; the others
+        move to the Recycle Bin. At least one copy always stays, and each is compared with the copy that
+        stays just before it moves.
+        {#if !complete}The search stopped at its limits, so there may be more.{/if}
+        {#if unreadable}{unreadable}
+          {unreadable === 1 ? "file" : "files"} could not be read and
+          {unreadable === 1 ? "was" : "were"} left out.{/if}
+      </p>
+      <ul class="list groups" aria-label="Groups of identical files">
+        {#each groups as g (g.id)}
+          {@const kept = keptIn(g)}
+          <li class="group" class:left={skipped[g.id]}>
+            <div class="ghead">
+              <span class="fname">
+                {g.files.length} copies, {formatSize(g.size)} each: {formatSize(
+                  g.size * (g.files.length - 1),
+                )} to gain
+              </span>
+              <label class="check">
+                <input
+                  type="checkbox"
+                  aria-label="Leave the group with {name(g.files[0].path)} alone"
+                  bind:checked={skipped[g.id]}
+                />
+                Leave this group alone
+              </label>
+            </div>
+            <div role="radiogroup" aria-label="Which copy of {name(g.files[0].path)} to keep">
+              {#each g.files as f (f.path)}
+                <div class="copy" class:keeping={f.path === kept}>
+                  <label class="row">
+                    <input
+                      type="radio"
+                      name="keep-{g.id}"
+                      checked={f.path === kept}
+                      disabled={skipped[g.id]}
+                      aria-label="Keep {name(f.path)} in {parentOf(f.path) ?? ''}"
+                      onchange={() => (keep[g.id] = f.path)}
+                    />
+                    <span class="thumb"
+                      ><Thumbnail path={f.path} name={name(f.path)} size={40} /></span
+                    >
+                    <span class="text">
+                      <span class="fname">{name(f.path)}</span>
+                      <span class="where">{parentOf(f.path) ?? ""}</span>
+                    </span>
+                    <span class="muted">{formatDate(f.modified * 1000)}</span>
+                    <span class="verdict">
+                      {skipped[g.id] ? "left alone" : f.path === kept ? "kept" : "to Recycle Bin"}
+                    </span>
+                  </label>
+                  <button
+                    class="show"
+                    aria-label="Show {name(f.path)} in folder"
+                    onclick={() => {
+                      const dir = parentOf(f.path);
+                      if (dir) onopen(dir);
+                    }}>Show in folder</button
+                  >
+                </div>
+              {/each}
+            </div>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  {:else if loading && !files.length}
     <p class="empty" role="status">Looking…</p>
   {:else if !scannedAny}
     <p class="empty" role="status">
@@ -294,9 +457,9 @@
 
   <footer>
     <p class="note">Files go to the Recycle Bin. The space comes back when you empty it.</p>
-    <button class="go" disabled={!chosen.length || moving || trashJob !== null} onclick={trash}>
-      {chosen.length
-        ? `Move ${chosen.length} ${chosen.length === 1 ? "file" : "files"} (${formatSize(chosenBytes)}) to Recycle Bin`
+    <button class="go" disabled={!chosenCount || moving || trashJob !== null} onclick={trash}>
+      {chosenCount
+        ? `Move ${chosenCount} ${chosenCount === 1 ? "file" : "files"} (${formatSize(chosenBytes)}) to Recycle Bin`
         : "Move to Recycle Bin"}
     </button>
   </footer>
@@ -440,6 +603,48 @@
   .muted {
     color: var(--text-secondary);
     font-size: var(--font-size-caption);
+  }
+
+  .list li.group {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    padding: var(--space-sm) var(--space-md);
+    contain-intrinsic-size: auto 160px;
+  }
+
+  .group.left {
+    opacity: 0.6;
+  }
+
+  .ghead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-md);
+    padding-bottom: var(--space-xs);
+  }
+
+  .check {
+    gap: var(--space-xs);
+  }
+
+  .copy {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+    padding: var(--space-2xs) 0;
+  }
+
+  .verdict {
+    min-width: 96px;
+    color: var(--text-secondary);
+    text-align: right;
+  }
+
+  .copy.keeping .verdict {
+    color: var(--accent-default);
+    font-weight: var(--font-weight-medium);
   }
 
   .size {

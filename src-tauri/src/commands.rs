@@ -352,7 +352,18 @@ pub fn trash_paths(
 
 /// Picks, when the job runs, which of the targets still go to the Recycle Bin: the ones to
 /// move, and how many were held back for lack of room in the bin.
-type TrashFilter = Box<dyn FnOnce(Vec<PathBuf>) -> (Vec<PathBuf>, usize) + Send>;
+type TrashFilter = Box<dyn FnOnce(Vec<PathBuf>) -> Picked + Send>;
+
+/// A test each path must pass just before it moves.
+type LastLook = Box<dyn Fn(&std::path::Path) -> bool + Send>;
+
+/// What a [`TrashFilter`] chose: the paths to move, how many were held back for room, and
+/// optionally a last test to pass just before each one moves.
+struct Picked {
+    paths: Vec<PathBuf>,
+    no_room: usize,
+    last_look: Option<LastLook>,
+}
 
 fn submit_trash(
     app: &tauri::AppHandle,
@@ -362,9 +373,16 @@ fn submit_trash(
     filter: Option<TrashFilter>,
 ) -> u64 {
     let label = describe("Move to Recycle Bin:", &targets);
-    let lane = targets
-        .first()
-        .map_or_else(String::new, |p| ops::volume_key(p.parent().unwrap_or(p)));
+    // Cleanup moves wait in one line, whatever the drive: each checks its files when it
+    // starts, so it sees what the one before it did (a copy that stays is not removed by
+    // another job meanwhile).
+    let lane = if filter.is_some() {
+        "cleanup".to_owned()
+    } else {
+        targets
+            .first()
+            .map_or_else(String::new, |p| ops::volume_key(p.parent().unwrap_or(p)))
+    };
     let title = label.clone();
     // What each item was when it was chosen: the job may run much later.
     let chosen: Vec<Option<String>> = targets.iter().map(|p| ops::identity(p)).collect();
@@ -382,16 +400,36 @@ fn submit_trash(
         let mut left_alone = changed.len();
         // The room left in the bin is looked at now, not when the job was queued: other
         // jobs ahead of this one may have filled it.
-        let (targets, no_room) = match filter {
+        let (targets, no_room, last_look) = match filter {
             Some(pick) => {
                 let before = targets.len();
-                let (kept, no_room) = pick(targets);
-                left_alone += before - kept.len() - no_room;
-                (kept, no_room)
+                let picked = pick(targets);
+                left_alone += before - picked.paths.len() - picked.no_room;
+                (picked.paths, picked.no_room, picked.last_look)
             }
-            None => (targets, 0),
+            None => (targets, 0, None),
         };
-        let (result, steps) = trash_with_steps(&journal, &targets);
+        // Checking the files can take long; where the move depends on something staying
+        // as it was, each one is looked at again right before it goes.
+        let (result, steps) = match last_look {
+            None => trash_with_steps(&journal, &targets),
+            Some(ok_to_move) => {
+                let (mut result, mut steps) = (Ok(()), Vec::new());
+                for path in &targets {
+                    if !ok_to_move(path) {
+                        left_alone += 1;
+                        continue;
+                    }
+                    let (one, mut done) = trash_with_steps(&journal, std::slice::from_ref(path));
+                    steps.append(&mut done);
+                    if one.is_err() {
+                        result = one;
+                        break;
+                    }
+                }
+                (result, steps)
+            }
+        };
         journal.finish(pending, &steps);
         for _ in &steps {
             ops::progress::add_item();
@@ -1007,6 +1045,19 @@ pub fn cleanup_old_downloads(
     ))
 }
 
+/// Copies of the same file among the scanned files of at least `min_bytes`, newest first
+/// in each group. Only suggestions; nothing is changed.
+#[tauri::command(async)]
+pub fn cleanup_duplicates(
+    app: tauri::AppHandle,
+    scanner: tauri::State<'_, Scanner>,
+    min_bytes: u64,
+) -> CmdResult<cleanup::Duplicates> {
+    let home = app.path().home_dir().ok();
+    cleanup::duplicates(&scanner, cleanup_skips(home), min_bytes.max(1 << 20))
+        .map_err(|e| e.to_string())
+}
+
 /// What cleanup never touches: protected places, and files the Recycle Bin can't be
 /// trusted to take (on a drive without one, or bigger than it holds), which a delete
 /// would destroy for good.
@@ -1015,6 +1066,17 @@ fn cleanup_skips(home: Option<PathBuf>) -> impl Fn(&std::path::Path, u64) -> boo
         cleanup::is_protected(path, home.as_deref())
             || crate::platform::recycle_limit(path).is_none_or(|limit| size > limit)
     }
+}
+
+/// What cleanup never touches, for a file that stays where it is: it needs no Recycle Bin.
+fn protected_only(home: Option<PathBuf>) -> impl Fn(&std::path::Path, u64) -> bool {
+    move |path, _| cleanup::is_protected(path, home.as_deref())
+}
+
+/// Stops the duplicate search in progress (the view closed, or the setting changed).
+#[tauri::command]
+pub fn cleanup_duplicates_cancel() {
+    cleanup::cancel_duplicates();
 }
 
 /// What `cleanup_trash` did with the files it was given.
@@ -1063,10 +1125,80 @@ pub fn cleanup_trash(
         let still = cleanup::still_as_listed(&wanted, cleanup_skips(home));
         let fits = cleanup::within_bin(still.clone(), crate::platform::recycle_limit);
         let no_room = still.len() - fits.len();
-        (
-            fits.iter().map(|f| PathBuf::from(&f.path)).collect(),
+        Picked {
+            paths: fits.iter().map(|f| PathBuf::from(&f.path)).collect(),
             no_room,
-        )
+            last_look: None,
+        }
+    });
+    let job = submit_trash(&app, &window, &queue, targets, Some(pick));
+    CleanupTrash {
+        job: Some(job),
+        left_alone,
+    }
+}
+
+/// Moves the copies marked in reviewed duplicate groups to the Recycle Bin. Each group is
+/// checked as a whole, again when the job runs: a copy that stays must still be there as
+/// listed, or nothing in the group moves. So the last copy is never moved, however many
+/// are asked for.
+#[tauri::command(async)]
+pub fn cleanup_trash_duplicates(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    queue: tauri::State<'_, Arc<Queue>>,
+    groups: Vec<cleanup::Reviewed>,
+) -> CleanupTrash {
+    let home = app.path().home_dir().ok();
+    let asked: usize = groups.iter().map(|g| g.remove.len()).sum();
+    let (ok, _) = cleanup::removable_copies(
+        &groups,
+        &cleanup_skips(home.clone()),
+        &protected_only(home.clone()),
+        false,
+    );
+    let left_alone = asked - ok.len();
+    if ok.is_empty() {
+        return CleanupTrash {
+            job: None,
+            left_alone,
+        };
+    }
+    let targets: Vec<PathBuf> = ok.iter().map(|r| PathBuf::from(&r.file.path)).collect();
+    let pick: TrashFilter = Box::new(move |targets| {
+        // Looked at again now, group by group, then cut to what the bins can hold.
+        let (again, _) = cleanup::removable_copies(
+            &groups,
+            &cleanup_skips(home.clone()),
+            &protected_only(home),
+            true,
+        );
+        let wanted: Vec<&cleanup::Removal> = again
+            .iter()
+            .filter(|r| targets.iter().any(|t| t.to_string_lossy() == r.file.path))
+            .collect();
+        let fits = cleanup::within_bin(
+            wanted.iter().map(|r| &r.file).collect(),
+            crate::platform::recycle_limit,
+        );
+        let no_room = wanted.len() - fits.len();
+        let paths: Vec<PathBuf> = fits.iter().map(|f| PathBuf::from(&f.path)).collect();
+        // The comparing above can take minutes; just before each copy goes, the copy that
+        // stays for it must still be the same file.
+        let guards: std::collections::HashMap<String, cleanup::Removal> = again
+            .into_iter()
+            .filter(|r| paths.iter().any(|p| p.to_string_lossy() == r.file.path))
+            .map(|r| (r.file.path.clone(), r))
+            .collect();
+        Picked {
+            paths,
+            no_room,
+            last_look: Some(Box::new(move |path| {
+                guards
+                    .get(path.to_string_lossy().as_ref())
+                    .is_some_and(cleanup::keepers_still_there)
+            })),
+        }
     });
     let job = submit_trash(&app, &window, &queue, targets, Some(pick));
     CleanupTrash {

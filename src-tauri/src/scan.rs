@@ -708,6 +708,28 @@ impl Scanner {
         }
     }
 
+    /// Scanned files of at least `min` bytes whose size another scanned file has too,
+    /// biggest size first, up to `limit`. Candidates for a duplicate search.
+    pub fn same_size(&self, min: u64, limit: usize) -> rusqlite::Result<Vec<BigFile>> {
+        let db = self.db();
+        let mut stmt = db.prepare(
+            "SELECT display, size, mtime FROM big
+             WHERE size >= ?1 AND size IN (SELECT size FROM big GROUP BY size HAVING COUNT(*) > 1)
+             ORDER BY size DESC, path LIMIT ?2",
+        )?;
+        stmt.query_map(
+            params![as_i64(min), i64::try_from(limit).unwrap_or(i64::MAX)],
+            |r| {
+                Ok(BigFile {
+                    path: r.get(0)?,
+                    size: as_u64(r.get(1)?),
+                    modified: r.get(2)?,
+                })
+            },
+        )?
+        .collect()
+    }
+
     /// Every scanned root, with its size.
     pub fn roots(&self) -> rusqlite::Result<Vec<RootInfo>> {
         let db = self.db();

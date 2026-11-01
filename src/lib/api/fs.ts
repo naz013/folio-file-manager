@@ -132,6 +132,32 @@ export const cleanupLargeOld = (minBytes: number, olderThanDays: number, limit: 
 /** Installers and archives in Downloads untouched for a while, biggest first. */
 export const cleanupOldDownloads = (olderThanDays: number, limit: number) =>
   invoke<BigFile[]>("cleanup_old_downloads", { olderThanDays, limit });
+/** Copies of one file: same size and same content, newest first. */
+export interface DuplicateGroup {
+  id: string;
+  size: number;
+  files: BigFile[];
+}
+export interface Duplicates {
+  groups: DuplicateGroup[];
+  /** False when the search stopped at its limits, so there may be more. */
+  complete: boolean;
+  /** Files that could not be read and were left out. */
+  unreadable: number;
+}
+/** Stops the duplicate search in progress. */
+export const cleanupDuplicatesCancel = () => invoke<void>("cleanup_duplicates_cancel");
+/** Groups of identical files among the scanned files of at least `minBytes`. */
+export const cleanupDuplicates = (minBytes: number) =>
+  invoke<Duplicates>("cleanup_duplicates", { minBytes });
+/** A reviewed group: every copy, and the ones to move to the Recycle Bin. */
+export interface ReviewedGroup {
+  files: BigFile[];
+  remove: string[];
+}
+/** Moves the marked copies; the core never moves a group's last copy. */
+export const cleanupTrashDuplicates = (groups: ReviewedGroup[]) =>
+  invoke<CleanupTrash>("cleanup_trash_duplicates", { groups });
 /** Result of `cleanup_trash`. */
 export interface CleanupTrash {
   job: number | null;

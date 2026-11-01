@@ -108,7 +108,7 @@
   let settingsOpen = $state(false);
   let storageOpen = $state(false);
   let cleanupOpen = $state(false);
-  let cleanupStart = $state<"large" | "downloads">("large");
+  let cleanupStart = $state<"large" | "downloads" | "duplicates">("large");
   let binOpen = $state(false);
   /** A size scan is running (it is shared by every window). */
   let scanning = $state(false);
@@ -1440,6 +1440,10 @@
       ...action("Storage breakdown", "", () => (storageOpen = true)),
       ...action("Clean up large and old files", "", () => {
         cleanupStart = "large";
+        cleanupOpen = true;
+      }),
+      ...action("Find duplicate files", "", () => {
+        cleanupStart = "duplicates";
         cleanupOpen = true;
       }),
       ...action("Clean up old downloads", "", () => {

@@ -2,6 +2,7 @@
 //! removes a file, and nothing in a protected location is suggested.
 
 use crate::scan::{BigFile, Scanner};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// Folders whose contents belong to the system, to installed programs or to a program's
@@ -403,6 +404,392 @@ fn finish(mut found: Vec<BigFile>, limit: usize) -> Vec<BigFile> {
     found
 }
 
+/// Copies of one file: same size and same content, in different places.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct DuplicateGroup {
+    /// The content's hash, to tell groups apart.
+    pub id: String,
+    pub size: u64,
+    /// At least two, newest first.
+    pub files: Vec<BigFile>,
+}
+
+/// What a duplicate search found, and whether it looked at everything.
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Duplicates {
+    pub groups: Vec<DuplicateGroup>,
+    /// False when the search stopped at its limits or was replaced by a newer one, so
+    /// there may be more.
+    pub complete: bool,
+    /// Files that could not be read (locked, gone) and so were left out.
+    pub unreadable: usize,
+}
+
+/// How much of the start and end of a file is read for the first, cheap comparison.
+const PEEK: u64 = 64 * 1024;
+/// Most files looked at, most groups returned, most copies shown of one group, and most
+/// bytes read for comparing, in one search.
+const DUP_FILES: usize = 20_000;
+const DUP_GROUPS: usize = 200;
+const DUP_COPIES: usize = 20;
+const DUP_BYTES: u64 = 8 << 30;
+
+/// Counts the searches started; a search that finds a newer one has started stops, so a
+/// changed setting or a closed view doesn't leave a long read running behind it.
+static SEARCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Stops the search in progress, if any.
+pub fn cancel_duplicates() {
+    SEARCH.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Whether a path is in a folder files only pass through (Downloads, Desktop, a temp
+/// folder): the copy kept by default is not one of those if another exists.
+fn passing_through(path: &str) -> bool {
+    let lower = path.to_lowercase().replace('\\', "/");
+    lower
+        .split('/')
+        .any(|part| ["downloads", "desktop", "temp", "tmp"].contains(&part))
+}
+
+fn hash_of(
+    path: &Path,
+    whole: bool,
+    size: u64,
+    buf: &mut [u8],
+    stale: &dyn Fn() -> bool,
+) -> std::io::Result<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    // It may have become a placeholder since it was listed; reading one downloads it.
+    if is_cloud_only(path) {
+        return Err(std::io::Error::other("the file is only in the cloud"));
+    }
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&size.to_le_bytes());
+    if whole || size <= 2 * PEEK {
+        loop {
+            if stale() {
+                return Err(std::io::Error::other("the search was replaced"));
+            }
+            let n = file.read(buf)?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+        }
+    } else {
+        let peek = &mut buf[..usize::try_from(PEEK).unwrap_or(65_536)];
+        file.read_exact(peek)?;
+        hasher.update(peek);
+        file.seek(SeekFrom::Start(size - PEEK))?;
+        file.read_exact(peek)?;
+        hasher.update(peek);
+    }
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+/// Whether two files really hold the same bytes, read side by side. A hash says it is
+/// all but certain; this is the last word before anything is offered for removal.
+fn same_bytes(left: &Path, right: &Path, stale: &dyn Fn() -> bool) -> bool {
+    use std::io::Read;
+    if is_cloud_only(left) || is_cloud_only(right) {
+        return false;
+    }
+    let (Ok(mut from_left), Ok(mut from_right)) =
+        (std::fs::File::open(left), std::fs::File::open(right))
+    else {
+        return false;
+    };
+    let (mut one, mut two) = (vec![0u8; 1 << 16], vec![0u8; 1 << 16]);
+    loop {
+        if stale() {
+            return false;
+        }
+        let Ok(n) = from_left.read(&mut one) else {
+            return false;
+        };
+        if n == 0 {
+            return from_right.read(&mut two).is_ok_and(|m| m == 0);
+        }
+        if from_right.read_exact(&mut two[..n]).is_err() || one[..n] != two[..n] {
+            return false;
+        }
+    }
+}
+
+/// Files of the same content among the scanned files of at least `min_bytes`: size first
+/// (free, from the scan cache), then the start and end of each file, then the whole file,
+/// then a byte-for-byte check. Hard links to one file count once, since removing one
+/// frees nothing. Nothing is read from a file the deny list refuses. The newest copy of
+/// each group comes first. A newer search stops this one ([`cancel_duplicates`]).
+pub fn duplicates(
+    scanner: &Scanner,
+    skip: impl Fn(&Path, u64) -> bool,
+    min_bytes: u64,
+) -> rusqlite::Result<Duplicates> {
+    use std::sync::atomic::Ordering;
+    let mine = SEARCH.fetch_add(1, Ordering::SeqCst) + 1;
+    duplicates_with(scanner, skip, min_bytes, &|| {
+        SEARCH.load(Ordering::SeqCst) != mine
+    })
+}
+
+/// The files of one size as they are on disk now, one entry per file (not per hard link).
+/// A file the deny list refuses, or whose identity can't be read (it could be a link to
+/// another), is left out.
+fn live_copies(same: Vec<BigFile>, skip: &impl Fn(&Path, u64) -> bool) -> Vec<BigFile> {
+    let mut ids: Vec<String> = Vec::new();
+    let mut live: Vec<BigFile> = Vec::new();
+    for f in same {
+        let path = Path::new(&f.path);
+        let Some((size, modified)) = on_disk(path, skip) else {
+            continue;
+        };
+        let Some(id) = crate::ops::identity(path) else {
+            continue;
+        };
+        if ids.contains(&id) {
+            continue;
+        }
+        ids.push(id);
+        live.push(BigFile {
+            path: f.path,
+            size,
+            modified,
+        });
+    }
+    live
+}
+
+/// [`duplicates`] with its own test for being replaced. A search that is replaced stops,
+/// says it is incomplete, and does not count what it left unread as unreadable.
+fn duplicates_with(
+    scanner: &Scanner,
+    skip: impl Fn(&Path, u64) -> bool,
+    min_bytes: u64,
+    stale: &dyn Fn() -> bool,
+) -> rusqlite::Result<Duplicates> {
+    use std::collections::BTreeMap;
+    let replaced = |groups: Vec<DuplicateGroup>, unreadable: usize| {
+        Ok(Duplicates {
+            groups,
+            complete: false,
+            unreadable,
+        })
+    };
+    let candidates = scanner.same_size(min_bytes, DUP_FILES + 1)?;
+    let mut complete = candidates.len() <= DUP_FILES;
+    let mut unreadable = 0usize;
+    let mut groups: Vec<DuplicateGroup> = Vec::new();
+    let mut read_bytes = 0u64;
+    let mut buf = vec![0u8; 1 << 20];
+    // The cache lists them size by size, biggest first.
+    let mut rest = candidates.into_iter().take(DUP_FILES).peekable();
+    while let Some(first) = rest.next() {
+        if stale() {
+            return replaced(groups, unreadable);
+        }
+        let mut same = vec![first];
+        while let Some(next) = rest.next_if(|n| n.size == same[0].size) {
+            same.push(next);
+        }
+        let live = live_copies(same, &skip);
+        if live.len() < 2 {
+            continue;
+        }
+        let mut by_peek: BTreeMap<String, Vec<BigFile>> = BTreeMap::new();
+        for f in live {
+            match hash_of(Path::new(&f.path), false, f.size, &mut buf, stale) {
+                Ok(h) => by_peek.entry(h).or_default().push(f),
+                Err(_) => unreadable += 1,
+            }
+        }
+        if stale() {
+            return replaced(groups, 0);
+        }
+        for peeked in by_peek.into_values().filter(|g| g.len() > 1) {
+            // Reading the whole of the survivors, and again to compare them, has a cost:
+            // a size class that would pass the limit is left out, smaller ones go on.
+            let size = peeked[0].size;
+            let cost = size.saturating_mul(2 * peeked.len() as u64);
+            if read_bytes.saturating_add(cost) > DUP_BYTES {
+                complete = false;
+                continue;
+            }
+            read_bytes += cost;
+            let mut by_whole: BTreeMap<String, Vec<BigFile>> = BTreeMap::new();
+            for f in peeked {
+                match hash_of(Path::new(&f.path), true, f.size, &mut buf, stale) {
+                    Ok(h) => by_whole.entry(h).or_default().push(f),
+                    Err(_) => unreadable += 1,
+                }
+            }
+            if stale() {
+                return replaced(groups, 0);
+            }
+            for (id, mut files) in by_whole.into_iter().filter(|(_, g)| g.len() > 1) {
+                files.sort_by(|a, b| {
+                    passing_through(&a.path)
+                        .cmp(&passing_through(&b.path))
+                        .then_with(|| b.modified.cmp(&a.modified))
+                        .then_with(|| a.path.cmp(&b.path))
+                });
+                // Only files that match the newest, byte for byte, are offered with it.
+                let newest = files[0].path.clone();
+                files.retain(|f| {
+                    f.path == newest || same_bytes(Path::new(&newest), Path::new(&f.path), stale)
+                });
+                if stale() {
+                    return replaced(groups, 0);
+                }
+                // A group with more copies than can be reviewed is cut to the first ones
+                // (the copy kept by default is among them); the rest stay where they are.
+                files.truncate(DUP_COPIES);
+                if files.len() > 1 {
+                    groups.push(DuplicateGroup {
+                        id,
+                        size: files[0].size,
+                        files,
+                    });
+                }
+            }
+        }
+        if groups.len() >= DUP_GROUPS {
+            complete = false;
+            break;
+        }
+    }
+    // The most to gain first.
+    groups.sort_by_key(|g| std::cmp::Reverse(g.size.saturating_mul(g.files.len() as u64 - 1)));
+    groups.truncate(DUP_GROUPS);
+    Ok(Duplicates {
+        groups,
+        complete,
+        unreadable,
+    })
+}
+
+/// A duplicate group the person reviewed: every copy, and the ones to move to the Recycle
+/// Bin. The rest are kept.
+#[derive(Deserialize)]
+pub struct Reviewed {
+    pub files: Vec<BigFile>,
+    pub remove: Vec<String>,
+}
+
+/// A path in a form that two spellings of the same place share: lower case, one kind of
+/// separator, no `\\?\` prefix, resolved through links where it can be.
+fn same_spelling(path: &Path) -> String {
+    let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let text = resolved.to_string_lossy().to_lowercase().replace('\\', "/");
+    text.strip_prefix("//?/").unwrap_or(&text).to_owned()
+}
+
+/// A copy cleared for the Recycle Bin, with the copies that stay for it (path, identity,
+/// size), so a last look just before the move can see they are still there.
+pub struct Removal {
+    pub file: BigFile,
+    pub keepers: Vec<(String, String, u64)>,
+}
+
+/// Whether every copy that stays for `removal` is still the same file, as recorded.
+pub fn keepers_still_there(removal: &Removal) -> bool {
+    removal.keepers.iter().any(|(path, id, size)| {
+        let path = Path::new(path);
+        std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && m.len() == *size)
+            && crate::ops::identity(path).as_deref() == Some(id.as_str())
+    })
+}
+
+/// The copies of the reviewed groups that may be moved, each group checked as a whole and
+/// all of them together: a copy that stays is a different file from every copy that goes
+/// (not the same path under another spelling, not a hard link to it, in this group or any
+/// other), is still there with the size it was listed with, and, when `verify` is set,
+/// holds the same bytes as each copy that goes. The figures sent back from the view are
+/// not trusted for that last step; the files are compared. A group that fails any of it
+/// moves nothing. `skip_move` is the deny list for what moves (and where the bin can take
+/// it); `skip_keep` only for what stays, which needs no bin. Returns the copies to move and
+/// how many were held back.
+pub fn removable_copies(
+    groups: &[Reviewed],
+    skip_move: &impl Fn(&Path, u64) -> bool,
+    skip_keep: &impl Fn(&Path, u64) -> bool,
+    verify: bool,
+) -> (Vec<Removal>, usize) {
+    // Everything any group is about to remove: no group may keep one of these.
+    let going: Vec<&String> = groups.iter().flat_map(|g| &g.remove).collect();
+    let going_places: Vec<String> = going.iter().map(|p| same_spelling(Path::new(p))).collect();
+    let going_ids: Vec<String> = going
+        .iter()
+        .filter_map(|p| crate::ops::identity(Path::new(p)))
+        .collect();
+    let mut ok = Vec::new();
+    let mut held_back = 0;
+    for g in groups {
+        let marked: Vec<&BigFile> = g
+            .files
+            .iter()
+            .filter(|f| g.remove.contains(&f.path))
+            .collect();
+        // Each removal named once, and only copies of this group, each one a file whose
+        // identity can be read (else it can't be told from a link to a copy that stays).
+        if marked.is_empty()
+            || g.remove.len() != marked.len()
+            || marked
+                .iter()
+                .any(|f| crate::ops::identity(Path::new(&f.path)).is_none())
+        {
+            held_back += marked.len().max(g.remove.len());
+            continue;
+        }
+        let keepers: Vec<&BigFile> = g
+            .files
+            .iter()
+            .filter(|f| !g.remove.contains(&f.path))
+            .filter(|f| {
+                let path = Path::new(&f.path);
+                !going_places.contains(&same_spelling(path))
+                    && crate::ops::identity(path).is_some_and(|id| !going_ids.contains(&id))
+                    && on_disk(path, skip_keep).is_some_and(|(size, _)| size == f.size)
+            })
+            .collect();
+        let proven = |gone: &BigFile| {
+            !verify
+                || keepers
+                    .iter()
+                    .any(|k| same_bytes(Path::new(&k.path), Path::new(&gone.path), &|| false))
+        };
+        if keepers.is_empty() {
+            held_back += marked.len();
+            continue;
+        }
+        let still = still_as_listed(&g.files, skip_move);
+        for f in marked {
+            if still.iter().any(|s| s.path == f.path) && proven(f) {
+                ok.push(Removal {
+                    file: BigFile {
+                        path: f.path.clone(),
+                        size: f.size,
+                        modified: f.modified,
+                    },
+                    keepers: keepers
+                        .iter()
+                        .filter_map(|k| {
+                            let id = crate::ops::identity(Path::new(&k.path))?;
+                            Some((k.path.clone(), id, k.size))
+                        })
+                        .collect(),
+                });
+            } else {
+                held_back += 1;
+            }
+        }
+    }
+    (ok, held_back)
+}
+
 /// The items of a list shown earlier that are still exactly as listed, safe to move: same
 /// size, not changed since, not protected. Anything else is left alone.
 pub fn still_as_listed(items: &[BigFile], skip: impl Fn(&Path, u64) -> bool) -> Vec<&BigFile> {
@@ -421,6 +808,7 @@ mod tests {
     use std::path::PathBuf;
 
     const MB: u64 = 1 << 20;
+    const MB_LEN: usize = 1 << 20;
 
     fn protected(p: &str) -> bool {
         is_protected(Path::new(p), Some(Path::new("C:/Users/me")))
@@ -761,6 +1149,213 @@ mod tests {
         assert_eq!(found[0].size, 14);
     }
 
+    fn put_bytes(dir: &Path, name: &str, byte: u8, len: usize, days_old: u64) -> PathBuf {
+        let p = dir.join(name);
+        std::fs::write(&p, vec![byte; len]).unwrap();
+        let when = std::time::SystemTime::now() - std::time::Duration::from_secs(days_old * 86_400);
+        std::fs::File::options()
+            .write(true)
+            .open(&p)
+            .unwrap()
+            .set_modified(when)
+            .unwrap();
+        p
+    }
+
+    #[test]
+    fn copies_are_grouped_newest_first_and_look_alikes_are_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let scanner = scanned(&dir, |sub| {
+            let a = sub.join("a");
+            std::fs::create_dir(&a).unwrap();
+            put_bytes(sub, "copy-old.bin", 7, 2 * MB_LEN, 300);
+            put_bytes(&a, "copy-new.bin", 7, 2 * MB_LEN, 10);
+            // The same size and the same start and end, but not the same bytes.
+            let mut odd = vec![7u8; 2 * MB_LEN];
+            odd[MB_LEN] = 8;
+            std::fs::write(sub.join("lookalike.bin"), odd).unwrap();
+            // The same size, wholly different.
+            put_bytes(sub, "other.bin", 9, 2 * MB_LEN, 5);
+        });
+        let found = duplicates_with(&scanner, |_, _| false, MB, &|| false).unwrap();
+        assert!(found.complete);
+        assert_eq!(found.groups.len(), 1);
+        let names: Vec<String> = found.groups[0]
+            .files
+            .iter()
+            .map(|f| {
+                Path::new(&f.path)
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        assert_eq!(names, ["copy-new.bin", "copy-old.bin"]);
+    }
+
+    #[test]
+    fn a_hard_link_is_not_a_second_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let scanner = scanned(&dir, |sub| {
+            let a = put_bytes(sub, "a.bin", 3, 2 * MB_LEN, 50);
+            std::fs::hard_link(&a, sub.join("link.bin")).unwrap();
+        });
+        let found = duplicates_with(&scanner, |_, _| false, MB, &|| false).unwrap();
+        assert_eq!(found.groups.len(), 0);
+    }
+
+    #[test]
+    fn protected_copies_are_never_grouped() {
+        let dir = tempfile::tempdir().unwrap();
+        let scanner = scanned(&dir, |sub| {
+            put_bytes(sub, "a.bin", 3, 2 * MB_LEN, 50);
+            put_bytes(sub, "b.bin", 3, 2 * MB_LEN, 40);
+        });
+        let found = duplicates_with(&scanner, |p, _| p.ends_with("b.bin"), MB, &|| false).unwrap();
+        assert_eq!(found.groups.len(), 0);
+    }
+
+    fn reviewed(files: &[&Path], remove: &[&Path]) -> Reviewed {
+        Reviewed {
+            files: files
+                .iter()
+                .map(|p| {
+                    let m = std::fs::metadata(p).unwrap();
+                    BigFile {
+                        path: p.to_string_lossy().into_owned(),
+                        size: m.len(),
+                        modified: m
+                            .modified()
+                            .unwrap()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs()
+                            .try_into()
+                            .unwrap(),
+                    }
+                })
+                .collect(),
+            remove: remove
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn a_group_never_loses_all_its_copies() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = put_bytes(dir.path(), "a.bin", 1, 100, 30);
+        let b = put_bytes(dir.path(), "b.bin", 1, 100, 20);
+        let c = put_bytes(dir.path(), "c.bin", 1, 100, 10);
+        let none = |_: &Path, _: u64| false;
+        // Removing every copy moves nothing.
+        let (ok, held) = removable_copies(
+            &[reviewed(&[&a, &b, &c], &[&a, &b, &c])],
+            &none,
+            &none,
+            true,
+        );
+        assert_eq!((ok.len(), held), (0, 3));
+        // Removing all but one is fine.
+        let (ok, held) =
+            removable_copies(&[reviewed(&[&a, &b, &c], &[&a, &b])], &none, &none, true);
+        assert_eq!((ok.len(), held), (2, 0));
+        // Removing something that is not in the group is refused.
+        let (ok, held) = removable_copies(&[reviewed(&[&a, &b], &[&c])], &none, &none, true);
+        assert_eq!((ok.len(), held), (0, 1));
+    }
+
+    #[test]
+    fn groups_never_keep_what_another_group_removes() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = put_bytes(dir.path(), "a.bin", 1, 100, 30);
+        let b = put_bytes(dir.path(), "b.bin", 1, 100, 20);
+        let none = |_: &Path, _: u64| false;
+        // Two groups over the same two files, each keeping what the other removes.
+        let first = reviewed(&[&a, &b], &[&a]);
+        let second = reviewed(&[&a, &b], &[&b]);
+        let (ok, _) = removable_copies(&[first, second], &none, &none, true);
+        assert_eq!(ok.len(), 0);
+    }
+
+    #[test]
+    fn a_hard_link_of_a_removed_copy_is_not_a_copy_that_stays() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = put_bytes(dir.path(), "a.bin", 1, 100, 30);
+        let link = dir.path().join("link.bin");
+        std::fs::hard_link(&a, &link).unwrap();
+        let none = |_: &Path, _: u64| false;
+        let (ok, held) = removable_copies(&[reviewed(&[&a, &link], &[&a])], &none, &none, true);
+        assert_eq!((ok.len(), held), (0, 1));
+    }
+
+    #[test]
+    fn a_path_spelled_another_way_is_not_a_copy_that_stays() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = put_bytes(dir.path(), "A.bin", 1, 100, 30);
+        let alias = PathBuf::from(a.to_string_lossy().to_uppercase().replace("A.BIN", "a.bin"));
+        if !alias.exists() {
+            return; // a case-sensitive volume: no such alias
+        }
+        let none = |_: &Path, _: u64| false;
+        let group = Reviewed {
+            files: reviewed(&[&a], &[])
+                .files
+                .into_iter()
+                .chain(reviewed(&[&alias], &[]).files)
+                .collect(),
+            remove: vec![a.to_string_lossy().into_owned()],
+        };
+        let (ok, _) = removable_copies(&[group], &none, &none, true);
+        assert_eq!(ok.len(), 0);
+    }
+
+    #[test]
+    fn a_copy_that_no_longer_matches_byte_for_byte_blocks_the_move() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = put_bytes(dir.path(), "a.bin", 1, 100, 30);
+        let b = put_bytes(dir.path(), "b.bin", 1, 100, 20);
+        let none = |_: &Path, _: u64| false;
+        let group = reviewed(&[&a, &b], &[&a]);
+        // The copy to keep is replaced by other bytes of the same size, with an older date.
+        std::fs::write(&b, vec![9u8; 100]).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&b)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_hours(21_600))
+            .unwrap();
+        let (ok, held) = removable_copies(&[group], &none, &none, true);
+        assert_eq!((ok.len(), held), (0, 1));
+    }
+
+    #[test]
+    fn the_copy_kept_by_default_is_not_the_one_in_downloads() {
+        assert!(passing_through("C:\\Users\\me\\Downloads\\a.zip"));
+        assert!(passing_through("/home/me/Desktop/a.zip"));
+        assert!(!passing_through("C:\\Users\\me\\Documents\\a.zip"));
+    }
+
+    #[test]
+    fn nothing_moves_when_the_copy_to_keep_is_gone_or_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = put_bytes(dir.path(), "a.bin", 1, 100, 30);
+        let b = put_bytes(dir.path(), "b.bin", 1, 100, 20);
+        let none = |_: &Path, _: u64| false;
+        let group = reviewed(&[&a, &b], &[&a]);
+        std::fs::remove_file(&b).unwrap();
+        let (ok, held) = removable_copies(&[group], &none, &none, true);
+        assert_eq!((ok.len(), held), (0, 1));
+        // The kept copy rewritten with different content (a new size) after the review.
+        let b = put_bytes(dir.path(), "b.bin", 1, 100, 20);
+        let group = reviewed(&[&a, &b], &[&a]);
+        std::fs::write(&b, vec![2u8; 50]).unwrap();
+        let (ok, _) = removable_copies(&[group], &none, &none, true);
+        assert_eq!(ok.len(), 0);
+    }
+
     #[test]
     fn a_file_changed_or_removed_since_the_scan_is_not_suggested() {
         let dir = tempfile::tempdir().unwrap();
@@ -799,5 +1394,34 @@ mod tests {
             })
             .unwrap();
         assert_eq!(found.len(), 2);
+    }
+
+    #[test]
+    fn a_search_that_is_replaced_says_it_is_incomplete_and_counts_nothing_unreadable() {
+        let dir = tempfile::tempdir().unwrap();
+        let scanner = scanned(&dir, |sub| {
+            put_bytes(sub, "a.bin", 7, 2 * MB_LEN, 300);
+            put_bytes(sub, "b.bin", 7, 2 * MB_LEN, 200);
+        });
+        let found = duplicates_with(&scanner, |_, _| false, MB, &|| true).unwrap();
+        assert!(!found.complete);
+        assert_eq!((found.groups.len(), found.unreadable), (0, 0));
+    }
+
+    #[test]
+    fn a_kept_copy_that_vanishes_or_is_swapped_after_checking_is_noticed() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = put_bytes(dir.path(), "a.bin", 1, 100, 30);
+        let b = put_bytes(dir.path(), "b.bin", 1, 100, 20);
+        let none = |_: &Path, _: u64| false;
+        let (ok, _) = removable_copies(&[reviewed(&[&a, &b], &[&a])], &none, &none, true);
+        assert_eq!(ok.len(), 1);
+        assert!(keepers_still_there(&ok[0]));
+        // A different file of the same size put at the kept path is not the kept copy.
+        std::fs::remove_file(&b).unwrap();
+        std::fs::write(&b, vec![1u8; 100]).unwrap();
+        assert!(!keepers_still_there(&ok[0]));
+        std::fs::remove_file(&b).unwrap();
+        assert!(!keepers_still_there(&ok[0]));
     }
 }
