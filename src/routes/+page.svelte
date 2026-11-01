@@ -53,6 +53,8 @@
   import TagDialog from "$lib/components/TagDialog.svelte";
   import TagChips from "$lib/components/TagChips.svelte";
   import Inspector from "$lib/components/Inspector.svelte";
+  import Palette, { type PaletteItem } from "$lib/components/Palette.svelte";
+  import { clearRecent, loadRecent, recordRecent } from "$lib/palette";
   import { tagColor } from "$lib/tags";
   import OpsPill from "$lib/components/OpsPill.svelte";
   import Sidebar from "$lib/components/Sidebar.svelte";
@@ -200,6 +202,7 @@
     tagView = null;
     tagFilter = [];
     tagMap = tags;
+    recordRecent(target);
     if (tabs[active]) {
       tabs[active].path = target;
       shownTabId = tabs[active].id;
@@ -986,6 +989,130 @@
     fileView?.scrollToTop();
   }
 
+  // ---- Command palette (Ctrl+K) ----
+
+  let paletteOpen = $state(false);
+  let paletteItems = $state<PaletteItem[]>([]);
+
+  /** Everything the palette can do right now: folders to go to, and actions. */
+  function buildPalette(): PaletteItem[] {
+    const places: Record<string, PaletteItem> = Object.create(null);
+    const add = (p: string, recent?: number) => {
+      if (!p || p === path || p in places) return;
+      places[p] = {
+        kind: "folder",
+        label: folderName(p),
+        detail: p,
+        recent,
+        run: () => navigate(p),
+      };
+    };
+    loadRecent().forEach((p, i) => add(p, i));
+    for (const sub of ["", "Desktop", "Documents", "Downloads", "Pictures"]) {
+      add(sub ? joinPath(home, sub) : home);
+    }
+    // What is in the folder shown.
+    for (const e of entries) if (e.isDir) add(e.path);
+
+    const any = selected().length > 0;
+    const one = selected().length === 1;
+    const action = (label: string, detail: string | undefined, run: () => void, when = true) =>
+      when ? [{ kind: "action" as const, label, detail, run }] : [];
+    const actions: PaletteItem[] = [
+      ...action("New folder", "Ctrl+Shift+N", newFolder, !tagView),
+      ...action("Copy", "Ctrl+C", copySelection, any),
+      ...action("Cut", "Ctrl+X", cutSelection, any),
+      ...action("Paste", "Ctrl+V", paste, !!clipboard && !tagView),
+      ...action("Open", "Enter", () => open(selected()[0]), one),
+      ...action(
+        "Open in new tab",
+        undefined,
+        () => openTab(selected()[0].path, true),
+        one && selected()[0].isDir,
+      ),
+      ...action("Rename", "F2", () => (renaming = selected()[0]?.path ?? null), one),
+      ...action("Move to Recycle Bin", "Del", trashSelected, any),
+      ...action("Quick Look", "Space", openQuickLook, any),
+      ...action("Tags…", undefined, () => (tagsOpen = true), any),
+      ...tagDefs
+        .filter((t) => t.id <= 7)
+        .flatMap((t) => action(`Tag: ${t.name}`, String(t.id), () => toggleTag(t.id), any)),
+      ...action(
+        "More options (system menu)",
+        undefined,
+        () => nativeMenu(selected().map((e) => e.path)),
+        any,
+      ),
+      ...action("Clear selection", "Esc", clearSelectionAndClipboard, any || !!clipboard),
+      ...action(
+        "Select all",
+        "Ctrl+A",
+        () => selectRange(0, visible.length - 1),
+        visible.length > 0,
+      ),
+      ...action("Undo", "Ctrl+Z", () => stepHistory(false)),
+      ...action("Redo", "Ctrl+Y", () => stepHistory(true)),
+      ...action("Back", "Alt+←", goBack, back.length > 0 || !!tagView),
+      ...action("Forward", "Alt+→", goForward, forward.length > 0),
+      ...action("Up one folder", "Alt+↑", goUp),
+      ...action("Refresh", undefined, () => refresh()),
+      ...action("Go to a path…", "Ctrl+L", () => toolbar?.edit(), !tagView),
+      ...action("New tab", "Ctrl+T", () => openTab(startPath(home))),
+      ...action("Close tab", "Ctrl+W", () => closeTab(active)),
+      ...action(
+        "Next tab",
+        "Ctrl+Tab",
+        () => activate((active + 1) % tabs.length),
+        tabs.length > 1,
+      ),
+      ...action(
+        "Previous tab",
+        "Ctrl+Shift+Tab",
+        () => activate((active - 1 + tabs.length) % tabs.length),
+        tabs.length > 1,
+      ),
+      ...tabs.flatMap((t, i) =>
+        action(
+          `Switch to tab: ${folderName(t.path)}`,
+          i < 9 ? `Ctrl+${i + 1}` : undefined,
+          () => activate(i),
+          i !== active,
+        ),
+      ),
+      ...action("Clear recent folders", undefined, clearRecent),
+      ...action("Grid view", undefined, () => (view = "grid"), view !== "grid"),
+      ...action("List view", undefined, () => (view = "list"), view !== "list"),
+      ...action(settings.showHidden ? "Hide hidden files" : "Show hidden files", "Ctrl+H", () =>
+        updateSettings({ showHidden: !settings.showHidden }),
+      ),
+      ...action(
+        settings.showInspector ? "Hide the inspector" : "Show the inspector",
+        "Ctrl+I",
+        () => updateSettings({ showInspector: !settings.showInspector }),
+      ),
+      ...action("Light theme", undefined, () => chooseTheme("light"), theme !== "light"),
+      ...action("Dark theme", undefined, () => chooseTheme("dark"), theme !== "dark"),
+      ...action(
+        "Follow the system theme",
+        undefined,
+        () => chooseTheme("system"),
+        theme !== "system",
+      ),
+      ...action("Settings", "Ctrl+,", () => (settingsOpen = true)),
+    ];
+    return [...Object.values(places), ...actions];
+  }
+
+  function openPalette() {
+    paletteItems = buildPalette();
+    paletteOpen = true;
+  }
+
+  function chooseTheme(t: Theme) {
+    theme = t;
+    setTheme(t);
+  }
+
   // ---- Quick Look ----
 
   /** The file being previewed, by path so a refresh doesn't change what is shown. */
@@ -1190,6 +1317,8 @@
     if (key === "," && !e.shiftKey) return () => (settingsOpen = true);
     if (key === "i" && !e.shiftKey && !e.altKey)
       return () => updateSettings({ showInspector: !settings.showInspector });
+    if (key === "k" && !e.shiftKey && !e.altKey)
+      return renaming || (e.target as HTMLElement).tagName === "INPUT" ? ignore : openPalette;
     if (key === "l" && !e.shiftKey) return () => !tagView && toolbar?.edit();
     if (key === "t" || key === "w") {
       // Held-down Ctrl+T / Ctrl+W must not open or close tabs in a burst.
@@ -1286,7 +1415,7 @@
 
   function onkeydown(e: KeyboardEvent) {
     // A dialog handles its own keys; nothing behind it may act on them.
-    if (asking || menu || settingsOpen || tagsOpen) return;
+    if (asking || menu || settingsOpen || tagsOpen || paletteOpen) return;
     if (look) {
       // Quick Look owns the keyboard, but the audio and video controls keep Space and the
       // arrows (play, seek, volume).
@@ -1473,6 +1602,10 @@
       have={tagState}
       ontoggle={toggleTag}
     />
+  {/if}
+
+  {#if paletteOpen}
+    <Palette items={paletteItems} onclose={() => (paletteOpen = false)} />
   {/if}
 
   {#if tagsOpen}
