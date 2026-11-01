@@ -26,6 +26,15 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "REPLACE WITH THE PUBLIC KEY FROM `npm run tauri signer generate` (see docs/RELEASING.md)",
+      "endpoints": [
+        "https://github.com/naz013/file-manager-light/releases/latest/download/latest.json"
+      ],
+      "windows": { "installMode": "passive" }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",

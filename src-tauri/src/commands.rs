@@ -1356,6 +1356,27 @@ pub fn scan_roots(scanner: tauri::State<'_, Scanner>) -> CmdResult<Vec<RootInfo>
 /// Where crash reports and session counts are kept.
 pub struct CrashDir(pub PathBuf);
 
+/// Whether an update may be installed now. Installing can end the app (the Windows installer
+/// closes it), so it must not start while a copy, move or delete is going: that would leave
+/// a half-done job for the next start to find.
+#[tauri::command]
+pub fn update_gate(queue: tauri::State<'_, Arc<Queue>>) -> Result<(), String> {
+    if queue.is_busy() {
+        return Err("Folio is still working on files. Install the update when it is done.".into());
+    }
+    Ok(())
+}
+
+/// Starts the app again after an update was installed (Windows already did, by itself).
+#[tauri::command]
+pub fn update_restart(
+    app: tauri::AppHandle,
+    queue: tauri::State<'_, Arc<Queue>>,
+) -> Result<(), String> {
+    update_gate(queue)?;
+    app.restart()
+}
+
 #[tauri::command]
 pub fn crash_state(dir: tauri::State<'_, CrashDir>) -> crate::crash::State {
     crate::crash::state(&dir.0)

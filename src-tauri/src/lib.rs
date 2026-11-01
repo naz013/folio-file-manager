@@ -151,6 +151,9 @@ pub fn run() {
         .manage(watch::DirWatcher::default())
         .manage(preview::Current::default())
         .setup(|app| {
+            #[cfg(desktop)]
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
             let file = app
                 .path()
                 .app_data_dir()
@@ -293,6 +296,8 @@ pub fn run() {
             commands::crash_state,
             commands::crash_set,
             commands::crash_clear,
+            commands::update_gate,
+            commands::update_restart,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -40,6 +40,12 @@ export interface Settings {
   cleanupDupMinMb: number;
   /** Unfinished copies untouched for this many days are suggested. */
   cleanupPartialDays: number;
+  /** Look for a new version in the background, once a day. */
+  updateCheck: boolean;
+  /** When the last background check ran (ms since 1970); 0 for never. */
+  updateLastCheck: number;
+  /** A version the user said "Later" to: not offered again until a newer one is out. */
+  updateSkipped: string;
 }
 
 export const DEFAULTS: Settings = {
@@ -55,6 +61,9 @@ export const DEFAULTS: Settings = {
   cleanupDownloadsDays: 90,
   cleanupDupMinMb: 10,
   cleanupPartialDays: 7,
+  updateCheck: true,
+  updateLastCheck: 0,
+  updateSkipped: "",
 };
 
 /** The allowed delay closest to `ms`, so a hand-edited value still shows in the list. */
@@ -103,6 +112,12 @@ function read(): Settings {
     cleanupPartialDays: (PARTIAL_AGES_DAYS as readonly unknown[]).includes(saved.cleanupPartialDays)
       ? (saved.cleanupPartialDays as number)
       : DEFAULTS.cleanupPartialDays,
+    updateCheck: saved.updateCheck !== false,
+    updateLastCheck:
+      typeof saved.updateLastCheck === "number" && Number.isFinite(saved.updateLastCheck)
+        ? saved.updateLastCheck
+        : DEFAULTS.updateLastCheck,
+    updateSkipped: typeof saved.updateSkipped === "string" ? saved.updateSkipped : "",
     pinnedFolders: Array.isArray(saved.pinnedFolders)
       ? saved.pinnedFolders.filter(
           (p, i, all): p is string => typeof p === "string" && !!p && all.indexOf(p) === i,

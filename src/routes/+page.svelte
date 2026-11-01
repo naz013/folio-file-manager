@@ -93,6 +93,8 @@
     updateSettings,
   } from "$lib/settings.svelte";
   import SettingsDialog from "$lib/components/SettingsDialog.svelte";
+  import UpdateBanner from "$lib/components/UpdateBanner.svelte";
+  import { checkForUpdate } from "$lib/updates.svelte";
   import CrashPrompt from "$lib/components/CrashPrompt.svelte";
   import StorageView from "$lib/components/StorageView.svelte";
   import CleanupView from "$lib/components/CleanupView.svelte";
@@ -1864,6 +1866,8 @@
         (s) => (askCrash = s.consent === null),
         () => {},
       );
+      // Well after first paint, so the check never competes with showing the folder.
+      setTimeout(() => checkForUpdate(false), 15_000);
     }
     const onFocus = () => loadShelf();
     window.addEventListener("focus", onFocus);
@@ -2086,6 +2090,8 @@
       }}
     />
   {/if}
+
+  <UpdateBanner />
 
   {#if askCrash}
     <CrashPrompt

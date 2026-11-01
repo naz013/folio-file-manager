@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { getVersion } from "@tauri-apps/api/app";
   import { onMount, tick } from "svelte";
   import {
     crashClear,
@@ -10,6 +11,7 @@
   } from "$lib/api/fs";
   import { SPRING_DELAYS_MS, settings, updateSettings } from "$lib/settings.svelte";
   import { themes, type Theme } from "$lib/theme";
+  import { checkForUpdate, updates } from "$lib/updates.svelte";
 
   let {
     theme,
@@ -29,6 +31,27 @@
     if (isCustom) custom = settings.startLocation;
     return () => opener?.focus?.();
   });
+
+  let version = $state("");
+  onMount(() => {
+    getVersion().then(
+      (v) => (version = v),
+      () => {},
+    );
+  });
+
+  /** What the manual check found, in words. */
+  const updateStatus = $derived(
+    updates.phase === "checking"
+      ? "Checking…"
+      : updates.phase === "current"
+        ? "Folio is up to date."
+        : updates.phase === "available"
+          ? `Folio ${updates.version} is available.`
+          : updates.phase === "failed"
+            ? updates.error
+            : "",
+  );
 
   let crash = $state<CrashState | null>(null);
   onMount(() => {
@@ -241,6 +264,37 @@
           checked={settings.returnAfterDrop}
           onchange={(e) => updateSettings({ returnAfterDrop: e.currentTarget.checked })}
         />
+      </div>
+    </section>
+
+    <section>
+      <h3>Updates</h3>
+
+      <div class="row">
+        <span id="update-label">Check for updates automatically</span>
+        <input
+          type="checkbox"
+          class="switch"
+          role="switch"
+          aria-labelledby="update-label"
+          checked={settings.updateCheck}
+          onchange={(e) => updateSettings({ updateCheck: e.currentTarget.checked })}
+        />
+      </div>
+      <p class="note">
+        Once a day Folio asks its release page whether a new version exists. Nothing else is sent.
+        An update is only installed when you say so, and never while files are being copied or
+        moved.
+      </p>
+
+      <div class="row">
+        <span>Folio {version}{updateStatus ? ` · ${updateStatus}` : ""}</span>
+        <button
+          onclick={() => checkForUpdate(true)}
+          disabled={updates.phase === "checking" || updates.phase === "downloading"}
+        >
+          Check now
+        </button>
       </div>
     </section>
 
