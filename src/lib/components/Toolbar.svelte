@@ -19,6 +19,7 @@
     onforward,
     onnavigate,
     ontheme,
+    onsettings,
   }: {
     path: string;
     view: View;
@@ -34,6 +35,7 @@
     /** Resolves to whether the folder was opened (null if superseded); `quiet` leaves the error to the caller. */
     onnavigate: (path: string, quiet?: boolean) => Promise<boolean | null>;
     ontheme: () => void;
+    onsettings: () => void;
   } = $props();
 
   let segments = $derived(pathSegments(path));
@@ -320,6 +322,15 @@
     title={themeLabel[theme]}
   >
     <Icon name={theme === "system" ? "monitor" : theme === "light" ? "sun" : "moon"} size={16} />
+  </button>
+
+  <button
+    class="icon-btn"
+    onclick={onsettings}
+    aria-label="Settings (Ctrl+,)"
+    title="Settings (Ctrl+,)"
+  >
+    <Icon name="settings" size={16} />
   </button>
 </header>
 

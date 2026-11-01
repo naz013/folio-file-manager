@@ -1,35 +1,5 @@
 /** Spring-loaded navigation: hovering a folder mid-drag opens it after a delay. */
 
-const KEY = "folio.spring";
-
-export interface SpringSettings {
-  /** How long to hover before the folder opens; null turns spring-loading off. */
-  delayMs: number | null;
-  /** After a drop or cancel, go back to the folder the drag started in. */
-  returnAfterDrop: boolean;
-}
-
-const MIN_DELAY = 500;
-const MAX_DELAY = 3000;
-const DEFAULTS: SpringSettings = { delayMs: 2000, returnAfterDrop: false };
-
-/** The saved settings (exposed in Settings, #25); out-of-range delays are clamped. */
-export function loadSpring(): SpringSettings {
-  try {
-    const saved = JSON.parse(localStorage.getItem(KEY) ?? "null") as Partial<SpringSettings> | null;
-    if (saved) {
-      const delay = saved.delayMs === null ? null : Number(saved.delayMs ?? DEFAULTS.delayMs);
-      return {
-        delayMs: delay === null ? null : Math.min(MAX_DELAY, Math.max(MIN_DELAY, delay || 0)),
-        returnAfterDrop: saved.returnAfterDrop === true,
-      };
-    }
-  } catch {
-    // Unreadable settings: use the defaults.
-  }
-  return { ...DEFAULTS };
-}
-
 /** Counts down while the drag hovers one target, then asks for it to be opened. */
 export function createSpring(hooks: {
   delayMs: () => number | null;

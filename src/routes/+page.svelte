@@ -46,7 +46,9 @@
   import Sidebar from "$lib/components/Sidebar.svelte";
   import TabBar from "$lib/components/TabBar.svelte";
   import Toolbar, { type View } from "$lib/components/Toolbar.svelte";
-  import { createSpring, loadSpring } from "$lib/spring";
+  import { createSpring } from "$lib/spring";
+  import { settings, startPath, updateSettings } from "$lib/settings.svelte";
+  import SettingsDialog from "$lib/components/SettingsDialog.svelte";
   import {
     applyTheme,
     loadTheme,
@@ -62,9 +64,12 @@
   let path = $state("");
   // Raw (not deeply proxied): listings are replaced wholesale, and proxying 50k objects is slow.
   let entries = $state.raw<Entry[]>([]);
-  let view = $state<View>("grid");
+  // Starts as the default view; the toolbar can change it for this tab, and changing the
+  // default in Settings shows at once.
+  let view = $derived<View>(settings.defaultView);
+
+  let settingsOpen = $state(false);
   let theme = $state<Theme>(loadTheme());
-  let showHidden = $state(false);
 
   let back = $state<string[]>([]);
   let forward = $state<string[]>([]);
@@ -119,7 +124,7 @@
   let fileView: FileView;
   let toolbar: Toolbar | undefined = $state();
 
-  let visible = $derived(showHidden ? entries : entries.filter((e) => !e.hidden));
+  let visible = $derived(settings.showHidden ? entries : entries.filter((e) => !e.hidden));
 
   function notify(text: string, error = false) {
     toast = { text, error };
@@ -579,7 +584,6 @@
 
   // ---- Spring-loaded folders ----
 
-  const springSettings = loadSpring();
   /** The folder whose countdown is running, for the ring. */
   let springPath = $state<string | null>(null);
   let springMs = $state(0);
@@ -600,7 +604,7 @@
   let spent: string | null = null;
 
   const spring = createSpring({
-    delayMs: () => springSettings.delayMs,
+    delayMs: () => settings.springDelayMs,
     eligible: (target) => {
       if (target === spent) return false;
       if (target === "new") return true;
@@ -622,7 +626,7 @@
     const started = trip;
     trip = null;
     if (!started || path === started.from) return;
-    if (springSettings.returnAfterDrop) {
+    if (settings.returnAfterDrop) {
       // The tab goes back to where the drag began before it is left behind.
       await load(started.from, true);
     } else {
@@ -650,7 +654,7 @@
     if (await load(target, true)) {
       if (id === dragId) {
         trip ??= { from };
-      } else if (!springSettings.returnAfterDrop) {
+      } else if (!settings.returnAfterDrop) {
         // The drag ended while this was loading: its trip is over, so record it now.
         back.push(from);
         forward = [];
@@ -721,7 +725,7 @@
     const started = trip;
     trip = null;
     if (!started) return;
-    if (springSettings.returnAfterDrop) {
+    if (settings.returnAfterDrop) {
       await load(started.from, true);
     } else if (path !== started.from) {
       // The whole trip is one step back.
@@ -1025,11 +1029,12 @@
   function tabShortcut(e: KeyboardEvent, ctrl: boolean): Action | null {
     if (!ctrl) return null;
     const key = e.key.toLowerCase();
+    if (key === "," && !e.shiftKey) return () => (settingsOpen = true);
     if (key === "l" && !e.shiftKey) return () => toolbar?.edit();
     if (key === "t" || key === "w") {
       // Held-down Ctrl+T / Ctrl+W must not open or close tabs in a burst.
       if (!restored || e.repeat) return ignore;
-      return key === "t" ? () => openTab(home) : () => closeTab(active);
+      return key === "t" ? () => openTab(startPath(home)) : () => closeTab(active);
     }
     if (e.key === "Tab") return () => cycleTab(e.shiftKey ? -1 : 1);
     if (e.key === "PageDown") return () => cycleTab(1);
@@ -1070,7 +1075,7 @@
         case "v":
           return paste;
         case "h":
-          return () => (showHidden = !showHidden);
+          return () => updateSettings({ showHidden: !settings.showHidden });
       }
     }
     const row = view === "grid" ? fileView.columns() : 1;
@@ -1110,7 +1115,7 @@
 
   function onkeydown(e: KeyboardEvent) {
     // A dialog handles its own keys; nothing behind it may act on them.
-    if (asking || menu) return;
+    if (asking || menu || settingsOpen) return;
     if (look) {
       // Quick Look owns the keyboard, but the audio and video controls keep Space and the
       // arrows (play, seek, volume).
@@ -1164,7 +1169,7 @@
     homeDir().then(async (h) => {
       home = h;
       const saved = await windowTabs().catch(() => null);
-      tabs = saved ? saved.tabs.map(newTab) : [newTab(h)];
+      tabs = saved ? saved.tabs.map(newTab) : [newTab(startPath(h))];
       await activate(saved?.active ?? 0);
       restored = true;
       // Benchmarks are optional; never let them break startup.
@@ -1205,7 +1210,7 @@
       {active}
       onselect={activate}
       onclose={closeTab}
-      onnew={() => openTab(home)}
+      onnew={() => openTab(startPath(home))}
       {springPath}
       {springMs}
       onmove={moveTab}
@@ -1228,6 +1233,7 @@
         theme = nextTheme(theme);
         setTheme(theme);
       }}
+      onsettings={() => (settingsOpen = true)}
     />
     <FileView
       bind:this={fileView}
@@ -1270,6 +1276,17 @@
       />
     </footer>
   </main>
+
+  {#if settingsOpen}
+    <SettingsDialog
+      {theme}
+      ontheme={(t) => {
+        theme = t;
+        setTheme(t);
+      }}
+      onclose={() => (settingsOpen = false)}
+    />
+  {/if}
 
   {#if look && lookIndex >= 0}
     <QuickLook
