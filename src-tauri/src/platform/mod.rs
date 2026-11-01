@@ -56,6 +56,10 @@ pub fn list_drives() -> Vec<DriveInfo> {
 
 /// Puts `paths` on the system clipboard as files, for another program to paste: moved if
 /// `cut`, else copied. Only Windows has a file clipboard to mirror to so far.
+#[cfg_attr(
+    not(windows),
+    expect(clippy::unnecessary_wraps, reason = "the Windows version can fail")
+)]
 pub fn clipboard_write_files(paths: &[std::path::PathBuf], cut: bool) -> Result<(), String> {
     #[cfg(windows)]
     {

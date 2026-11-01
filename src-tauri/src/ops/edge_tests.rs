@@ -1195,6 +1195,7 @@ fn names_windows_would_change_are_rejected() {
 
 // ------------------------------------- 8. Links and folder-into-itself (#62)
 
+#[cfg(windows)]
 fn junction(link: &Path, target: &Path) {
     let ok = std::process::Command::new("cmd")
         .args(["/C", "mklink", "/J"])

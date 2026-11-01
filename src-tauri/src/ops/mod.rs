@@ -661,10 +661,16 @@ fn repoint_renamed_tree(olds: &[PathBuf], new: &Path, not_repointed: &mut Vec<Pa
                 }
             } else if kind.is_symlink() {
                 // A link of a kind that can't be read has nothing to repoint.
-                let Some(rest) = fs::read_link(&at)
-                    .ok()
-                    .and_then(|target| olds.iter().find_map(|old| inside_tree(old, &target)))
-                else {
+                let Some(rest) = fs::read_link(&at).ok().and_then(|target| {
+                    olds.iter()
+                        .find_map(|old| inside_tree(old, &target))
+                        .or_else(|| {
+                            // The link may spell the folder differently (an 8.3 short name,
+                            // say): resolve what still exists of its path and try again.
+                            let resolved = resolve_existing(&target);
+                            olds.iter().find_map(|old| inside_tree(old, &resolved))
+                        })
+                }) else {
                     continue;
                 };
                 if let Err(leftover) = repoint_link(&new.join(rest), &at) {
@@ -673,6 +679,23 @@ fn repoint_renamed_tree(olds: &[PathBuf], new: &Path, not_repointed: &mut Vec<Pa
                 }
             }
         }
+    }
+}
+
+/// `path` with its longest part that still exists resolved (short names expanded, links
+/// followed), so a name that is spelled another way can be matched against the real one.
+fn resolve_existing(path: &Path) -> PathBuf {
+    let mut rest = PathBuf::new();
+    let mut at = path;
+    loop {
+        if let Ok(real) = fs::canonicalize(at) {
+            return real.join(rest);
+        }
+        let (Some(name), Some(parent)) = (at.file_name(), at.parent()) else {
+            return path.to_path_buf();
+        };
+        rest = Path::new(name).join(&rest);
+        at = parent;
     }
 }
 
