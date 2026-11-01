@@ -684,6 +684,28 @@ pub fn clipboard_take() -> Option<(Vec<String>, bool)> {
     crate::platform::clipboard_take_files().map(|(paths, cut)| (strings(paths), cut))
 }
 
+// ---- Crash reporting (local, opt-in) ----
+
+/// Where crash reports and session counts are kept.
+pub struct CrashDir(pub PathBuf);
+
+#[tauri::command]
+pub fn crash_state(dir: tauri::State<'_, CrashDir>) -> crate::crash::State {
+    crate::crash::state(&dir.0)
+}
+
+#[tauri::command]
+pub fn crash_set(dir: tauri::State<'_, CrashDir>, on: bool) -> crate::crash::State {
+    crate::crash::set_consent(&dir.0, on);
+    crate::crash::state(&dir.0)
+}
+
+#[tauri::command]
+pub fn crash_clear(dir: tauri::State<'_, CrashDir>) -> crate::crash::State {
+    crate::crash::clear(&dir.0);
+    crate::crash::state(&dir.0)
+}
+
 // ---- Clipboard shelf ----
 
 #[tauri::command(async)]

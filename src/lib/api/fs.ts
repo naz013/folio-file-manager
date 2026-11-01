@@ -69,6 +69,19 @@ export const releasePreview = () => invoke<void>("preview_allow", { path: null }
 export const readTextPreview = (path: string) =>
   invoke<{ text: string; truncated: boolean }>("read_text_preview", { path });
 
+/** Opt-in crash reporting, kept on this computer. */
+export interface CrashState {
+  /** null until the user has answered. */
+  consent: boolean | null;
+  sessions: number;
+  crashed: number;
+  reports: number;
+  dir: string;
+}
+export const crashState = () => invoke<CrashState>("crash_state");
+export const crashSet = (on: boolean) => invoke<CrashState>("crash_set", { on });
+export const crashClear = () => invoke<CrashState>("crash_clear");
+
 /** Puts the latest cut or copy on the system clipboard, so Explorer can paste it too. */
 export const clipboardMirror = (paths: string[], cut: boolean) =>
   invoke<void>("clipboard_mirror", { paths, cut });

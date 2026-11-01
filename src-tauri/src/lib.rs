@@ -1,4 +1,5 @@
 mod commands;
+mod crash;
 mod fs;
 mod journal;
 mod ops;
@@ -143,6 +144,15 @@ pub fn run() {
             // a journal that can't open is a failed start.
             app.manage(open_journal(journal_file.as_deref())?);
             manage_stores(app);
+            // Always managed, so the commands never meet missing state; without an app
+            // data folder the files simply fail to write.
+            let dir = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::env::temp_dir().join("folio"))
+                .join("crash");
+            crash::init(&dir);
+            app.manage(commands::CrashDir(dir));
             // The main window comes from tauri.conf.json, hidden until it is back where
             // it was. Other saved windows open in the background so they don't hold up
             // the main window's start.
@@ -231,7 +241,17 @@ pub fn run() {
             commands::undo_state,
             commands::perf_config,
             commands::perf_report,
+            commands::crash_state,
+            commands::crash_set,
+            commands::crash_clear,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event
+                && let Some(dir) = app.try_state::<commands::CrashDir>()
+            {
+                crash::end_session(&dir.0);
+            }
+        });
 }

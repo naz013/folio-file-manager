@@ -1,6 +1,13 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import { listDir } from "$lib/api/fs";
+  import {
+    crashClear,
+    crashSet,
+    crashState,
+    listDir,
+    openPath,
+    type CrashState,
+  } from "$lib/api/fs";
   import { SPRING_DELAYS_MS, settings, updateSettings } from "$lib/settings.svelte";
   import { themes, type Theme } from "$lib/theme";
 
@@ -21,6 +28,22 @@
     dialog.focus();
     if (isCustom) custom = settings.startLocation;
     return () => opener?.focus?.();
+  });
+
+  let crash = $state<CrashState | null>(null);
+  onMount(() => {
+    crashState().then(
+      (s) => (crash = s),
+      () => {},
+    );
+  });
+
+  /** "12 of 13 sessions ended cleanly (92%)", or a note while there is nothing to count. */
+  const crashFree = $derived.by(() => {
+    if (!crash?.sessions) return "No sessions counted yet.";
+    const clean = crash.sessions - crash.crashed;
+    const pct = Math.floor((clean / crash.sessions) * 100);
+    return `${clean} of ${crash.sessions} sessions ended cleanly (${pct}%).`;
   });
 
   const places = [
@@ -220,6 +243,48 @@
         />
       </div>
     </section>
+
+    <section>
+      <h3>Privacy</h3>
+
+      <div class="row">
+        <span id="crash-label">Keep crash reports on this computer</span>
+        <input
+          type="checkbox"
+          class="switch"
+          role="switch"
+          aria-labelledby="crash-label"
+          checked={crash?.consent === true}
+          onchange={async (e) => {
+            const box = e.currentTarget;
+            try {
+              crash = await crashSet(box.checked);
+            } catch {
+              box.checked = crash?.consent === true;
+            }
+          }}
+        />
+      </div>
+      <p class="note">Nothing is sent anywhere. Reports stay in a folder you can open.</p>
+
+      {#if crash?.consent}
+        <div class="row">
+          <span>{crashFree}</span>
+          <span class="buttons">
+            <button onclick={() => crash && openPath(crash.dir)} disabled={!crash?.reports}>
+              Show {crash?.reports ?? 0}
+              {crash?.reports === 1 ? "report" : "reports"}
+            </button>
+            <button
+              onclick={async () => (crash = await crashClear().catch(() => crash))}
+              disabled={!crash?.reports && !crash?.crashed}
+            >
+              Delete
+            </button>
+          </span>
+        </div>
+      {/if}
+    </section>
   </div>
 </div>
 
@@ -326,6 +391,27 @@
     background: var(--bg-window);
     color: var(--text-primary);
     box-shadow: var(--shadow-raised);
+  }
+
+  .note {
+    margin: var(--space-xs) 0 0;
+    color: var(--text-tertiary);
+    font-size: var(--font-size-caption);
+  }
+
+  .buttons {
+    display: flex;
+    gap: var(--space-xs);
+  }
+
+  .buttons button {
+    padding: var(--space-2xs) var(--space-sm);
+    border-radius: var(--radius-sm);
+    background: var(--bg-control);
+  }
+
+  .buttons button:disabled {
+    color: var(--text-tertiary);
   }
 
   .switch {

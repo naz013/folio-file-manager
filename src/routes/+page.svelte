@@ -11,6 +11,8 @@
     tagDelete,
     tagList,
     clipboardMirror,
+    crashSet,
+    crashState,
     clipboardTake,
     shelfAdd,
     shelfClear,
@@ -72,6 +74,7 @@
   import { createSpring } from "$lib/spring";
   import { settings, startPath, updateSettings } from "$lib/settings.svelte";
   import SettingsDialog from "$lib/components/SettingsDialog.svelte";
+  import CrashPrompt from "$lib/components/CrashPrompt.svelte";
   import {
     applyTheme,
     loadTheme,
@@ -92,6 +95,8 @@
   let view = $derived<View>(settings.defaultView);
 
   let settingsOpen = $state(false);
+  /** Asked once, in the first window, until the user has answered. */
+  let askCrash = $state(false);
   let theme = $state<Theme>(loadTheme());
 
   let back = $state<string[]>([]);
@@ -1546,7 +1551,7 @@
 
   function onkeydown(e: KeyboardEvent) {
     // A dialog handles its own keys; nothing behind it may act on them.
-    if (asking || menu || settingsOpen || tagsOpen || paletteOpen) return;
+    if (asking || menu || settingsOpen || askCrash || tagsOpen || paletteOpen) return;
     if (look) {
       // Quick Look owns the keyboard, but the audio and video controls keep Space and the
       // arrows (play, seek, volume).
@@ -1599,6 +1604,12 @@
     });
     loadTagDefs();
     loadShelf();
+    if (getCurrentWindow().label === "main") {
+      crashState().then(
+        (s) => (askCrash = s.consent === null),
+        () => {},
+      );
+    }
     const onFocus = () => loadShelf();
     window.addEventListener("focus", onFocus);
     homeDir().then(async (h) => {
@@ -1763,6 +1774,16 @@
       oncreate={createTag}
       ondelete={removeTag}
       onclose={() => (tagsOpen = false)}
+    />
+  {/if}
+
+  {#if askCrash}
+    <CrashPrompt
+      ondismiss={() => (askCrash = false)}
+      onanswer={(on) => {
+        askCrash = false;
+        crashSet(on).catch(() => {});
+      }}
     />
   {/if}
 
