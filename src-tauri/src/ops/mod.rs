@@ -10,8 +10,10 @@ use std::path::{Component, Path, PathBuf};
 pub mod bulk_rename;
 pub mod conflicts;
 mod cross_volume;
+pub mod image_edit;
 #[cfg(windows)]
 mod links;
+pub mod made;
 mod noclobber;
 pub mod pdf;
 pub mod progress;

@@ -12,6 +12,7 @@
     total,
     onopen,
     ontools,
+    toolsLabel = "PDF tools…",
     onclose,
   }: {
     entry: Entry;
@@ -20,8 +21,10 @@
     total: number;
     /** "Open": hand the file to its default app. */
     onopen: () => void;
-    /** "PDF tools": merge or compress; given only for a PDF. */
+    /** The file's tools (PDF tools, image tools); given only for a file that has them. */
     ontools?: () => void;
+    /** What the tools button says. */
+    toolsLabel?: string;
     onclose: () => void;
   } = $props();
 
@@ -47,10 +50,13 @@
   const path = $derived(entry.path);
   const name = $derived(entry.name);
   const isDir = $derived(entry.isDir);
+  // A file edited in place keeps its path; its size or time say it is another file now.
+  const version = $derived(`${entry.modified}-${entry.size}`);
 
   // Load what the current file needs; a newer file drops the answer to an older one.
   $effect(() => {
     const kind = previewKind(name, isDir);
+    void version;
     let current = true;
     shown = { kind: "loading" };
     if (kind === "other") {
@@ -63,7 +69,9 @@
         );
     } else {
       previewUrl(path)
-        .then((url) => current && (shown = { kind: "url", media: kind, url }))
+        .then(
+          (url) => current && (shown = { kind: "url", media: kind, url: `${url}?v=${version}` }),
+        )
         .catch((e) => current && (shown = { kind: "none", why: String(e) }));
     }
     return () => (current = false);
@@ -88,7 +96,7 @@
         </span>
       </div>
       <span class="count">{position} of {total}</span>
-      {#if ontools}<button class="open" onclick={ontools}>PDF tools…</button>{/if}
+      {#if ontools}<button class="open" onclick={ontools}>{toolsLabel}</button>{/if}
       <button class="open" onclick={onopen}>Open</button>
       <button class="open" onclick={onclose}>Close</button>
     </header>

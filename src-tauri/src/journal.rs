@@ -299,6 +299,11 @@ impl Journal {
         };
         let steps: Vec<Step> =
             serde_json::from_str(&entry.steps).map_err(|e| format!("Can't {verb}: {e}"))?;
+        if matches!(direction, Direction::Redo)
+            && steps.iter().any(|s| matches!(s, Step::Made { .. }))
+        {
+            return Err(drop_unredoable(&conn, &entry));
+        }
         let in_use = known_trash_ids(&conn);
 
         // Undo runs the steps backwards, redo forwards.
@@ -721,6 +726,13 @@ fn redo_step(step: &Step, in_use: &HashSet<String>) -> io::Result<Step> {
             })
         }
     }
+}
+
+/// A file a tool made can't be made again, and redoing the steps before it (a Recycle Bin
+/// move of the original, say) would leave nothing in its place: the entry is dropped whole.
+fn drop_unredoable(conn: &Connection, entry: &Entry) -> String {
+    save(conn, entry.id, "dropped", &[]);
+    format!("\"{}\" can't be redone; run the tool again", entry.label)
 }
 
 fn trash_error(e: &trash::Error) -> io::Error {
@@ -1355,6 +1367,34 @@ mod tests {
         // Edited since: refused, and the file stays.
         std::fs::write(&made, "%PDF content, edited later").unwrap();
         assert!(j.undo().is_err());
+        assert!(made.exists());
+    }
+
+    #[test]
+    fn redoing_an_entry_with_a_made_file_touches_nothing() {
+        let t = tmp();
+        let original = t.path().join("photo.jpg");
+        std::fs::write(&original, "original").unwrap();
+        let made = t.path().join("edit.jpg");
+        std::fs::write(&made, "edited").unwrap();
+        let j = journal();
+        // As a replace is recorded: the original to the bin, then the edit in its place.
+        let pending = j.begin("Rotate").unwrap();
+        let steps = [
+            Step::Trash {
+                original: original.clone(),
+                id: Some("bin-1".into()),
+            },
+            Step::made(made.clone()),
+        ];
+        j.finish(pending, &steps);
+        {
+            let conn = j.conn();
+            conn.execute("UPDATE journal SET state = 'undone'", [])
+                .unwrap();
+        }
+        assert!(j.redo().is_err());
+        assert!(original.exists(), "the original is not trashed by a redo");
         assert!(made.exists());
     }
 

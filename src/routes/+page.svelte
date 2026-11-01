@@ -63,12 +63,13 @@
     type Choice,
     type Conflict,
     type Entry,
+    releasePreview,
     type Job,
-    type PdfMade,
+    type MadeFile,
     type Moved,
   } from "$lib/api/fs";
   import { formatSize } from "$lib/format";
-  import { previewKind } from "$lib/preview";
+  import { editableImage, previewKind } from "$lib/preview";
   import { sizeKey, sortEntries, type SortKey, type SortState } from "$lib/sort";
   import ConflictDialog from "$lib/components/ConflictDialog.svelte";
   import ContextMenu, { type MenuItem } from "$lib/components/ContextMenu.svelte";
@@ -96,6 +97,7 @@
   } from "$lib/settings.svelte";
   import SettingsDialog from "$lib/components/SettingsDialog.svelte";
   import OnboardingTour from "$lib/components/OnboardingTour.svelte";
+  import ImageToolsDialog from "$lib/components/ImageToolsDialog.svelte";
   import PdfToolsDialog from "$lib/components/PdfToolsDialog.svelte";
   import UpdateBanner from "$lib/components/UpdateBanner.svelte";
   import { checkForUpdate } from "$lib/updates.svelte";
@@ -742,10 +744,15 @@
       refresh([]);
       return;
     }
-    if (job.kind === "pdf") {
-      const made = job.result as PdfMade | null;
+    if (job.kind === "edit") {
+      const made = job.result as MadeFile | null;
       if (!made) return;
       const name = made.path.split(/[\\/]/).pop() ?? made.path;
+      if (made.note) {
+        notify(made.note, true);
+        refresh([]);
+        return;
+      }
       const smaller = made.before - made.after;
       notify(
         made.compressed && smaller > 0
@@ -1502,6 +1509,10 @@
   /** The PDFs the PDF tools dialog works on, while it is open. */
   let pdfTools = $state<Entry[] | null>(null);
 
+  /** The picture the image tools dialog works on, while it is open. */
+  let imageTools = $state<Entry | null>(null);
+  const isEditable = (e: Entry) => !e.isDir && editableImage(e.name);
+
   const isPdf = (e: Entry) => !e.isDir && previewKind(e.name, false) === "pdf";
   /** The selected PDFs if there are several, else the one previewed or selected. */
   function openPdfTools(fallback?: Entry) {
@@ -1610,6 +1621,7 @@
       ...(picked.some(isPdf)
         ? [{ label: "PDF tools…", run: () => openPdfTools(one ?? undefined) }]
         : []),
+      ...(one && isEditable(one) ? [{ label: "Image tools…", run: () => (imageTools = one) }] : []),
       { label: "Move to Recycle Bin", hint: "Del", danger: true, run: trashSelected },
       "separator",
       { label: "More options", run: () => nativeMenu([...selection]) },
@@ -1831,6 +1843,7 @@
       askCrash ||
       tourOpen ||
       pdfTools ||
+      imageTools ||
       storageOpen ||
       cleanupOpen ||
       binOpen ||
@@ -2146,6 +2159,17 @@
     <PdfToolsDialog pdfs={pdfTools} onclose={() => (pdfTools = null)} />
   {/if}
 
+  {#if imageTools}
+    <ImageToolsDialog
+      entry={imageTools}
+      onclose={() => {
+        imageTools = null;
+        // Quick Look, if it is open, still needs the access; otherwise nothing does.
+        if (!look) releasePreview().catch(() => {});
+      }}
+    />
+  {/if}
+
   {#if askCrash}
     <CrashPrompt
       ondismiss={() => (askCrash = false)}
@@ -2173,7 +2197,12 @@
       position={lookIndex + 1}
       total={visible.length}
       onopen={() => open(visible[lookIndex])}
-      ontools={isPdf(visible[lookIndex]) ? () => openPdfTools(visible[lookIndex]) : undefined}
+      ontools={isPdf(visible[lookIndex])
+        ? () => openPdfTools(visible[lookIndex])
+        : isEditable(visible[lookIndex])
+          ? () => (imageTools = visible[lookIndex])
+          : undefined}
+      toolsLabel={isEditable(visible[lookIndex]) ? "Image tools…" : "PDF tools…"}
       onclose={() => (look = null)}
     />
   {/if}

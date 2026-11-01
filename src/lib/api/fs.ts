@@ -372,14 +372,16 @@ export const movePaths = (
 
 /** How far a PDF is made smaller (`ops::pdf::Preset`). */
 export type PdfPreset = "lossless" | "high" | "balanced" | "small" | "smallest";
-/** What a finished PDF job made. */
-export interface PdfMade {
+/** What a finished tool job (PDF or picture) made. */
+export interface MadeFile {
   path: string;
   /** Bytes of the inputs together, and of the new file. */
   before: number;
   after: number;
-  /** One PDF made smaller, as opposed to several joined. */
+  /** One file made smaller, as opposed to merged, turned or cropped. */
   compressed: boolean;
+  /** Something the user should read, when the job did not go as it should. */
+  note?: string;
 }
 /** Joins the PDFs in the order given into a new file called `name` next to the first. */
 export const pdfMerge = (paths: string[], name: string) =>
@@ -388,10 +390,25 @@ export const pdfMerge = (paths: string[], name: string) =>
 export const pdfCompress = (path: string, preset: PdfPreset, name: string) =>
   invoke<number>("pdf_compress", { path, preset, name });
 
+/** How far a picture is made smaller (`ops::image_edit::Preset`). */
+export type ImagePreset = "high" | "balanced" | "small" | "smallest";
+/** One edit of a picture (`ops::image_edit::Edit`). Crop is in pixels of the picture as shown. */
+export type ImageEdit =
+  | { kind: "rotate"; turns: number }
+  | { kind: "compress"; preset: ImagePreset }
+  | { kind: "crop"; x: number; y: number; width: number; height: number };
+/** Edits a picture in the background: as a copy next to it, or in its place (the original
+ * goes to the Recycle Bin and Undo brings it back). */
+export const imageEdit = (path: string, edit: ImageEdit, save: "copy" | "replace") =>
+  invoke<number>("image_edit", { path, edit, save });
+/** How many bytes the picture would be after `preset`; rejects if it can't be made smaller. */
+export const imageEstimate = (path: string, preset: ImagePreset) =>
+  invoke<number>("image_estimate", { path, preset });
+
 /** A copy, move or delete in the operations queue (`queue::JobView`). */
 export interface Job {
   id: number;
-  kind: "copy" | "move" | "trash" | "pdf";
+  kind: "copy" | "move" | "trash" | "edit";
   label: string;
   state: "queued" | "running" | "paused" | "done" | "failed" | "cancelled";
   bytesDone: number;
@@ -403,7 +420,7 @@ export interface Job {
   etaSecs: number | null;
   error: string | null;
   /** `Copied`, `Moved` or `{ count, leftAlone }` once the job is done. */
-  result: Copied | Moved | PdfMade | { count: number; leftAlone: number } | null;
+  result: Copied | Moved | MadeFile | { count: number; leftAlone: number } | null;
 }
 /** Fires whenever a job started from this window changes. */
 export const onQueueUpdate = (cb: (job: Job) => void): Promise<UnlistenFn> =>

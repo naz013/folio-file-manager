@@ -5,6 +5,9 @@ const IMAGE = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico",
 const AUDIO = new Set(["mp3", "wav", "ogg", "oga", "m4a", "flac", "aac", "opus"]);
 const VIDEO = new Set(["mp4", "webm", "mov", "m4v", "ogv"]);
 
+/** Pictures the image tools can edit: not animated or vector formats. */
+export const editableImage = (name: string) => /\.(jpe?g|png|bmp)$/i.test(name);
+
 export function previewKind(name: string, isDir: boolean): PreviewKind {
   if (isDir) return "other";
   const dot = name.lastIndexOf(".");

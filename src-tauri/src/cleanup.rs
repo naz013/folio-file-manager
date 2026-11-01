@@ -242,7 +242,7 @@ fn cloud_only_attributes(_meta: &std::fs::Metadata) -> bool {
     false
 }
 
-fn is_cloud_only(path: &Path) -> bool {
+pub(crate) fn is_cloud_only(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok_and(|m| cloud_only_attributes(&m))
 }
 

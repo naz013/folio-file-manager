@@ -8,10 +8,10 @@
 use lopdf::{Dictionary, Document, LoadOptions, Object, ObjectId};
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{self, ErrorKind, Write};
+use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 
-use super::{PARTIAL, progress};
+use super::progress;
 
 /// Page attributes a page may inherit from the page tree above it. The tree is rebuilt when
 /// merging, so they are copied onto each page first.
@@ -281,33 +281,6 @@ fn shrink_image(stream: &mut lopdf::Stream, quality: u8, scale: f32) {
     stream.dict.set("Height", i64::from(nh));
 }
 
-/// Writes `bytes` as `dir/name` (or the next free `name (2).pdf`…) and returns the path.
-/// Built under a temporary name of its own first, so a failure leaves nothing at the final
-/// name, and only a temporary file this call made is ever removed.
-pub fn write_new(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<PathBuf> {
-    let (temp, mut file) = (0..100)
-        .find_map(|n| {
-            let temp = dir.join(format!("{name}.{}-{n}{PARTIAL}", std::process::id()));
-            match fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&temp)
-            {
-                Ok(file) => Some(Ok((temp, file))),
-                Err(e) if e.kind() == ErrorKind::AlreadyExists => None,
-                Err(e) => Some(Err(e)),
-            }
-        })
-        .unwrap_or_else(|| Err(io::Error::from(ErrorKind::AlreadyExists)))?;
-    if let Err(e) = file.write_all(bytes).and_then(|()| file.sync_all()) {
-        drop(file);
-        let _ = fs::remove_file(&temp);
-        return Err(e);
-    }
-    drop(file);
-    super::finish_copy(&temp, dir, name)
-}
-
 /// Whether a catalog holds things that merging would drop: attachments, form fields and
 /// layers (optional content).
 fn has_document_level_content(doc: &Document) -> bool {
@@ -465,18 +438,6 @@ mod tests {
     }
 
     #[test]
-    fn a_partial_that_was_there_before_is_never_removed() {
-        let dir = tempfile::tempdir().unwrap();
-        // A finished copy left at a partial name (see `finish_copy`) is somebody else's file.
-        let theirs = dir.path().join(format!("out.pdf{PARTIAL}"));
-        fs::write(&theirs, "mine").unwrap();
-        let made = write_new(dir.path(), "out.pdf", b"new").unwrap();
-        assert_eq!(made, dir.path().join("out.pdf"));
-        assert_eq!(fs::read(&theirs).unwrap(), b"mine");
-        assert_eq!(fs::read(&made).unwrap(), b"new");
-    }
-
-    #[test]
     fn a_pdf_with_form_fields_is_not_merged() {
         let dir = tempfile::tempdir().unwrap();
         let mut with_form = pdf("F", 1);
@@ -496,19 +457,5 @@ mod tests {
         let b = save(&mut pdf("B", 1), dir.path(), "b.pdf");
         let e = merge(&[a, b]).unwrap_err();
         assert!(e.to_string().contains("would lose"), "{e}");
-    }
-
-    #[test]
-    fn a_new_file_never_replaces_one_and_leaves_no_temporary_behind() {
-        let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("out.pdf"), "mine").unwrap();
-        let made = write_new(dir.path(), "out.pdf", b"new").unwrap();
-        assert_eq!(made, dir.path().join("out (2).pdf"));
-        assert_eq!(fs::read(dir.path().join("out.pdf")).unwrap(), b"mine");
-        let names: Vec<String> = fs::read_dir(dir.path())
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-        assert!(names.iter().all(|n| !n.ends_with(PARTIAL)), "{names:?}");
     }
 }

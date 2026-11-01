@@ -1356,16 +1356,19 @@ pub fn scan_roots(scanner: tauri::State<'_, Scanner>) -> CmdResult<Vec<RootInfo>
 /// Where crash reports and session counts are kept.
 pub struct CrashDir(pub PathBuf);
 
-/// The result of a finished PDF job, for the UI.
+/// The result of a finished tool job (PDF or picture), for the UI.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct PdfMade {
+struct MadeFile {
     path: String,
     /// Bytes of the inputs together, and of the new file.
     before: u64,
     after: u64,
-    /// A single PDF was made smaller (not a merge).
+    /// A single file was made smaller (not a merge, a turn or a crop).
     compressed: bool,
+    /// Something to tell the user about, if the job did not go as it should.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note: Option<String>,
 }
 
 /// Runs `make` in the background and writes what it returns as `dir/name` (or the next free
@@ -1402,7 +1405,7 @@ fn submit_pdf(
         let bytes = make().map_err(|e| e.to_string())?;
         ops::progress::checkpoint().map_err(|e| e.to_string())?;
         let pending = begin(&journal, &label)?;
-        let result = ops::pdf::write_new(&dir, &name, &bytes);
+        let result = ops::made::write_new(&dir, &name, &bytes);
         let steps: Vec<Step> = result
             .as_ref()
             .map(|p| Step::made(p.clone()))
@@ -1410,7 +1413,7 @@ fn submit_pdf(
             .collect();
         journal.finish(pending, &steps);
         let output = result.map_err(|e| e.to_string())?;
-        Ok(serde_json::to_value(PdfMade {
+        Ok(serde_json::to_value(MadeFile {
             before: sources
                 .iter()
                 .filter_map(|p| std::fs::metadata(p).ok())
@@ -1419,11 +1422,223 @@ fn submit_pdf(
             after: std::fs::metadata(&output).map_or(0, |m| m.len()),
             // Merging needs two files, so one file is a compression.
             compressed: sources.len() == 1,
+            note: None,
             path: output.to_string_lossy().into_owned(),
         })
         .unwrap_or_default())
     });
-    Ok(queue.submit(app, window.label(), Kind::Pdf, title, &lane, work))
+    Ok(queue.submit(app, window.label(), Kind::Edit, title, &lane, work))
+}
+
+/// Where an edited picture goes.
+#[derive(Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SaveAs {
+    /// Next to the original, under a new name.
+    Copy,
+    /// In place of the original, which goes to the Recycle Bin first.
+    Replace,
+}
+
+/// What the file looked like when the edit was asked for: size and last change.
+fn stamp(path: &std::path::Path) -> Option<(u64, std::time::SystemTime)> {
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    Some((meta.len(), meta.modified().ok()?))
+}
+
+/// The picture an edit replaces, as it was when the edit was asked for.
+struct Original<'a> {
+    path: &'a std::path::Path,
+    dir: &'a std::path::Path,
+    name: &'a str,
+    stamp: (u64, std::time::SystemTime),
+    identity: Option<String>,
+}
+
+/// What [`replace_original`] did.
+struct Replaced {
+    made: std::io::Result<PathBuf>,
+    steps: Vec<Step>,
+    /// The original has a Recycle Bin entry that Undo can restore.
+    restorable: bool,
+}
+
+/// Puts `bytes` in the place of the original, which goes to the Recycle Bin. The edit is
+/// complete on disk first, and once the original has left its place the edit is never
+/// removed: it may be all there is. Fails, leaving the original alone, if it changed since
+/// the edit was made.
+fn replace_original(
+    journal: &Journal,
+    label: &str,
+    original: &Original,
+    bytes: &[u8],
+) -> Result<Replaced, String> {
+    let staged = ops::made::stage(original.dir, original.name, bytes).map_err(|e| e.to_string())?;
+    let pending = match begin(journal, label) {
+        Ok(pending) => pending,
+        Err(e) => {
+            let _ = std::fs::remove_file(&staged);
+            return Err(e);
+        }
+    };
+    // The original may have been edited or swapped meanwhile; the edit was made from an
+    // older one. Looked at again as late as possible.
+    if stamp(original.path) != Some(original.stamp)
+        || ops::identity(original.path) != original.identity
+    {
+        let _ = std::fs::remove_file(&staged);
+        journal.finish(pending, &[]);
+        return Err(format!(
+            "\"{}\" changed while it was being edited",
+            original.name
+        ));
+    }
+    let started = journal::unix_now() - 2;
+    let trashed = ops::trash(std::slice::from_ref(&original.path.to_path_buf()));
+    if std::fs::symlink_metadata(original.path).is_ok() {
+        // Still where it was: there is nothing to put the edit in place of.
+        let _ = std::fs::remove_file(&staged);
+        journal.finish(pending, &[]);
+        return Err(trashed.err().map_or_else(
+            || "The original could not be moved".to_owned(),
+            |e| e.to_string(),
+        ));
+    }
+    let made = ops::made::finish(&staged, original.dir, original.name);
+    // The bin is looked at last: listing it is slow, and the path is empty until the edit
+    // is in it.
+    let id = journal::trash_ids(
+        std::slice::from_ref(&original.path.to_path_buf()),
+        started,
+        &journal.trash_ids_in_use(),
+    )
+    .into_iter()
+    .next()
+    .flatten();
+    let restorable = id.is_some();
+    let mut steps = vec![Step::Trash {
+        original: original.path.to_path_buf(),
+        id,
+    }];
+    if let Ok(path) = &made {
+        steps.push(Step::made(path.clone()));
+    }
+    journal.finish(pending, &steps);
+    Ok(Replaced {
+        made,
+        steps,
+        restorable,
+    })
+}
+
+/// Edits the picture at `path` in the background. As a copy it is written next to the
+/// original; replacing puts the original in the Recycle Bin and the edit in its place, and
+/// undo brings the original back. Returns the job id.
+#[tauri::command(async)]
+pub fn image_edit(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    queue: tauri::State<'_, Arc<Queue>>,
+    path: String,
+    edit: ops::image_edit::Edit,
+    save: SaveAs,
+) -> CmdResult<u64> {
+    use ops::image_edit::Edit;
+    let source = PathBuf::from(path);
+    // The trash can't be asked for the original again on macOS, so a replace could not
+    // be undone there.
+    if matches!(save, SaveAs::Replace) && cfg!(target_os = "macos") {
+        return Err("Replacing isn't available on this system yet; save a copy instead".into());
+    }
+    if ops::image_edit::Format::of(&source).is_none() {
+        return Err("This kind of picture can't be edited".into());
+    }
+    let before = stamp(&source).ok_or("The picture isn't there any more")?;
+    let identity = ops::identity(&source);
+    if std::fs::symlink_metadata(&source).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err("A link can't be edited; open the picture it points to".into());
+    }
+    let dir = source.parent().ok_or("No folder to save in")?.to_path_buf();
+    let file_name = source
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .ok_or("No file name")?;
+    let (verb, tag) = match edit {
+        Edit::Rotate { .. } => ("Rotate", "rotated"),
+        Edit::Compress { .. } => ("Compress", "compressed"),
+        Edit::Crop { .. } => ("Crop", "cropped"),
+    };
+    let copy_name = match file_name.rfind('.') {
+        Some(dot) if dot > 0 => format!("{} ({tag}){}", &file_name[..dot], &file_name[dot..]),
+        _ => format!("{file_name} ({tag})"),
+    };
+    let label = describe(verb, std::slice::from_ref(&source));
+    let lane = ops::volume_key(&dir);
+    let title = label.clone();
+    let handle = app.clone();
+    let work: queue::Work = Box::new(move |progress| {
+        let journal = handle.state::<Journal>();
+        progress.set_totals(before.0, 1);
+        // Building only reads, so nothing is in the journal until there is a file to write.
+        let bytes = ops::image_edit::apply(&source, edit).map_err(|e| e.to_string())?;
+        ops::progress::checkpoint().map_err(|e| e.to_string())?;
+        let mut restorable = true;
+        let (result, steps) = match save {
+            SaveAs::Copy => {
+                let pending = begin(&journal, &label)?;
+                let result = ops::made::write_new(&dir, &copy_name, &bytes);
+                let steps: Vec<Step> = result
+                    .as_ref()
+                    .map(|p| Step::made(p.clone()))
+                    .into_iter()
+                    .collect();
+                journal.finish(pending, &steps);
+                (result, steps)
+            }
+            SaveAs::Replace => {
+                let original = Original {
+                    path: &source,
+                    dir: &dir,
+                    name: &file_name,
+                    stamp: before,
+                    identity: identity.clone(),
+                };
+                let replaced = replace_original(&journal, &label, &original, &bytes)?;
+                restorable = replaced.restorable;
+                (replaced.made, replaced.steps)
+            }
+        };
+        drop(steps);
+        let made = result.map_err(|e| e.to_string())?;
+        Ok(serde_json::to_value(MadeFile {
+            before: before.0,
+            after: std::fs::metadata(&made).map_or(0, |m| m.len()),
+            path: made.to_string_lossy().into_owned(),
+            compressed: matches!(edit, Edit::Compress { .. }),
+            note: (!restorable).then(|| {
+                "The original is in the Recycle Bin, but Folio could not find it there, so Undo \
+                 can't bring it back. Restore it from the Recycle Bin."
+                    .to_owned()
+            }),
+        })
+        .unwrap_or_default())
+    });
+    Ok(queue.submit(&app, window.label(), Kind::Edit, title, &lane, work))
+}
+
+/// How big the picture at `path` would be after `preset`, in bytes, or why it can't be made
+/// smaller that way.
+#[tauri::command]
+pub async fn image_estimate(path: String, preset: ops::image_edit::Preset) -> CmdResult<u64> {
+    blocking(move || {
+        ops::image_edit::apply(
+            &PathBuf::from(path),
+            ops::image_edit::Edit::Compress { preset },
+        )
+        .map(|bytes| bytes.len() as u64)
+        .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 /// Joins `paths`, in the order given, into a new PDF named `name` next to the first one.
@@ -1547,4 +1762,41 @@ pub fn perf_config() -> crate::perf::PerfConfig {
 #[tauri::command]
 pub fn perf_report(event: String) {
     crate::perf::report(&event);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replacing_an_original_that_changed_leaves_it_alone_and_no_staged_file_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let photo = dir.path().join("photo.jpg");
+        std::fs::write(&photo, "old").unwrap();
+        let original = Original {
+            path: &photo,
+            dir: dir.path(),
+            name: "photo.jpg",
+            stamp: stamp(&photo).unwrap(),
+            identity: ops::identity(&photo),
+        };
+        // Edited by another program after the edit was asked for.
+        std::fs::write(&photo, "edited meanwhile, and longer").unwrap();
+        let journal = Journal::open(None).unwrap();
+        let e = replace_original(&journal, "Rotate", &original, b"new")
+            .err()
+            .unwrap();
+        assert!(e.contains("changed while"), "{e}");
+        assert_eq!(
+            std::fs::read(&photo).unwrap(),
+            b"edited meanwhile, and longer"
+        );
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["photo.jpg"]);
+        // The journal entry is closed with nothing in it, so undo is not blocked.
+        assert!(journal.undo().is_err());
+    }
 }
