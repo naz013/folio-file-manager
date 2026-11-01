@@ -38,6 +38,7 @@
   --radius-tab: 9px;
 
   /* core: size */
+  --size-inspector: clamp(220px, 24vw, 280px);
   --size-titlebar: 46px;
 
   /* core: typography */

@@ -13,6 +13,8 @@ export interface Settings {
   /** Where new tabs and a fresh start open: "home", "desktop", "documents", "downloads", or a path. */
   startLocation: string;
   showHidden: boolean;
+  /** The inspector panel at the right of the list. */
+  showInspector: boolean;
   defaultView: ViewMode;
   /** How long a drag hovers over a folder or tab before it opens; null turns it off. */
   springDelayMs: number | null;
@@ -23,6 +25,7 @@ export interface Settings {
 export const DEFAULTS: Settings = {
   startLocation: "home",
   showHidden: false,
+  showInspector: false,
   defaultView: "grid",
   springDelayMs: 2000,
   returnAfterDrop: false,
@@ -48,6 +51,7 @@ function read(): Settings {
         ? saved.startLocation
         : DEFAULTS.startLocation,
     showHidden: saved.showHidden === true,
+    showInspector: saved.showInspector === true,
     defaultView: saved.defaultView === "list" ? "list" : "grid",
     springDelayMs:
       delay === null

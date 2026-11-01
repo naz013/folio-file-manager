@@ -21,6 +21,8 @@
     ontheme,
     onsettings,
     tagLabel,
+    inspectorOpen,
+    oninspector,
   }: {
     path: string;
     view: View;
@@ -39,6 +41,8 @@
     onsettings: () => void;
     /** Set while the list shows the items of a tag instead of a folder. */
     tagLabel: string | null;
+    inspectorOpen: boolean;
+    oninspector: () => void;
   } = $props();
 
   let segments = $derived(pathSegments(path));
@@ -335,6 +339,16 @@
 
   <button
     class="icon-btn"
+    class:on={inspectorOpen}
+    aria-pressed={inspectorOpen}
+    onclick={oninspector}
+    aria-label="Inspector (Ctrl+I)"
+    title="Inspector (Ctrl+I)"
+  >
+    <Icon name="panelRight" size={16} />
+  </button>
+  <button
+    class="icon-btn"
     onclick={onsettings}
     aria-label="Settings (Ctrl+,)"
     title="Settings (Ctrl+,)"
@@ -390,6 +404,11 @@
 
   .icon-btn:hover:not(:disabled) {
     background: var(--bg-hover);
+  }
+
+  .icon-btn.on {
+    background: var(--bg-selected);
+    color: var(--text-primary);
   }
 
   .icon-btn:disabled {

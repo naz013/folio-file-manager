@@ -52,6 +52,7 @@
   import QuickLook from "$lib/components/QuickLook.svelte";
   import TagDialog from "$lib/components/TagDialog.svelte";
   import TagChips from "$lib/components/TagChips.svelte";
+  import Inspector from "$lib/components/Inspector.svelte";
   import { tagColor } from "$lib/tags";
   import OpsPill from "$lib/components/OpsPill.svelte";
   import Sidebar from "$lib/components/Sidebar.svelte";
@@ -1187,6 +1188,8 @@
     if (!ctrl) return null;
     const key = e.key.toLowerCase();
     if (key === "," && !e.shiftKey) return () => (settingsOpen = true);
+    if (key === "i" && !e.shiftKey && !e.altKey)
+      return () => updateSettings({ showInspector: !settings.showInspector });
     if (key === "l" && !e.shiftKey) return () => !tagView && toolbar?.edit();
     if (key === "t" || key === "w") {
       // Held-down Ctrl+T / Ctrl+W must not open or close tabs in a burst.
@@ -1407,6 +1410,8 @@
       }}
       onsettings={() => (settingsOpen = true)}
       tagLabel={tagView?.name ?? null}
+      inspectorOpen={settings.showInspector}
+      oninspector={() => updateSettings({ showInspector: !settings.showInspector })}
     />
     {#if !tagView && (chipTags.length || tagFilter.length)}
       <TagChips
@@ -1458,6 +1463,17 @@
       />
     </footer>
   </main>
+
+  {#if settings.showInspector}
+    <Inspector
+      folder={tagView ? null : path}
+      entries={visible}
+      picked={selected()}
+      tags={tagDefs}
+      have={tagState}
+      ontoggle={toggleTag}
+    />
+  {/if}
 
   {#if tagsOpen}
     <TagDialog
