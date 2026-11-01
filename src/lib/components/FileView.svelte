@@ -19,6 +19,8 @@
 <script lang="ts">
   import type { Entry } from "$lib/api/fs";
   import { formatDate, formatSize } from "$lib/format";
+  import type { SortKey, SortState } from "$lib/sort";
+  import { SORT_HEADERS as headers } from "$lib/sort";
   import FolderIcon from "./FolderIcon.svelte";
   import Thumbnail from "./Thumbnail.svelte";
   import type { View } from "./Toolbar.svelte";
@@ -42,7 +44,15 @@
     springPath,
     springMs,
     tagColors,
+    sort,
+    onsort,
+    folderSize,
   }: {
+    /** What the list is ordered by, shown on the column headers. */
+    sort: SortState;
+    onsort: (key: SortKey) => void;
+    /** A folder's size from the scan cache, or undefined if it hasn't been scanned. */
+    folderSize: (path: string) => number | undefined;
     entries: Entry[];
     view: View;
     selection: Set<string>;
@@ -155,8 +165,21 @@
 </script>
 
 {#if !grid}
-  <div class="list-head" style:padding="0 {LIST_PAD_X + 10}px">
-    <span>Name</span><span>Date modified</span><span class="num">Size</span>
+  <div class="list-head" role="row" style:padding="0 {LIST_PAD_X + 10}px">
+    {#each headers as [key, label] (key)}
+      <span
+        role="columnheader"
+        aria-sort={sort.key === key ? (sort.desc ? "descending" : "ascending") : "none"}
+      >
+        <button
+          class:num={key === "size"}
+          class:active={sort.key === key}
+          onclick={() => onsort(key)}
+        >
+          {label}{sort.key === key ? (sort.desc ? " ↓" : " ↑") : ""}
+        </button>
+      </span>
+    {/each}
   </div>
 {/if}
 
@@ -244,7 +267,14 @@
 
         {#if !grid}
           <span class="muted">{formatDate(entry.modified)}</span>
-          <span class="muted num">{entry.isDir ? "—" : formatSize(entry.size)}</span>
+          {@const folder = entry.isDir ? folderSize(entry.path) : undefined}
+          <span class="muted num"
+            >{entry.isDir
+              ? folder === undefined
+                ? "—"
+                : formatSize(folder)
+              : formatSize(entry.size)}</span
+          >
         {/if}
       </div>
     {/each}
@@ -356,6 +386,23 @@
     grid-template-columns: 26px 1fr 190px 90px;
     align-items: center;
     column-gap: 10px;
+  }
+
+  .list-head button {
+    width: 100%;
+    padding: 0;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+  }
+
+  .list-head button.num {
+    text-align: right;
+  }
+
+  .list-head button:hover,
+  .list-head button.active {
+    color: var(--text-primary);
   }
 
   .list-head {

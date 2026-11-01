@@ -12,6 +12,7 @@
     tagList,
     clipboardMirror,
     onScanDone,
+    scanChildren,
     scanRunning,
     scanCancel,
     scanStart,
@@ -62,6 +63,7 @@
     type Moved,
   } from "$lib/api/fs";
   import { formatSize } from "$lib/format";
+  import { sizeKey, sortEntries, type SortKey, type SortState } from "$lib/sort";
   import ConflictDialog from "$lib/components/ConflictDialog.svelte";
   import ContextMenu, { type MenuItem } from "$lib/components/ContextMenu.svelte";
   import QuickLook from "$lib/components/QuickLook.svelte";
@@ -184,12 +186,47 @@
   let tagFilter = $state<number[]>([]);
   /** The tag whose items the list shows, from every folder, instead of a folder. */
   let tagView = $state<Tag | null>(null);
+  /** The list's order, set from the column headers. */
+  let sort = $state<SortState>({ key: "name", desc: false });
+  /** Sizes of the folders shown, from the scan cache; empty where nothing was scanned. */
+  let folderSizes = $state<Record<string, number>>({});
   let visible = $derived(
-    entries.filter(
-      (e) =>
-        (settings.showHidden || !e.hidden) && tagFilter.every((id) => tagMap[e.path]?.includes(id)),
+    sortEntries(
+      entries.filter(
+        (e) =>
+          (settings.showHidden || !e.hidden) &&
+          tagFilter.every((id) => tagMap[e.path]?.includes(id)),
+      ),
+      sort,
+      (p) => folderSizes[sizeKey(p)],
     ),
   );
+
+  /** Clicking a header sorts by it; clicking it again reverses the order. */
+  function sortBy(key: SortKey) {
+    keepCursor(() => {
+      sort = { key, desc: sort.key === key ? !sort.desc : key === "modified" || key === "size" };
+    });
+  }
+
+  /** Runs a change that may re-order the list, then puts the cursor and anchor back on their items. */
+  function keepCursor(change: () => void) {
+    const at = visible[cursor]?.path;
+    const from = visible[anchor]?.path;
+    change();
+    if (at !== undefined) cursor = visible.findIndex((e) => e.path === at);
+    if (from !== undefined) anchor = visible.findIndex((e) => e.path === from);
+  }
+
+  /** Reads the sizes of the folders in `dir` from the cache, without holding up the listing. */
+  async function loadFolderSizes(dir: string) {
+    const sizes = await scanChildren(dir).catch(() => []);
+    // A tag's items come from many folders, so there is nothing to read for them.
+    if (dir !== path || tagView) return;
+    keepCursor(() => {
+      folderSizes = Object.fromEntries(sizes.map((s) => [sizeKey(s.path), s.bytes]));
+    });
+  }
 
   function notify(text: string, error = false) {
     toast = { text, error };
@@ -253,6 +290,7 @@
     anchor = cursor = -1;
     renaming = null;
     fileView?.scrollToTop();
+    loadFolderSizes(target);
     watchDir(target).catch((e) => console.warn("watch failed", e));
     return true;
   }
@@ -1601,6 +1639,7 @@
     const unlistenQueue = onQueueUpdate(onJobUpdate);
     const unlistenScan = onScanDone((d) => {
       scanning = false;
+      loadFolderSizes(path);
       if (d.error) notify(`Scan failed: ${d.error}`, true);
       else if (d.cancelled) notify("Scan cancelled");
       else notify(`Scanned ${plural(d.files, "file")}, ${formatSize(d.bytes)}`);
@@ -1749,6 +1788,9 @@
       {springPath}
       {springMs}
       {tagColors}
+      {sort}
+      onsort={sortBy}
+      folderSize={(p) => folderSizes[sizeKey(p)]}
     />
     <footer class="status">
       <span
