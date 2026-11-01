@@ -591,10 +591,22 @@
   let dragTimer: ReturnType<typeof setInterval> | undefined;
   let spaceWasDown: boolean | null = null;
 
+  /**
+   * What the drag can spring-open: a folder (its path), a tab ("tab:<id>") or the new-tab
+   * button ("new"). A target that just opened waits for the pointer to leave before it can
+   * open again, so hovering + doesn't keep adding tabs.
+   */
+  let spent: string | null = null;
+
   const spring = createSpring({
     delayMs: () => springSettings.delayMs,
-    eligible: (target) => target !== path && !dragPaths.includes(target),
-    open: springOpen,
+    eligible: (target) => {
+      if (target === spent) return false;
+      if (target === "new") return true;
+      if (target.startsWith("tab:")) return Number(target.slice(4)) !== tabs[active]?.id;
+      return target !== path && !dragPaths.includes(target);
+    },
+    open: springGo,
     ring: (target, ms) => {
       springPath = target;
       springMs = ms;
@@ -604,9 +616,36 @@
   /** Counts drags, so work that outlives its drag can tell. */
   let dragId = 0;
 
-  async function springOpen(target: string) {
-    const from = path;
+  /** Ends the current spring-loaded trip: the folders it went through are one step back. */
+  async function settleTrip() {
+    const started = trip;
+    trip = null;
+    if (!started || path === started.from) return;
+    if (springSettings.returnAfterDrop) {
+      // The tab goes back to where the drag began before it is left behind.
+      await load(started.from, true);
+    } else {
+      back.push(started.from);
+      forward = [];
+    }
+  }
+
+  async function springGo(target: string) {
     const id = dragId;
+    if (target === "new" || target.startsWith("tab:")) {
+      // Another tab has its own history, so the trip so far is complete.
+      await settleTrip();
+      spent = target;
+      if (target === "new") openTab(path);
+      else {
+        const index = tabs.findIndex((t) => t.id === Number(target.slice(4)));
+        if (index >= 0) await activate(index);
+      }
+      await nextPaint();
+      if (id === dragId && dragPos) hoverAt(dragPos);
+      return;
+    }
+    const from = path;
     if (await load(target, true)) {
       if (id === dragId) {
         trip ??= { from };
@@ -623,8 +662,11 @@
 
   function hoverAt(pos: { x: number; y: number }) {
     dragPos = pos;
-    dropTarget = folderAt({ x: pos.x * devicePixelRatio, y: pos.y * devicePixelRatio });
-    spring.hover(dropTarget);
+    const el = document.elementFromPoint(pos.x, pos.y);
+    dropTarget = el?.closest<HTMLElement>("[data-drop-path]")?.dataset.dropPath ?? null;
+    const target = dropTarget ?? el?.closest<HTMLElement>("[data-spring]")?.dataset.spring ?? null;
+    if (target !== spent) spent = null;
+    spring.hover(target);
   }
 
   const EDGE = 48;
@@ -670,6 +712,7 @@
     clearInterval(dragTimer);
     dragTimer = undefined;
     spaceWasDown = null;
+    spent = null;
     dragPos = null;
     dragPaths = [];
     spring.stop();
@@ -1103,6 +1146,8 @@
       onselect={activate}
       onclose={closeTab}
       onnew={() => openTab(home)}
+      {springPath}
+      {springMs}
       onmove={moveTab}
       ondetach={detachTab}
     />

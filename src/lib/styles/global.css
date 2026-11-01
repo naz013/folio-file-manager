@@ -65,6 +65,7 @@ button {
 }
 
 .springing {
+  --spring-ring: 18px;
   position: relative;
 }
 
@@ -73,8 +74,8 @@ button {
   position: absolute;
   top: var(--space-xs);
   right: var(--space-xs);
-  width: 18px;
-  height: 18px;
+  width: var(--spring-ring);
+  height: var(--spring-ring);
   border-radius: 50%;
   background: conic-gradient(
     var(--accent-default) calc(var(--spring) * 360deg),
@@ -83,4 +84,12 @@ button {
   mask: radial-gradient(circle, transparent 5px, #000 6px);
   animation: spring-fill var(--spring-ms) linear forwards;
   pointer-events: none;
+}
+
+/* A small target (the new-tab button) shows its ring over its centre instead of a corner. */
+.springing.ring-centre::after {
+  top: 50%;
+  right: auto;
+  left: 50%;
+  translate: -50% -50%;
 }

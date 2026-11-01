@@ -10,6 +10,8 @@
     onselect,
     onclose,
     onnew,
+    springPath,
+    springMs,
     onmove,
     ondetach,
   }: {
@@ -18,6 +20,9 @@
     onselect: (index: number) => void;
     onclose: (index: number) => void;
     onnew: () => void;
+    /** What the drag is counting down to open (a "tab:<id>" or "new"), and for how long. */
+    springPath: string | null;
+    springMs: number;
     onmove: (from: number, to: number) => void;
     /** Called when a tab is dropped outside the strip; (x, y) is the logical screen position. */
     ondetach: (index: number, x: number, y: number) => void;
@@ -165,6 +170,10 @@
         class="tab"
         class:active={index === active}
         class:detaching={drag?.index === index && drag.outside}
+        class:springing={springPath === `tab:${tab.id}`}
+        class:ring-centre={springPath === `tab:${tab.id}`}
+        style:--spring-ms="{springMs}ms"
+        data-spring="tab:{tab.id}"
         role="tab"
         tabindex={index === active ? 0 : -1}
         aria-selected={index === active}
@@ -189,7 +198,14 @@
       </div>
     {/each}
   </div>
-  <button class="new" aria-label="New tab (Ctrl+T)" onclick={onnew}>
+  <button
+    class="new ring-centre"
+    class:springing={springPath === "new"}
+    style:--spring-ms="{springMs}ms"
+    data-spring="new"
+    aria-label="New tab (Ctrl+T)"
+    onclick={onnew}
+  >
     <Icon name="plus" />
   </button>
   <div class="spacer" data-tauri-drag-region></div>
