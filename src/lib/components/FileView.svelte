@@ -47,6 +47,7 @@
     springPath,
     springMs,
     tagColors,
+    folderTint,
     onband,
     sort,
     onsort,
@@ -84,6 +85,8 @@
     springMs: number;
     /** The tags on the item at this path: each tag's name and CSS colour. */
     tagColors: (path: string) => { name: string; color: string }[];
+    /** The CSS colour a folder's icon takes from its first colour tag, if it has one. */
+    folderTint: (path: string) => string | null;
   } = $props();
 
   let scroller: HTMLDivElement;
@@ -359,7 +362,7 @@
       >
         {#if grid}
           <span class="thumb">
-            {#if entry.isDir}<FolderIcon size={64} />{:else}<Thumbnail
+            {#if entry.isDir}<FolderIcon size={64} tint={folderTint(entry.path)} />{:else}<Thumbnail
                 path={entry.path}
                 name={entry.name}
                 size={72}
@@ -367,7 +370,7 @@
           </span>
         {:else}
           <span class="icon">
-            {#if entry.isDir}<FolderIcon size={18} />{:else}<Thumbnail
+            {#if entry.isDir}<FolderIcon size={18} tint={folderTint(entry.path)} />{:else}<Thumbnail
                 path={entry.path}
                 name=""
                 size={18}

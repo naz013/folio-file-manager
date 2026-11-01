@@ -1,8 +1,16 @@
 <script lang="ts">
-  let { size = 64 }: { size?: number } = $props();
+  let { size = 64, tint = null }: { size?: number; tint?: string | null } = $props();
 </script>
 
-<svg width={size} height={(size * 58) / 72} viewBox="0 0 72 58" fill="none" aria-hidden="true">
+<svg
+  width={size}
+  height={(size * 58) / 72}
+  viewBox="0 0 72 58"
+  fill="none"
+  aria-hidden="true"
+  style:--folder-back={tint ? `color-mix(in srgb, ${tint} 85%, black)` : null}
+  style:--folder-front={tint}
+>
   <path
     d="M4 9a5 5 0 0 1 5-5h16.5a5 5 0 0 1 3.6 1.5L33 9.5h30a5 5 0 0 1 5 5V49a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z"
     fill="var(--folder-back)"

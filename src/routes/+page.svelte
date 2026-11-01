@@ -1139,6 +1139,38 @@
       .filter((t): t is Tag => !!t)
       .map((t) => ({ name: t.name, color: tagColor(t.color) }));
 
+  /** Tags of the sidebar's folders (Home and its subfolders), by path; kept apart from the listing. */
+  let sideTags = $state<Record<string, number[]>>({});
+
+  let sideSeq = 0;
+
+  async function loadSideTags() {
+    const seq = ++sideSeq;
+    const up = parentOf(home);
+    const [inHome, inUp] = await Promise.all([
+      fetchTagMap(home),
+      up ? fetchTagMap(up) : Promise.resolve({}),
+    ]);
+    // A newer read began meanwhile: it wins.
+    if (seq === sideSeq) sideTags = { ...inUp, ...inHome };
+  }
+
+  // Tags changed (here or in the listing): re-read the sidebar's folders.
+  $effect(() => {
+    void tagDefs;
+    void tagMap;
+    if (home) void loadSideTags();
+  });
+
+  /** The colour of the first colour tag on the item, so a folder's icon matches its first dot. */
+  const tintOf = (ids: number[] | undefined) => {
+    for (const id of ids ?? []) {
+      const color = tagDefs.find((t) => t.id === id)?.color;
+      if (color) return tagColor(color);
+    }
+    return null;
+  };
+
   /** Gives the tag to the selected items, or takes it from them if they all have it. */
   async function toggleTag(id: number) {
     const picked = selected();
@@ -1786,6 +1818,7 @@
     activeTag={tagView?.id ?? null}
     ontag={openTagView}
     onbin={() => (binOpen = true)}
+    folderTint={(p) => tintOf(sideTags[p])}
   />
   <main class="main">
     <TabBar
@@ -1845,6 +1878,7 @@
       {springPath}
       {springMs}
       {tagColors}
+      folderTint={(p) => tintOf(tagMap[p])}
       onband={bandSelect}
       {sort}
       onsort={sortBy}

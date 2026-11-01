@@ -15,6 +15,7 @@
     activeTag,
     ontag,
     onbin,
+    folderTint,
   }: {
     home: string;
     current: string;
@@ -32,6 +33,8 @@
     ontag: (tag: Tag) => void;
     /** Open the Recycle Bin. */
     onbin: () => void;
+    /** The CSS colour a folder takes from its first colour tag, if it has one. */
+    folderTint: (path: string) => string | null;
   } = $props();
 
   const favorites: { label: string; icon: IconName; sub: string | null }[] = [
@@ -64,7 +67,7 @@
       onmousedown={(e) => e.button === 1 && e.preventDefault()}
       onauxclick={(e) => e.button === 1 && onopentab(path)}
     >
-      <Icon name={fav.icon} />
+      <span class="icon" style:color={folderTint(path)}><Icon name={fav.icon} /></span>
       <span>{fav.label}</span>
     </button>
   {/each}
@@ -153,6 +156,11 @@
 
   .item span {
     color: var(--text-primary);
+  }
+
+  .item .icon {
+    display: flex;
+    color: inherit;
   }
 
   .item:hover {
