@@ -215,6 +215,9 @@ export const redoOperation = () => invoke<string>("redo");
 export const trashPaths = (targets: string[]) => invoke<number>("trash_paths", { targets });
 export const renamePath = (path: string, newName: string) =>
   invoke<string>("rename_path", { path, newName });
+export const createFile = (parent: string, name: string) =>
+  invoke<string>("create_file", { parent, name });
+export const openTerminal = (dir: string) => invoke<void>("open_terminal", { dir });
 export const createFolder = (parent: string, name: string) =>
   invoke<string>("create_folder", { parent, name });
 /** Result of `copy_paths` (`commands::Copied`). */

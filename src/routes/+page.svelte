@@ -5,7 +5,9 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import {
     copyPaths,
+    createFile,
     createFolder,
+    openTerminal,
     findConflicts,
     tagCreate,
     tagDelete,
@@ -538,6 +540,20 @@
       await refresh([created]);
       renaming = created;
     }
+  }
+
+  /** Makes an empty file with `name` in the folder shown and opens its name for editing. */
+  async function newFile(name = "New file.txt") {
+    if (tagView) return notify("Open a folder first: a tag's items are in many folders", true);
+    const created = await run(() => createFile(path, name));
+    if (created) {
+      await refresh([created]);
+      renaming = created;
+    }
+  }
+
+  async function terminalIn(dir: string) {
+    await run(() => openTerminal(dir));
   }
 
   async function commitRename(entry: Entry, name: string) {
@@ -1224,6 +1240,9 @@
       when ? [{ kind: "action" as const, label, detail, run }] : [];
     const actions: PaletteItem[] = [
       ...action("New folder", "Ctrl+Shift+N", newFolder, !tagView),
+      ...action("New text file", "", () => newFile(), !tagView),
+      ...action("New Markdown file", "", () => newFile("New file.md"), !tagView),
+      ...action("Open in terminal", "", () => terminalIn(path), !tagView),
       ...action("Copy", "Ctrl+C", copySelection, any),
       ...action("Cut", "Ctrl+X", cutSelection, any),
       ...action("Paste", "Ctrl+V", paste, !tagView),
@@ -1405,7 +1424,10 @@
               ? []
               : [{ label: "Quick Look", hint: "Space", run: () => (look = one.path) }]),
             ...(one.isDir
-              ? [{ label: "Open in new tab", run: () => openTab(one.path, true) }]
+              ? [
+                  { label: "Open in new tab", run: () => openTab(one.path, true) },
+                  { label: "Open in terminal", run: () => terminalIn(one.path) },
+                ]
               : []),
             "separator" as const,
           ]
@@ -1423,11 +1445,14 @@
   function backgroundMenu(): MenuItem[] {
     return [
       { label: "New folder", hint: "Ctrl+Shift+N", run: newFolder },
+      { label: "New text file", run: () => newFile() },
+      { label: "New Markdown file", run: () => newFile("New file.md") },
       { label: "Paste", hint: "Ctrl+V", run: paste },
       "separator",
       { label: "Refresh", run: () => refresh() },
       { label: "Select all", hint: "Ctrl+A", run: () => selectRange(0, visible.length - 1) },
       "separator",
+      { label: "Open in terminal", run: () => terminalIn(path) },
       { label: "More options", run: () => nativeMenu([path]) },
     ];
   }

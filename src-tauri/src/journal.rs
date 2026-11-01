@@ -52,6 +52,11 @@ pub enum Step {
         #[serde(default)]
         id: Option<String>,
     },
+    CreateFile {
+        path: PathBuf,
+        #[serde(default)]
+        id: Option<String>,
+    },
     Move {
         from: PathBuf,
         to: PathBuf,
@@ -81,6 +86,11 @@ impl Step {
     pub fn create_folder(path: PathBuf) -> Self {
         let id = ops::identity(&path);
         Self::CreateFolder { path, id }
+    }
+
+    pub fn create_file(path: PathBuf) -> Self {
+        let id = ops::identity(&path);
+        Self::CreateFile { path, id }
     }
 
     pub fn moved(from: PathBuf, to: PathBuf) -> Self {
@@ -585,6 +595,15 @@ fn undo_step(step: &Step) -> io::Result<()> {
             }
             ops::trash(std::slice::from_ref(path)).map_err(|e| trash_error(&e))
         }
+        // A file made by the operation goes to the trash, and only while it is empty.
+        Step::CreateFile { path, id } => {
+            let meta = std::fs::metadata(path).map_err(|_| gone(path))?;
+            is_same_item(path, id.as_ref())?;
+            if meta.len() > 0 {
+                return Err(changed(format!("\"{}\" has content now", name_of(path))));
+            }
+            ops::trash(std::slice::from_ref(path)).map_err(|e| trash_error(&e))
+        }
         // The copy goes to the trash, if it is still exactly what was copied; the
         // original is untouched.
         Step::Copy {
@@ -643,6 +662,11 @@ fn redo_step(step: &Step, in_use: &HashSet<String>) -> io::Result<Step> {
             let parent = path.parent().ok_or_else(|| gone(path))?;
             let path = ops::create_folder(parent, &name_of(path))?;
             Ok(Step::create_folder(path))
+        }
+        Step::CreateFile { path, .. } => {
+            let parent = path.parent().ok_or_else(|| gone(path))?;
+            let path = ops::create_file(parent, &name_of(path))?;
+            Ok(Step::create_file(path))
         }
         Step::Copy { from, to, .. } => {
             if !exists(from) {
@@ -1101,6 +1125,34 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM journal", [], |r| r.get(0))
             .unwrap();
         assert!(rows <= KEEP + 1, "{rows}");
+    }
+
+    #[test]
+    fn a_file_with_content_is_not_taken_back() {
+        let t = tmp();
+        let file = t.path().join("New file.txt");
+        std::fs::write(&file, "").unwrap();
+        let j = journal();
+        done(&j, "New file", &[Step::create_file(file.clone())]);
+        std::fs::write(&file, "I typed something").unwrap();
+
+        let e = j.undo().unwrap_err();
+
+        assert!(e.contains("has content now"), "{e}");
+        assert!(file.exists());
+    }
+
+    #[test]
+    fn a_new_empty_file_can_be_taken_back_and_made_again() {
+        let t = tmp();
+        let file = ops::create_file(t.path(), "New file.txt").unwrap();
+        let j = journal();
+        done(&j, "New file", &[Step::create_file(file.clone())]);
+
+        j.undo().unwrap();
+        assert!(!file.exists());
+        j.redo().unwrap();
+        assert!(file.exists());
     }
 
     #[test]

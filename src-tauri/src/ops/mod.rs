@@ -134,6 +134,13 @@ pub fn create_folder(parent: &Path, name: &str) -> io::Result<PathBuf> {
     noclobber::place(parent, name, |t| fs::create_dir(t))
 }
 
+/// Creates an empty file with a unique name based on `name` inside `parent`. An existing
+/// file is never touched.
+pub fn create_file(parent: &Path, name: &str) -> io::Result<PathBuf> {
+    validate_name(name)?;
+    noclobber::place(parent, name, |t| fs::File::create_new(t).map(drop))
+}
+
 /// Copies each source into `dest_dir`. Returns the created paths.
 pub fn copy_into(sources: &[PathBuf], dest_dir: &Path) -> io::Result<Copied> {
     let mut copied = Copied::default();
@@ -1119,6 +1126,18 @@ mod tests {
         fs::write(&a, "").unwrap();
         let r = rename(&a, "README.md").unwrap();
         assert_eq!(r.file_name().unwrap(), "README.md");
+    }
+
+    #[test]
+    fn create_file_picks_a_unique_name_and_never_touches_an_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = create_file(dir.path(), "New file.txt").unwrap();
+        fs::write(&first, "mine").unwrap();
+        let second = create_file(dir.path(), "New file.txt").unwrap();
+        assert_ne!(first, second);
+        assert_eq!(fs::read_to_string(&first).unwrap(), "mine");
+        assert_eq!(fs::metadata(&second).unwrap().len(), 0);
+        assert!(create_file(dir.path(), "bad:name").is_err());
     }
 
     #[test]

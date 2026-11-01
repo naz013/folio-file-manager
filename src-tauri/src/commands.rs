@@ -426,6 +426,31 @@ pub async fn create_folder(
     .await
 }
 
+#[tauri::command]
+pub async fn create_file(app: tauri::AppHandle, parent: String, name: String) -> CmdResult<String> {
+    blocking(move || {
+        let journal = app.state::<Journal>();
+        let pending = begin(&journal, &format!("New file \"{name}\""))?;
+        let result = ops::create_file(&PathBuf::from(parent), &name);
+        let steps: Vec<Step> = result
+            .as_ref()
+            .map(|path| Step::create_file(path.clone()))
+            .into_iter()
+            .collect();
+        journal.finish(pending, &steps);
+        result
+            .map(|p| p.to_string_lossy().into_owned())
+            .map_err(|e| e.to_string())
+    })
+    .await
+}
+
+/// Opens a terminal in `dir`.
+#[tauri::command(async)]
+pub fn open_terminal(dir: String) -> CmdResult<()> {
+    crate::platform::open_terminal(&PathBuf::from(dir))
+}
+
 /// Starts copying `sources` into `dest` in the background; returns the job id.
 #[tauri::command(async)]
 pub fn copy_paths(

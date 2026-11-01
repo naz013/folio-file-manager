@@ -24,6 +24,40 @@ pub fn show_context_menu(
     win_menu::show(hwnd, paths, extended).map_err(|e| e.to_string())
 }
 
+/// Opens a terminal whose working folder is `dir`: Windows Terminal if it is installed,
+/// else PowerShell in its own console window.
+pub fn open_terminal(dir: &Path) -> Result<(), String> {
+    if !dir.is_dir() {
+        return Err(format!("\"{}\" is not a folder", dir.display()));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        /// `CREATE_NEW_CONSOLE`: the shell gets a window of its own.
+        const NEW_CONSOLE: u32 = 0x10;
+        // The folder is the working directory, never part of a command line, so no name
+        // needs quoting.
+        let wt = std::process::Command::new("wt.exe")
+            .args(["-d", "."])
+            .current_dir(dir)
+            .spawn();
+        if wt.is_ok() {
+            return Ok(());
+        }
+        std::process::Command::new("powershell.exe")
+            .arg("-NoExit")
+            .current_dir(dir)
+            .creation_flags(NEW_CONSOLE)
+            .spawn()
+            .map(drop)
+            .map_err(|e| format!("Could not open a terminal: {e}"))
+    }
+    #[cfg(not(windows))]
+    {
+        Err("Opening a terminal is not supported on this system yet".into())
+    }
+}
+
 /// A drive's root, capacity and free space in bytes.
 pub struct DriveInfo {
     pub path: String,
