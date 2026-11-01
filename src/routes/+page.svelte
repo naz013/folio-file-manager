@@ -85,6 +85,7 @@
   import SettingsDialog from "$lib/components/SettingsDialog.svelte";
   import CrashPrompt from "$lib/components/CrashPrompt.svelte";
   import StorageView from "$lib/components/StorageView.svelte";
+  import BinView from "$lib/components/BinView.svelte";
   import { applyTheme, loadTheme, onThemeChange, setTheme, type Theme } from "$lib/theme";
   import FileView from "$lib/components/FileView.svelte";
   import { measureJumps, measureScroll, nextPaint, perfConfig, perfReport } from "$lib/perf";
@@ -95,6 +96,7 @@
   let entries = $state.raw<Entry[]>([]);
   let settingsOpen = $state(false);
   let storageOpen = $state(false);
+  let binOpen = $state(false);
   /** A size scan is running (it is shared by every window). */
   let scanning = $state(false);
 
@@ -1330,6 +1332,7 @@
         theme !== "system",
       ),
       ...action("Settings", "Ctrl+,", () => (settingsOpen = true)),
+      ...action("Recycle Bin", "", () => (binOpen = true)),
       ...action("Storage breakdown", "", () => (storageOpen = true)),
       ...action("Scan this folder for sizes", "", startScan, !scanning && !tagView),
       ...action("Cancel the size scan", "", () => scanCancel(), scanning),
@@ -1656,7 +1659,16 @@
 
   function onkeydown(e: KeyboardEvent) {
     // A dialog handles its own keys; nothing behind it may act on them.
-    if (asking || menu || settingsOpen || askCrash || storageOpen || tagsOpen || paletteOpen)
+    if (
+      asking ||
+      menu ||
+      settingsOpen ||
+      askCrash ||
+      storageOpen ||
+      binOpen ||
+      tagsOpen ||
+      paletteOpen
+    )
       return;
     if (look) {
       // Quick Look owns the keyboard, but the audio and video controls keep Space and the
@@ -1773,6 +1785,7 @@
     tags={tagDefs}
     activeTag={tagView?.id ?? null}
     ontag={openTagView}
+    onbin={() => (binOpen = true)}
   />
   <main class="main">
     <TabBar
@@ -1895,6 +1908,10 @@
       ondelete={removeTag}
       onclose={() => (tagsOpen = false)}
     />
+  {/if}
+
+  {#if binOpen}
+    <BinView onclose={() => (binOpen = false)} onrestored={() => refresh()} />
   {/if}
 
   {#if storageOpen}

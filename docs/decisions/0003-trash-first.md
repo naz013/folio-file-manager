@@ -23,3 +23,7 @@ file manager can have.
 
 - Freed space only appears after the user empties the Recycle Bin; the UI explains this.
 - The operations engine needs a journal and integration tests before 0.2.
+
+## Addendum: the Recycle Bin view
+
+The Recycle Bin view (sidebar) is where permanent deletion lives, and the only place: items are deleted for good only from there, one confirmation per request that names what goes, and only for items that still match what was listed. Restoring or deleting from that view is bin management rather than a file operation, so it is not written to the undo journal; an undo entry for an item restored or deleted there reports that it is no longer in the bin.

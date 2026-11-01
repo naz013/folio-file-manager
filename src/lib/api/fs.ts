@@ -69,6 +69,28 @@ export const releasePreview = () => invoke<void>("preview_allow", { path: null }
 export const readTextPreview = (path: string) =>
   invoke<{ text: string; truncated: boolean }>("read_text_preview", { path });
 
+/** An item in the Recycle Bin. */
+export interface BinItem {
+  id: string;
+  name: string;
+  original: string;
+  /** Seconds since 1970. */
+  deleted: number;
+}
+/** What an item weighs: bytes for a file, an entry count for a folder. */
+export interface BinSize {
+  id: string;
+  size: number | null;
+  entries: number | null;
+}
+export const binList = () => invoke<BinItem[]>("bin_list");
+export const binSizes = () => invoke<BinSize[]>("bin_sizes");
+/** An item as listed; the core acts on it only if all of it still matches. */
+export type BinRef = Pick<BinItem, "id" | "original" | "deleted">;
+export const binRestore = (items: BinRef[]) => invoke<void>("bin_restore", { items });
+/** Deletes items from the Recycle Bin for good; ask first. */
+export const binPurge = (items: BinRef[]) => invoke<void>("bin_purge", { items });
+
 /** A folder with its size from the scan cache. */
 export interface SizedDir {
   path: string;

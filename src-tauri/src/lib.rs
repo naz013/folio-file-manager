@@ -1,3 +1,4 @@
+mod bin;
 mod commands;
 mod crash;
 mod fs;
@@ -263,6 +264,10 @@ pub fn run() {
             commands::undo_state,
             commands::perf_config,
             commands::perf_report,
+            commands::bin_list,
+            commands::bin_sizes,
+            commands::bin_restore,
+            commands::bin_purge,
             commands::scan_start,
             commands::scan_cancel,
             commands::scan_children,

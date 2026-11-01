@@ -14,6 +14,7 @@
     tags,
     activeTag,
     ontag,
+    onbin,
   }: {
     home: string;
     current: string;
@@ -29,6 +30,8 @@
     activeTag: number | null;
     /** Show every item with this tag. */
     ontag: (tag: Tag) => void;
+    /** Open the Recycle Bin. */
+    onbin: () => void;
   } = $props();
 
   const favorites: { label: string; icon: IconName; sub: string | null }[] = [
@@ -65,6 +68,11 @@
       <span>{fav.label}</span>
     </button>
   {/each}
+
+  <button class="item" onclick={onbin}>
+    <Icon name="trash" />
+    <span>Recycle Bin</span>
+  </button>
 
   <div class="label">Tags</div>
   {#each tags as tag (tag.id)}

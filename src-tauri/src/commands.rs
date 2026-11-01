@@ -725,6 +725,30 @@ pub fn clipboard_take() -> Option<(Vec<String>, bool)> {
     crate::platform::clipboard_take_files().map(|(paths, cut)| (strings(paths), cut))
 }
 
+// ---- Recycle Bin ----
+
+#[tauri::command]
+pub async fn bin_list() -> CmdResult<Vec<crate::bin::BinItem>> {
+    blocking(crate::bin::list).await
+}
+
+/// What the items weigh; slower than the listing, so asked for after it.
+#[tauri::command]
+pub async fn bin_sizes() -> CmdResult<Vec<crate::bin::BinSize>> {
+    blocking(crate::bin::sizes).await
+}
+
+#[tauri::command]
+pub async fn bin_restore(items: Vec<crate::bin::BinRef>) -> CmdResult<()> {
+    blocking(move || crate::bin::restore(&items)).await
+}
+
+/// Deletes items from the Recycle Bin for good. Only the bin view calls this, after asking.
+#[tauri::command]
+pub async fn bin_purge(items: Vec<crate::bin::BinRef>) -> CmdResult<()> {
+    blocking(move || crate::bin::purge(&items)).await
+}
+
 // ---- Disk scanner ----
 
 #[derive(Clone, Serialize)]
