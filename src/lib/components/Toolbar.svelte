@@ -2,14 +2,13 @@
   import { tick } from "svelte";
   import Icon from "./Icon.svelte";
   import { joinPath, listDir, pathSegments, separatorOf } from "$lib/api/fs";
-  import type { Theme } from "$lib/theme";
 
   export type View = "grid" | "list";
 
   let {
     path,
-    view = $bindable(),
-    theme,
+    view,
+    onview,
     dropTarget,
     springPath,
     springMs,
@@ -18,7 +17,6 @@
     onback,
     onforward,
     onnavigate,
-    ontheme,
     onsettings,
     tagLabel,
     inspectorOpen,
@@ -26,7 +24,7 @@
   }: {
     path: string;
     view: View;
-    theme: Theme;
+    onview: (view: View) => void;
     /** Folder under a native drag, and the one whose spring-loading countdown is running. */
     dropTarget: string | null;
     springPath: string | null;
@@ -37,7 +35,6 @@
     onforward: () => void;
     /** Resolves to whether the folder was opened (null if superseded); `quiet` leaves the error to the caller. */
     onnavigate: (path: string, quiet?: boolean) => Promise<boolean | null>;
-    ontheme: () => void;
     onsettings: () => void;
     /** Set while the list shows the items of a tag instead of a folder. */
     tagLabel: string | null;
@@ -221,8 +218,6 @@
       suggest();
     }
   }
-
-  const themeLabel = { system: "Theme: follow system", light: "Theme: light", dark: "Theme: dark" };
 </script>
 
 <svelte:window onpointerdown={() => (menu = null)} />
@@ -320,22 +315,13 @@
   {/if}
 
   <div class="switcher" role="group" aria-label="View">
-    <button class:active={view === "grid"} onclick={() => (view = "grid")} aria-label="Grid view">
+    <button class:active={view === "grid"} onclick={() => onview("grid")} aria-label="Grid view">
       <Icon name="grid" size={15} />
     </button>
-    <button class:active={view === "list"} onclick={() => (view = "list")} aria-label="List view">
+    <button class:active={view === "list"} onclick={() => onview("list")} aria-label="List view">
       <Icon name="list" size={15} />
     </button>
   </div>
-
-  <button
-    class="icon-btn"
-    onclick={ontheme}
-    aria-label={themeLabel[theme]}
-    title={themeLabel[theme]}
-  >
-    <Icon name={theme === "system" ? "monitor" : theme === "light" ? "sun" : "moon"} size={16} />
-  </button>
 
   <button
     class="icon-btn"

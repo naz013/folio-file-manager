@@ -17,12 +17,24 @@ pub const MAIN_LABEL: &str = "main";
 pub struct WindowTabs {
     pub tabs: Vec<String>,
     pub active: usize,
+    /// Each tab's view mode ("grid" or "list"), in tab order; "" or absent means the default.
+    #[serde(default)]
+    pub views: Vec<String>,
 }
 
 impl WindowTabs {
     /// Drops empty paths and clamps `active`; `None` when nothing is left.
     fn sanitized(mut self) -> Option<Self> {
-        self.tabs.retain(|t| !t.is_empty());
+        // Each tab keeps its view when the empty ones are dropped.
+        let had_views = !self.views.is_empty();
+        let mut views = std::mem::take(&mut self.views).into_iter();
+        let (tabs, views): (Vec<_>, Vec<_>) = std::mem::take(&mut self.tabs)
+            .into_iter()
+            .map(|t| (t, views.next().unwrap_or_default()))
+            .filter(|(t, _)| !t.is_empty())
+            .unzip();
+        self.tabs = tabs;
+        self.views = if had_views { views } else { Vec::new() };
         if self.tabs.is_empty() {
             return None;
         }
@@ -314,7 +326,24 @@ mod tests {
         WindowTabs {
             tabs: paths.iter().map(ToString::to_string).collect(),
             active,
+            views: Vec::new(),
         }
+    }
+
+    #[test]
+    fn views_stay_with_their_tabs_and_old_files_have_none() {
+        let kept = WindowTabs {
+            tabs: vec!["a".into(), String::new(), "c".into()],
+            active: 2,
+            views: vec!["list".into(), "grid".into(), "grid".into()],
+        }
+        .sanitized()
+        .unwrap();
+        assert_eq!(kept.tabs, ["a", "c"]);
+        assert_eq!(kept.views, ["list", "grid"]);
+        // A session file from before views were saved still loads.
+        let old: WindowTabs = serde_json::from_str(r#"{"tabs":["x"],"active":0}"#).unwrap();
+        assert_eq!(old.views, Vec::<String>::new());
     }
 
     fn temp_session() -> (tempfile::TempDir, PathBuf, Session) {

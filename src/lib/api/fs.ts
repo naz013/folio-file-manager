@@ -316,15 +316,17 @@ export const onDirChanged = (cb: (path: string) => void): Promise<UnlistenFn> =>
 export interface WindowTabs {
   tabs: string[];
   active: number;
+  /** Each tab's view mode, in tab order; "" (or absent) is the default. */
+  views?: string[];
 }
 
 export const windowTabs = () => invoke<WindowTabs | null>("window_tabs");
-export const saveTabs = (tabs: string[], active: number) =>
-  invoke<void>("save_tabs", { tabs, active });
+export const saveTabs = (tabs: string[], active: number, views: string[]) =>
+  invoke<void>("save_tabs", { tabs, active, views });
 
 /** Opens a new window showing `tabs`, its top-left corner at logical screen position (x, y). */
-export const openWindow = (tabs: string[], x: number, y: number) =>
-  invoke<void>("open_window", { tabs, x, y });
+export const openWindow = (tabs: string[], views: string[], x: number, y: number) =>
+  invoke<void>("open_window", { tabs, views, x, y });
 
 export function separatorOf(path: string): string {
   return path.includes("\\") ? "\\" : "/";

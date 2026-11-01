@@ -41,6 +41,3 @@ export function onThemeChange(fn: (theme: Theme) => void): () => void {
   window.addEventListener("storage", handler);
   return () => window.removeEventListener("storage", handler);
 }
-
-export const nextTheme = (theme: Theme): Theme =>
-  themes[(themes.indexOf(theme) + 1) % themes.length];

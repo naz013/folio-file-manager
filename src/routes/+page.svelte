@@ -83,14 +83,7 @@
   import SettingsDialog from "$lib/components/SettingsDialog.svelte";
   import CrashPrompt from "$lib/components/CrashPrompt.svelte";
   import StorageView from "$lib/components/StorageView.svelte";
-  import {
-    applyTheme,
-    loadTheme,
-    nextTheme,
-    onThemeChange,
-    setTheme,
-    type Theme,
-  } from "$lib/theme";
+  import { applyTheme, loadTheme, onThemeChange, setTheme, type Theme } from "$lib/theme";
   import FileView from "$lib/components/FileView.svelte";
   import { measureJumps, measureScroll, nextPaint, perfConfig, perfReport } from "$lib/perf";
 
@@ -98,10 +91,6 @@
   let path = $state("");
   // Raw (not deeply proxied): listings are replaced wholesale, and proxying 50k objects is slow.
   let entries = $state.raw<Entry[]>([]);
-  // Starts as the default view; the toolbar can change it for this tab, and changing the
-  // default in Settings shows at once.
-  let view = $derived<View>(settings.defaultView);
-
   let settingsOpen = $state(false);
   let storageOpen = $state(false);
   /** A size scan is running (it is shared by every window). */
@@ -134,6 +123,8 @@
   interface Tab {
     id: number;
     path: string;
+    /** Set once the view was changed in this tab; null follows the default. */
+    view: View | null;
   }
   interface TabMemory {
     back: string[];
@@ -143,6 +134,14 @@
   }
   let tabs = $state<Tab[]>([]);
   let active = $state(-1);
+
+  // Each tab remembers its own view; a tab that was never changed follows the default from
+  // Settings, which shows at once.
+  let view = $derived<View>(tabs[active]?.view ?? settings.defaultView);
+
+  function setView(next: View) {
+    if (tabs[active]) tabs[active].view = next;
+  }
   let nextTabId = 0;
   // Deliberately not reactive: nothing renders from it, and proxying large selections is slow.
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
@@ -155,8 +154,11 @@
   let restored = $state(false);
   let saveTimer: ReturnType<typeof setTimeout>;
 
+  const asView = (v: string | undefined): View | null => (v === "grid" || v === "list" ? v : null);
+
   const folderName = (p: string) => pathSegments(p).at(-1)?.name ?? p;
   let tabPaths = $derived(tabs.map((t) => t.path));
+  let tabViews = $derived(tabs.map((t) => t.view ?? ""));
   let tabList = $derived(tabs.map((t, i) => ({ id: t.id, title: folderName(tabPaths[i]) })));
 
   const selection = new SvelteSet<string>();
@@ -334,7 +336,11 @@
 
   // ---- Tabs ----
 
-  const newTab = (p: string): Tab => ({ id: nextTabId++, path: p });
+  const newTab = (p: string, view: View | null = null): Tab => ({
+    id: nextTabId++,
+    path: p,
+    view,
+  });
 
   /** Remembers the live page state of the active tab before another tab takes over. */
   function snapshot() {
@@ -416,7 +422,7 @@
     if (tabs.length === 1) return;
     const { id, path: target } = tabs[index];
     try {
-      await openWindow([target], x, y);
+      await openWindow([target], [tabs[index].view ?? ""], x, y);
     } catch (e) {
       notify(String(e), true);
       return;
@@ -430,9 +436,11 @@
     if (tabs.length > 1) activate((active + delta + tabs.length) % tabs.length);
   }
 
-  function persistTabs(paths = tabPaths, index = active) {
+  function persistTabs(paths = tabPaths, index = active, views = tabViews) {
     clearTimeout(saveTimer);
-    return saveTabs(paths, Math.max(index, 0)).catch((e) => console.warn("saving tabs failed", e));
+    return saveTabs(paths, Math.max(index, 0), views).catch((e) =>
+      console.warn("saving tabs failed", e),
+    );
   }
 
   /** Closing goes through the onCloseRequested handler in onMount, which saves first. */
@@ -443,8 +451,9 @@
     if (!restored) return;
     const paths = tabPaths;
     const index = active;
+    const views = tabViews;
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => persistTabs(paths, index), 300);
+    saveTimer = setTimeout(() => persistTabs(paths, index, views), 300);
   });
 
   function open(entry: Entry) {
@@ -1276,8 +1285,8 @@
         ),
       ),
       ...action("Clear recent folders", undefined, clearRecent),
-      ...action("Grid view", undefined, () => (view = "grid"), view !== "grid"),
-      ...action("List view", undefined, () => (view = "list"), view !== "list"),
+      ...action("Grid view", undefined, () => setView("grid"), view !== "grid"),
+      ...action("List view", undefined, () => setView("list"), view !== "list"),
       ...action(settings.showHidden ? "Hide hidden files" : "Show hidden files", "Ctrl+H", () =>
         updateSettings({ showHidden: !settings.showHidden }),
       ),
@@ -1431,13 +1440,14 @@
   // ---- Benchmarks (opt-in, see docs/PERFORMANCE.md) ----
 
   async function runBench(dirs: string[]) {
+    const viewBefore = tabs[active]?.view ?? null;
     for (const dir of dirs) {
       let t = performance.now();
       const count = (await listDir(dir)).length;
       const listMs = (performance.now() - t).toFixed(1);
       for (const v of ["grid", "list"] as View[]) {
         await navigate(home);
-        view = v;
+        setView(v);
         await nextPaint();
         t = performance.now();
         await navigate(dir);
@@ -1452,7 +1462,7 @@
         );
       }
     }
-    view = "grid";
+    if (tabs[active]) tabs[active].view = viewBefore;
     await navigate(home);
     await nextPaint();
     await perfReport("bench-done");
@@ -1690,7 +1700,9 @@
     homeDir().then(async (h) => {
       home = h;
       const saved = await windowTabs().catch(() => null);
-      tabs = saved ? saved.tabs.map(newTab) : [newTab(startPath(h))];
+      tabs = saved
+        ? saved.tabs.map((p, i) => newTab(p, asView(saved.views?.[i])))
+        : [newTab(startPath(h))];
       await activate(saved?.active ?? 0);
       restored = true;
       // Benchmarks are optional; never let them break startup.
@@ -1745,7 +1757,8 @@
     <Toolbar
       bind:this={toolbar}
       {path}
-      bind:view
+      {view}
+      onview={setView}
       canBack={back.length > 0}
       canForward={forward.length > 0}
       onback={goBack}
@@ -1754,11 +1767,6 @@
       {dropTarget}
       {springPath}
       {springMs}
-      {theme}
-      ontheme={() => {
-        theme = nextTheme(theme);
-        setTheme(theme);
-      }}
       onsettings={() => (settingsOpen = true)}
       tagLabel={tagView?.name ?? null}
       inspectorOpen={settings.showInspector}
