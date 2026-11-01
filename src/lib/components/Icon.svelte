@@ -21,7 +21,7 @@
     pause: '<path d="M9 5v14M15 5v14"/>',
     play: '<path d="M8 5l11 7-11 7z"/>',
     settings:
-      '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/>',
+      '<path d="M4 7h9M19 7h1M4 17h1M11 17h9M4 12h3M13 12h7"/><circle cx="16" cy="7" r="2.5"/><circle cx="8" cy="17" r="2.5"/><circle cx="10" cy="12" r="2.5"/>',
     sun: '<circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6L7 7M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4"/>',
     moon: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
     trash:
