@@ -276,6 +276,7 @@ pub fn run() {
             commands::scan_children,
             commands::scan_large,
             commands::cleanup_large_old,
+            commands::cleanup_old_downloads,
             commands::cleanup_trash,
             commands::scan_running,
             commands::scan_size,

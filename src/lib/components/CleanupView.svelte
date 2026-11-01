@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import {
     cleanupLargeOld,
+    cleanupOldDownloads,
     cleanupTrash,
     onQueueUpdate,
     parentOf,
@@ -11,6 +12,7 @@
   import { formatDate, formatSize } from "$lib/format";
   import {
     CLEANUP_AGES_DAYS,
+    DOWNLOAD_AGES_DAYS,
     CLEANUP_SIZES_MB,
     settings,
     updateSettings,
@@ -18,9 +20,12 @@
   import Thumbnail from "./Thumbnail.svelte";
 
   let {
+    start = "large",
     onclose,
     onopen,
   }: {
+    /** Which list to open on. */
+    start?: "large" | "downloads";
     onclose: () => void;
     /** Show this folder in the browser. */
     onopen: (path: string) => void;
@@ -40,6 +45,10 @@
   let scannedAny = $state(true);
   let error = $state("");
   let loadId = 0;
+  // `start` only picks the list the view opens on; after that the person switches it.
+  // What is looked for: big files nobody touches, or installers and archives in Downloads.
+  // svelte-ignore state_referenced_locally
+  let mode = $state<"large" | "downloads">(start);
   /** The Recycle Bin job started from here; the list refreshes when it ends. */
   let trashJob = $state<number | null>(null);
 
@@ -58,12 +67,15 @@
     error = "";
     try {
       const [found, roots] = await Promise.all([
-        cleanupLargeOld(settings.cleanupMinMb * 1024 * 1024, settings.cleanupAgeDays, LIMIT),
+        mode === "large"
+          ? cleanupLargeOld(settings.cleanupMinMb * 1024 * 1024, settings.cleanupAgeDays, LIMIT)
+          : cleanupOldDownloads(settings.cleanupDownloadsDays, LIMIT),
         scanRoots().catch(() => []),
       ]);
       if (id !== loadId) return;
       files = found;
-      scannedAny = roots.length > 0;
+      // Only the large-file list comes from the scan; Downloads is read directly.
+      scannedAny = mode === "downloads" || roots.length > 0;
       // Only what is still listed can stay picked.
       for (const path of Object.keys(picked)) {
         if (!found.some((f) => f.path === path)) delete picked[path];
@@ -79,6 +91,8 @@
   $effect(() => {
     void settings.cleanupMinMb;
     void settings.cleanupAgeDays;
+    void settings.cleanupDownloadsDays;
+    void mode;
     load();
   });
 
@@ -154,34 +168,65 @@
   {onkeydown}
 >
   <header>
-    <h2 id="cleanup-title">Large &amp; old files</h2>
+    <h2 id="cleanup-title">Cleanup</h2>
     <span class="grow"></span>
     <button onclick={onclose} aria-label="Close cleanup">✕</button>
   </header>
 
+  <div class="modes" role="group" aria-label="What to look for">
+    <button
+      class:chosen={mode === "large"}
+      aria-pressed={mode === "large"}
+      onclick={() => (mode = "large")}
+    >
+      Large &amp; old files
+    </button>
+    <button
+      class:chosen={mode === "downloads"}
+      aria-pressed={mode === "downloads"}
+      onclick={() => (mode = "downloads")}
+    >
+      Old downloads
+    </button>
+  </div>
+
   <div class="filters">
-    <label>
-      Bigger than
-      <select
-        value={settings.cleanupMinMb}
-        onchange={(e) => updateSettings({ cleanupMinMb: Number(e.currentTarget.value) })}
-      >
-        {#each CLEANUP_SIZES_MB as mb (mb)}
-          <option value={mb}>{sizeLabel(mb)}</option>
-        {/each}
-      </select>
-    </label>
-    <label>
-      Not changed for
-      <select
-        value={settings.cleanupAgeDays}
-        onchange={(e) => updateSettings({ cleanupAgeDays: Number(e.currentTarget.value) })}
-      >
-        {#each CLEANUP_AGES_DAYS as days (days)}
-          <option value={days}>{ageLabel(days)}</option>
-        {/each}
-      </select>
-    </label>
+    {#if mode === "downloads"}
+      <label>
+        Installers and archives not changed for
+        <select
+          value={settings.cleanupDownloadsDays}
+          onchange={(e) => updateSettings({ cleanupDownloadsDays: Number(e.currentTarget.value) })}
+        >
+          {#each DOWNLOAD_AGES_DAYS as days (days)}
+            <option value={days}>{ageLabel(days)}</option>
+          {/each}
+        </select>
+      </label>
+    {:else}
+      <label>
+        Bigger than
+        <select
+          value={settings.cleanupMinMb}
+          onchange={(e) => updateSettings({ cleanupMinMb: Number(e.currentTarget.value) })}
+        >
+          {#each CLEANUP_SIZES_MB as mb (mb)}
+            <option value={mb}>{sizeLabel(mb)}</option>
+          {/each}
+        </select>
+      </label>
+      <label>
+        Not changed for
+        <select
+          value={settings.cleanupAgeDays}
+          onchange={(e) => updateSettings({ cleanupAgeDays: Number(e.currentTarget.value) })}
+        >
+          {#each CLEANUP_AGES_DAYS as days (days)}
+            <option value={days}>{ageLabel(days)}</option>
+          {/each}
+        </select>
+      </label>
+    {/if}
   </div>
 
   {#if error}<p class="error" role="alert">{error}</p>{/if}
@@ -195,11 +240,23 @@
     </p>
   {:else if !files.length}
     <p class="empty" role="status">
-      No file is bigger than {sizeLabel(settings.cleanupMinMb)} and untouched for {ageLabel(
-        settings.cleanupAgeDays,
-      )}.
+      {#if mode === "downloads"}
+        No installer or archive in Downloads has been untouched for {ageLabel(
+          settings.cleanupDownloadsDays,
+        )}.
+      {:else}
+        No file is bigger than {sizeLabel(settings.cleanupMinMb)} and untouched for {ageLabel(
+          settings.cleanupAgeDays,
+        )}.
+      {/if}
     </p>
   {:else}
+    {#if mode === "downloads"}
+      <p class="note">
+        Archives can be the only copy of something. A folder with other files in it (an unpacked
+        program) is skipped.
+      </p>
+    {/if}
     <p class="summary" role="status">
       {files.length === LIMIT ? `The ${LIMIT} biggest` : files.length} suggested, {formatSize(
         totalBytes,
@@ -274,6 +331,27 @@
 
   .grow {
     flex: 1;
+  }
+
+  .modes {
+    display: flex;
+    gap: var(--space-xs);
+    width: fit-content;
+    padding: var(--space-2xs);
+    border-radius: var(--radius-md);
+    background: var(--bg-control);
+  }
+
+  .modes button {
+    padding: var(--space-xs) var(--space-md);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+  }
+
+  .modes button.chosen {
+    background: var(--bg-window);
+    color: var(--text-primary);
+    font-weight: var(--font-weight-medium);
   }
 
   label {

@@ -238,6 +238,171 @@ pub fn large_old(
     Ok(found)
 }
 
+/// Installers and archives: what piles up in Downloads once it has done its job.
+const DOWNLOAD_KINDS: [&str; 26] = [
+    "exe",
+    "msi",
+    "msix",
+    "msixbundle",
+    "appx",
+    "appxbundle",
+    "dmg",
+    "pkg",
+    "deb",
+    "rpm",
+    "apk",
+    "iso",
+    "img",
+    "zip",
+    "7z",
+    "rar",
+    "tar",
+    "gz",
+    "tgz",
+    "bz2",
+    "xz",
+    "zst",
+    "cab",
+    "jar",
+    "appimage",
+    "run",
+];
+
+/// How deep into Downloads the search goes, and how many entries it looks at in all, so a
+/// folder with a project unpacked in it can't keep it busy.
+const DOWNLOADS_DEPTH: usize = 3;
+const DOWNLOADS_SEEN: usize = 50_000;
+
+/// The shortest age cleanup will look for in Downloads, whatever it is asked: a download
+/// that is still arriving or was just made is never old.
+pub const MIN_DOWNLOAD_AGE_DAYS: u32 = 14;
+
+/// Whether `dir` is a Downloads folder worth searching. Windows lets Downloads be moved
+/// to a drive's root or to the profile, and a search there would offer everything in it
+/// as a leftover download.
+pub fn downloads_folder_ok(dir: &Path, home: Option<&Path>) -> bool {
+    let home = home.map(norm_path);
+    let places = [Some(dir.to_path_buf()), std::fs::canonicalize(dir).ok()];
+    places.iter().all(|place| {
+        place.as_ref().is_some_and(|p| {
+            let here = norm_path(p);
+            // The profile itself, or a folder holding it.
+            let above_home = home
+                .as_ref()
+                .is_some_and(|h| *h == here || h.starts_with(&format!("{here}/")));
+            // A file in it must be one cleanup could suggest: not at a drive's top, not
+            // directly in the profile, not in a system folder.
+            !above_home
+                && !is_protected(&p.join("x"), None)
+                && !is_protected(&p.join("x"), home.as_deref().map(Path::new))
+        })
+    })
+}
+
+fn norm_path(p: &Path) -> String {
+    let text = p.to_string_lossy().to_lowercase().replace('\\', "/");
+    text.strip_prefix("//?/")
+        .unwrap_or(&text)
+        .trim_end_matches('/')
+        .to_owned()
+}
+
+/// When a file came to be on this disk: its creation time, or its change time where the
+/// system keeps none. A zip's entries, a copy from a USB stick and a file `wget` fetched
+/// all keep an old change time while being new here.
+pub fn arrived(path: &Path) -> i64 {
+    let meta = std::fs::symlink_metadata(path).ok();
+    let secs = |t: std::io::Result<std::time::SystemTime>| {
+        t.ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+    };
+    meta.map_or(i64::MAX, |m| secs(m.created()).max(secs(m.modified())))
+}
+
+/// Installers and archives in `dir` (the Downloads folder) that have not changed, and did
+/// not arrive, for `older_than_days`, biggest first. The folder is read directly rather
+/// than from the scan cache: these are often small, and nothing needs scanning first.
+/// Links are not followed, and neither are cloud-only folders (listing one makes the sync
+/// provider fetch it). A subfolder holding anything that is not an installer or archive is
+/// an unpacked program or project, and is left whole. `skip` is the deny list, as for
+/// [`large_old`]; `arrived_at` says when a file came to be here (see [`arrived`]).
+pub fn old_downloads(
+    dir: &Path,
+    skip: impl Fn(&Path, u64) -> bool,
+    arrived_at: impl Fn(&Path) -> i64,
+    older_than_days: u32,
+    limit: usize,
+    now: i64,
+) -> Vec<BigFile> {
+    let before = now - i64::from(older_than_days.max(MIN_DOWNLOAD_AGE_DAYS)) * DAY;
+    let mut found = Vec::new();
+    let mut todo = vec![(dir.to_path_buf(), 0usize)];
+    let mut seen = 0usize;
+    while let Some((folder, depth)) = todo.pop() {
+        let Ok(entries) = std::fs::read_dir(&folder) else {
+            continue;
+        };
+        let mut here = Vec::new();
+        let mut has_other_files = false;
+        for entry in entries.flatten() {
+            seen += 1;
+            if seen > DOWNLOADS_SEEN {
+                return finish(found, limit);
+            }
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            let path = entry.path();
+            if kind.is_dir() {
+                // Not into folders no suggestion could come from (`node_modules`, `.git`),
+                // which would only use up the budget, nor into ones that exist only in the
+                // cloud.
+                let name = entry.file_name().to_string_lossy().to_lowercase();
+                if depth < DOWNLOADS_DEPTH
+                    && !PROTECTED_DIRS.contains(&name.as_str())
+                    && !is_cloud_only(&path)
+                {
+                    todo.push((path, depth + 1));
+                }
+            } else if kind.is_file() {
+                let kind_ok = path.extension().is_some_and(|e| {
+                    let e = e.to_string_lossy().to_lowercase();
+                    DOWNLOAD_KINDS.contains(&e.as_str())
+                        // Below the top level these are the program itself, not a setup.
+                        && (depth == 0 || !matches!(e.as_str(), "jar" | "appimage" | "run"))
+                });
+                if kind_ok {
+                    here.push(path);
+                } else {
+                    has_other_files = true;
+                }
+            }
+        }
+        if depth > 0 && has_other_files {
+            continue;
+        }
+        for path in here {
+            if let Some((size, modified)) = on_disk(&path, &skip)
+                && modified.max(arrived_at(&path)) <= before
+            {
+                found.push(BigFile {
+                    path: path.to_string_lossy().into_owned(),
+                    size,
+                    modified,
+                });
+            }
+        }
+    }
+    finish(found, limit)
+}
+
+fn finish(mut found: Vec<BigFile>, limit: usize) -> Vec<BigFile> {
+    found.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.path.cmp(&b.path)));
+    found.truncate(limit.min(MAX_LIST));
+    found
+}
+
 /// The items of a list shown earlier that are still exactly as listed, safe to move: same
 /// size, not changed since, not protected. Anything else is left alone.
 pub fn still_as_listed(items: &[BigFile], skip: impl Fn(&Path, u64) -> bool) -> Vec<&BigFile> {
@@ -474,6 +639,126 @@ mod tests {
         assert_eq!(drive_of(Path::new("C:\\x")), Some('c'));
         assert_eq!(drive_of(Path::new("\\\\?\\d:\\x")), Some('d'));
         assert_eq!(drive_of(Path::new("/x")), None);
+    }
+
+    #[test]
+    fn only_old_installers_and_archives_in_downloads_are_suggested() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("old").join("deeper");
+        std::fs::create_dir_all(&nested).unwrap();
+        put(dir.path(), "setup.EXE", 10, 200);
+        put(dir.path(), "photos.zip", 30, 100);
+        put(&nested, "tool.7z", 20, 400);
+        put(dir.path(), "fresh.zip", 50, 5);
+        put(dir.path(), "report.pdf", 60, 400);
+        put(dir.path(), "movie.mkv", 70, 400);
+        let now = crate::journal::unix_now();
+        let found = old_downloads(dir.path(), |_, _| false, |_| 0, 90, 100, now);
+        let names: Vec<String> = found
+            .iter()
+            .map(|f| {
+                Path::new(&f.path)
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        // Biggest first; the new archive, the pdf and the video are not offered.
+        assert_eq!(names, ["photos.zip", "tool.7z", "setup.EXE"]);
+        assert_eq!(found[0].size, 30);
+    }
+
+    #[test]
+    fn a_file_that_arrived_recently_is_not_old_whatever_its_change_date() {
+        let dir = tempfile::tempdir().unwrap();
+        put(dir.path(), "extracted.zip", 10, 400);
+        put(dir.path(), "ancient.zip", 20, 400);
+        let now = crate::journal::unix_now();
+        let arrival = |p: &Path| {
+            if p.ends_with("extracted.zip") {
+                now - 60
+            } else {
+                0
+            }
+        };
+        let found = old_downloads(dir.path(), |_, _| false, arrival, 90, 100, now);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].path.ends_with("ancient.zip"));
+        // And the real thing: a file made just now has just arrived.
+        assert!(arrived(&dir.path().join("extracted.zip")) >= now - 5);
+    }
+
+    #[test]
+    fn an_unpacked_folder_and_the_depth_limit_are_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let unpacked = dir.path().join("PortableTool");
+        let plain = dir.path().join("setups");
+        let deep = plain.join("a").join("b").join("c").join("d");
+        std::fs::create_dir_all(&unpacked).unwrap();
+        std::fs::create_dir_all(&deep).unwrap();
+        put(&unpacked, "tool.exe", 10, 400);
+        put(&unpacked, "tool.dll", 10, 400);
+        put(&plain, "installer.msi", 10, 400);
+        // A jar below the top level is the program itself; its folder is left whole.
+        let server = dir.path().join("mc-server");
+        std::fs::create_dir_all(&server).unwrap();
+        put(&server, "server.jar", 10, 400);
+        put(&server, "setup.zip", 10, 400);
+        put(&deep, "too-deep.zip", 10, 400);
+        put(dir.path(), "top.jar", 10, 400);
+        let now = crate::journal::unix_now();
+        let found = old_downloads(dir.path(), |_, _| false, |_| 0, 90, 100, now);
+        let mut names: Vec<String> = found
+            .iter()
+            .map(|f| {
+                Path::new(&f.path)
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        names.sort();
+        assert_eq!(names, ["installer.msi", "top.jar"]);
+    }
+
+    #[test]
+    fn an_age_below_the_floor_is_raised_to_it() {
+        let dir = tempfile::tempdir().unwrap();
+        put(dir.path(), "new.zip", 10, 3);
+        put(dir.path(), "old.zip", 10, 30);
+        let now = crate::journal::unix_now();
+        let found = old_downloads(dir.path(), |_, _| false, |_| 0, 0, 100, now);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].path.ends_with("old.zip"));
+    }
+
+    #[test]
+    fn a_downloads_folder_that_is_a_drive_root_or_the_profile_is_refused() {
+        let home = Path::new("C:\\Users\\me");
+        assert!(!downloads_folder_ok(Path::new("D:\\"), Some(home)));
+        assert!(!downloads_folder_ok(Path::new("C:\\Users\\me"), Some(home)));
+        assert!(!downloads_folder_ok(Path::new("C:\\Users"), Some(home)));
+        assert!(!downloads_folder_ok(
+            Path::new("C:\\Windows\\Temp"),
+            Some(home)
+        ));
+    }
+
+    #[test]
+    fn downloads_search_respects_the_deny_list_and_the_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..5 {
+            put(dir.path(), &format!("a{i}.zip"), 10 + i, 400);
+        }
+        put(dir.path(), "keep.zip", 99, 400);
+        let now = crate::journal::unix_now();
+        let skip = |p: &Path, _: u64| p.ends_with("keep.zip");
+        let found = old_downloads(dir.path(), skip, |_| 0, 90, 3, now);
+        assert_eq!(found.len(), 3);
+        assert!(found.iter().all(|f| !f.path.ends_with("keep.zip")));
+        assert_eq!(found[0].size, 14);
     }
 
     #[test]

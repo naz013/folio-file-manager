@@ -108,6 +108,7 @@
   let settingsOpen = $state(false);
   let storageOpen = $state(false);
   let cleanupOpen = $state(false);
+  let cleanupStart = $state<"large" | "downloads">("large");
   let binOpen = $state(false);
   /** A size scan is running (it is shared by every window). */
   let scanning = $state(false);
@@ -1437,7 +1438,14 @@
       ...action("Settings", "Ctrl+,", () => (settingsOpen = true)),
       ...action("Recycle Bin", "", () => (binOpen = true)),
       ...action("Storage breakdown", "", () => (storageOpen = true)),
-      ...action("Clean up large and old files", "", () => (cleanupOpen = true)),
+      ...action("Clean up large and old files", "", () => {
+        cleanupStart = "large";
+        cleanupOpen = true;
+      }),
+      ...action("Clean up old downloads", "", () => {
+        cleanupStart = "downloads";
+        cleanupOpen = true;
+      }),
       ...action("Scan this folder for sizes", "", startScan, !scanning && !tagView),
       ...action("Cancel the size scan", "", () => scanCancel(), scanning),
     ];
@@ -2051,6 +2059,7 @@
 
   {#if cleanupOpen}
     <CleanupView
+      start={cleanupStart}
       onclose={() => (cleanupOpen = false)}
       onopen={(p) => {
         cleanupOpen = false;

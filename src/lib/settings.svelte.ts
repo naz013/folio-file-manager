@@ -11,6 +11,7 @@ export type ViewMode = "grid" | "list";
 /** The thresholds cleanup offers for "large" (MB) and "old" (days). */
 export const CLEANUP_SIZES_MB = [10, 50, 100, 500, 1000, 5000] as const;
 export const CLEANUP_AGES_DAYS = [30, 90, 180, 365, 730] as const;
+export const DOWNLOAD_AGES_DAYS = [14, 30, 60, 90, 180, 365] as const;
 
 export interface Settings {
   /** Where new tabs and a fresh start open: "home", "desktop", "documents", "downloads", or a path. */
@@ -29,6 +30,8 @@ export interface Settings {
   cleanupMinMb: number;
   /** ... that have not changed for this many days. */
   cleanupAgeDays: number;
+  /** Installers and archives in Downloads older than this many days are suggested. */
+  cleanupDownloadsDays: number;
 }
 
 export const DEFAULTS: Settings = {
@@ -41,6 +44,7 @@ export const DEFAULTS: Settings = {
   pinnedFolders: [],
   cleanupMinMb: 100,
   cleanupAgeDays: 365,
+  cleanupDownloadsDays: 90,
 };
 
 /** The allowed delay closest to `ms`, so a hand-edited value still shows in the list. */
@@ -78,6 +82,11 @@ function read(): Settings {
     cleanupAgeDays: (CLEANUP_AGES_DAYS as readonly unknown[]).includes(saved.cleanupAgeDays)
       ? (saved.cleanupAgeDays as number)
       : DEFAULTS.cleanupAgeDays,
+    cleanupDownloadsDays: (DOWNLOAD_AGES_DAYS as readonly unknown[]).includes(
+      saved.cleanupDownloadsDays,
+    )
+      ? (saved.cleanupDownloadsDays as number)
+      : DEFAULTS.cleanupDownloadsDays,
     pinnedFolders: Array.isArray(saved.pinnedFolders)
       ? saved.pinnedFolders.filter(
           (p, i, all): p is string => typeof p === "string" && !!p && all.indexOf(p) === i,

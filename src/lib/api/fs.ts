@@ -129,6 +129,9 @@ export const scanLarge = (min: number, limit: number) =>
 /** Large files untouched for a while, biggest first; never from a protected location. */
 export const cleanupLargeOld = (minBytes: number, olderThanDays: number, limit: number) =>
   invoke<BigFile[]>("cleanup_large_old", { minBytes, olderThanDays, limit });
+/** Installers and archives in Downloads untouched for a while, biggest first. */
+export const cleanupOldDownloads = (olderThanDays: number, limit: number) =>
+  invoke<BigFile[]>("cleanup_old_downloads", { olderThanDays, limit });
 /** Result of `cleanup_trash`. */
 export interface CleanupTrash {
   job: number | null;

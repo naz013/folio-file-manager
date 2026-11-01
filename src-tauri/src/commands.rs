@@ -980,6 +980,33 @@ pub fn cleanup_large_old(
     .map_err(|e| e.to_string())
 }
 
+/// Installers and archives in the Downloads folder untouched for `older_than_days`, as a
+/// cleanup suggestion list. Only suggestions; nothing is changed.
+#[tauri::command(async)]
+pub fn cleanup_old_downloads(
+    app: tauri::AppHandle,
+    older_than_days: u32,
+    limit: u32,
+) -> CmdResult<Vec<BigFile>> {
+    let home = app.path().home_dir().ok();
+    let dir = app.path().download_dir().map_err(|e| e.to_string())?;
+    if !cleanup::downloads_folder_ok(&dir, home.as_deref()) {
+        return Err(format!(
+            "Your Downloads folder ({}) is a whole drive or your profile, so everything in it \
+             would look like a download. Cleanup leaves it alone.",
+            dir.display()
+        ));
+    }
+    Ok(cleanup::old_downloads(
+        &dir,
+        cleanup_skips(home),
+        cleanup::arrived,
+        older_than_days,
+        limit as usize,
+        journal::unix_now(),
+    ))
+}
+
 /// What cleanup never touches: protected places, and files the Recycle Bin can't be
 /// trusted to take (on a drive without one, or bigger than it holds), which a delete
 /// would destroy for good.
