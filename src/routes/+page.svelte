@@ -93,6 +93,7 @@
     updateSettings,
   } from "$lib/settings.svelte";
   import SettingsDialog from "$lib/components/SettingsDialog.svelte";
+  import OnboardingTour from "$lib/components/OnboardingTour.svelte";
   import UpdateBanner from "$lib/components/UpdateBanner.svelte";
   import { checkForUpdate } from "$lib/updates.svelte";
   import CrashPrompt from "$lib/components/CrashPrompt.svelte";
@@ -129,6 +130,8 @@
   }
   /** Asked once, in the first window, until the user has answered. */
   let askCrash = $state(false);
+  /** The crash-report question has been looked up, so the tour knows whether to wait for it. */
+  let crashKnown = $state(false);
   let theme = $state<Theme>(loadTheme());
 
   let back = $state<string[]>([]);
@@ -171,6 +174,7 @@
   let shownTabId = -1;
   /** Set once restored tabs are loaded, so the empty initial state is never saved. */
   let restored = $state(false);
+  const tourOpen = $derived(restored && crashKnown && !askCrash && !settings.onboarded);
   let saveTimer: ReturnType<typeof setTimeout>;
 
   const asView = (v: string | undefined): View | null => (v === "grid" || v === "list" ? v : null);
@@ -1790,6 +1794,7 @@
       menu ||
       settingsOpen ||
       askCrash ||
+      tourOpen ||
       storageOpen ||
       cleanupOpen ||
       binOpen ||
@@ -1863,8 +1868,11 @@
     );
     if (getCurrentWindow().label === "main") {
       crashState().then(
-        (s) => (askCrash = s.consent === null),
-        () => {},
+        (s) => {
+          askCrash = s.consent === null;
+          crashKnown = true;
+        },
+        () => (crashKnown = true),
       );
       // Well after first paint, so the check never competes with showing the folder.
       setTimeout(() => checkForUpdate(false), 15_000);
@@ -2092,6 +2100,10 @@
   {/if}
 
   <UpdateBanner />
+
+  {#if tourOpen}
+    <OnboardingTour onclose={() => updateSettings({ onboarded: true })} />
+  {/if}
 
   {#if askCrash}
     <CrashPrompt

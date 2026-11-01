@@ -40,6 +40,8 @@ export interface Settings {
   cleanupDupMinMb: number;
   /** Unfinished copies untouched for this many days are suggested. */
   cleanupPartialDays: number;
+  /** The first-run tour was shown (finished or skipped). */
+  onboarded: boolean;
   /** Look for a new version in the background, once a day. */
   updateCheck: boolean;
   /** When the last background check ran (ms since 1970); 0 for never. */
@@ -61,6 +63,7 @@ export const DEFAULTS: Settings = {
   cleanupDownloadsDays: 90,
   cleanupDupMinMb: 10,
   cleanupPartialDays: 7,
+  onboarded: false,
   updateCheck: true,
   updateLastCheck: 0,
   updateSkipped: "",
@@ -112,6 +115,7 @@ function read(): Settings {
     cleanupPartialDays: (PARTIAL_AGES_DAYS as readonly unknown[]).includes(saved.cleanupPartialDays)
       ? (saved.cleanupPartialDays as number)
       : DEFAULTS.cleanupPartialDays,
+    onboarded: saved.onboarded === true,
     updateCheck: saved.updateCheck !== false,
     updateLastCheck:
       typeof saved.updateLastCheck === "number" && Number.isFinite(saved.updateLastCheck)

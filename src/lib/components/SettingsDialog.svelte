@@ -299,6 +299,22 @@
     </section>
 
     <section>
+      <h3>Help</h3>
+
+      <div class="row">
+        <span>Welcome tour</span>
+        <button
+          onclick={() => {
+            updateSettings({ onboarded: false });
+            onclose();
+          }}
+        >
+          Show again
+        </button>
+      </div>
+    </section>
+
+    <section>
       <h3>Privacy</h3>
 
       <div class="row">
