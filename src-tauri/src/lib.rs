@@ -1,4 +1,5 @@
 mod bin;
+mod cleanup;
 mod commands;
 mod crash;
 mod fs;
@@ -274,6 +275,8 @@ pub fn run() {
             commands::scan_cancel,
             commands::scan_children,
             commands::scan_large,
+            commands::cleanup_large_old,
+            commands::cleanup_trash,
             commands::scan_running,
             commands::scan_size,
             commands::scan_roots,

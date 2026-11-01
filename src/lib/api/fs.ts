@@ -126,6 +126,16 @@ export const scanCancel = () => invoke<void>("scan_cancel");
 export const scanChildren = (dir: string) => invoke<SizedDir[]>("scan_children", { dir });
 export const scanLarge = (min: number, limit: number) =>
   invoke<BigFile[]>("scan_large", { min, limit });
+/** Large files untouched for a while, biggest first; never from a protected location. */
+export const cleanupLargeOld = (minBytes: number, olderThanDays: number, limit: number) =>
+  invoke<BigFile[]>("cleanup_large_old", { minBytes, olderThanDays, limit });
+/** Result of `cleanup_trash`. */
+export interface CleanupTrash {
+  job: number | null;
+  leftAlone: number;
+}
+/** Moves cleanup-listed files to the Recycle Bin, those still exactly as listed. */
+export const cleanupTrash = (items: BigFile[]) => invoke<CleanupTrash>("cleanup_trash", { items });
 export interface Drive {
   path: string;
   total: number;

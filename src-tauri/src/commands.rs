@@ -6,6 +6,7 @@
     reason = "Tauri deserializes command arguments and injects state by value"
 )]
 
+use crate::cleanup;
 use crate::fs::{self, Entry};
 use crate::journal::{self, Journal, Step};
 use crate::ops;
@@ -909,6 +910,68 @@ pub fn scan_large(
     limit: u32,
 ) -> CmdResult<Vec<BigFile>> {
     scanner.large(min, limit).map_err(|e| e.to_string())
+}
+
+/// Large files untouched for `older_than_days`, as a cleanup suggestion list: biggest
+/// first, never from a protected location. Only suggestions; nothing is changed.
+#[tauri::command(async)]
+pub fn cleanup_large_old(
+    app: tauri::AppHandle,
+    scanner: tauri::State<'_, Scanner>,
+    min_bytes: u64,
+    older_than_days: u32,
+    limit: u32,
+) -> CmdResult<Vec<BigFile>> {
+    let home = app.path().home_dir().ok();
+    cleanup::large_old(
+        &scanner,
+        cleanup_skips(home),
+        min_bytes,
+        older_than_days,
+        limit as usize,
+        journal::unix_now(),
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// What cleanup never touches: protected places, and files the Recycle Bin can't be
+/// trusted to take (on a drive without one, or bigger than it holds), which a delete
+/// would destroy for good.
+fn cleanup_skips(home: Option<PathBuf>) -> impl Fn(&std::path::Path, u64) -> bool {
+    move |path, size| {
+        cleanup::is_protected(path, home.as_deref())
+            || crate::platform::recycle_limit(path).is_none_or(|limit| size > limit)
+    }
+}
+
+/// What `cleanup_trash` did with the files it was given.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupTrash {
+    /// The background job that moves them, if any were still eligible.
+    job: Option<u64>,
+    /// Files left alone because they changed, moved, or are no longer eligible.
+    left_alone: usize,
+}
+
+/// Moves files from a cleanup list to the Recycle Bin, but only those still exactly as
+/// listed (same size, not changed since) and still allowed: the list may be old. Anything
+/// else is left alone.
+#[tauri::command(async)]
+pub fn cleanup_trash(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    queue: tauri::State<'_, Arc<Queue>>,
+    items: Vec<BigFile>,
+) -> CleanupTrash {
+    let home = app.path().home_dir().ok();
+    let ok = cleanup::still_as_listed(&items, cleanup_skips(home));
+    // And together they must fit the bin: an overflowing one deletes its oldest items for good.
+    let ok = cleanup::within_bin(ok, crate::platform::recycle_limit);
+    let left_alone = items.len() - ok.len();
+    let targets: Vec<String> = ok.iter().map(|f| f.path.clone()).collect();
+    let job = (!targets.is_empty()).then(|| trash_paths(app.clone(), window, queue, targets));
+    CleanupTrash { job, left_alone }
 }
 
 /// A drive with its capacity and free space.

@@ -17,7 +17,7 @@ use jwalk::WalkDirGeneric;
 use notify_debouncer_mini::notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_mini::{DebounceEventResult, Debouncer, new_debouncer};
 use rusqlite::{Connection, params};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Files at least this large are listed individually, for the large and old file cleanups.
 pub const BIG_MIN: u64 = 1 << 20;
@@ -225,7 +225,7 @@ pub struct Sized {
 }
 
 /// A file from the big-file list.
-#[derive(Serialize, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct BigFile {
     pub path: String,
     pub size: u64,
@@ -638,6 +638,74 @@ impl Scanner {
             })
         })?
         .collect()
+    }
+
+    /// The biggest files of at least `min` bytes last changed at or before `before`
+    /// (seconds since 1970), largest first, that `keep` accepts, up to `limit`. The cache
+    /// is read a page at a time and unlocked while `keep` runs, so a filter that touches the
+    /// disk (a slow share, a hung drive) never holds up a scan or the Storage view.
+    pub fn large_before(
+        &self,
+        min: u64,
+        before: i64,
+        limit: usize,
+        mut keep: impl FnMut(&BigFile) -> bool,
+    ) -> rusqlite::Result<Vec<BigFile>> {
+        const PAGE: usize = 200;
+        let mut found = Vec::new();
+        // The last row of the previous page: the next one starts after it.
+        let mut after: Option<(i64, String)> = None;
+        loop {
+            let page: Vec<(i64, String, BigFile)> = {
+                let db = self.db();
+                let mut stmt = db.prepare(
+                    "SELECT path, display, size, mtime FROM big
+                     WHERE size >= ?1 AND mtime <= ?2
+                       AND (?3 IS NULL OR size < ?3 OR (size = ?3 AND path > ?4))
+                     ORDER BY size DESC, path LIMIT ?5",
+                )?;
+                let (size, path) = after
+                    .clone()
+                    .map_or((None, None), |(s, p)| (Some(s), Some(p)));
+                stmt.query_map(
+                    params![
+                        as_i64(min),
+                        before,
+                        size,
+                        path,
+                        i64::try_from(PAGE).unwrap_or(200)
+                    ],
+                    |r| {
+                        Ok((
+                            r.get::<_, i64>(2)?,
+                            r.get::<_, String>(0)?,
+                            BigFile {
+                                path: r.get(1)?,
+                                size: as_u64(r.get(2)?),
+                                modified: r.get(3)?,
+                            },
+                        ))
+                    },
+                )?
+                .collect::<Result<_, _>>()?
+            };
+            let Some((size, path, _)) = page.last() else {
+                return Ok(found);
+            };
+            after = Some((*size, path.clone()));
+            let last_page = page.len() < PAGE;
+            for (_, _, file) in page {
+                if keep(&file) {
+                    found.push(file);
+                    if found.len() >= limit {
+                        return Ok(found);
+                    }
+                }
+            }
+            if last_page {
+                return Ok(found);
+            }
+        }
     }
 
     /// Every scanned root, with its size.

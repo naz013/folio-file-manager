@@ -88,6 +88,30 @@ pub fn list_drives() -> Vec<DriveInfo> {
     }
 }
 
+/// How big a file can be and still be sure to reach the Recycle Bin, or `None` where it
+/// has none (removable and network drives, where a delete is for good). The bin holds only
+/// part of a drive and deletes what is bigger, so this is a share of the drive's size, a
+/// cautious guess rather than the user's own bin setting. Elsewhere the Trash has no limit.
+pub fn recycle_limit(path: &Path) -> Option<u64> {
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+        let Some(Component::Prefix(prefix)) = path.components().next() else {
+            return None;
+        };
+        let letter = match prefix.kind() {
+            Prefix::Disk(l) | Prefix::VerbatimDisk(l) => char::from(l),
+            _ => return None,
+        };
+        drives::fixed_capacity(letter).map(|total| total / 20)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        Some(u64::MAX)
+    }
+}
+
 /// Puts `paths` on the system clipboard as files, for another program to paste: moved if
 /// `cut`, else copied. Only Windows has a file clipboard to mirror to so far.
 #[cfg_attr(

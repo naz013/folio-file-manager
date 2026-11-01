@@ -15,6 +15,27 @@ pub struct Drive {
     pub free: u64,
 }
 
+/// The capacity in bytes of the fixed drive with this letter, if it is one. Removable and
+/// network drives have no Recycle Bin, so they are not.
+pub fn fixed_capacity(letter: char) -> Option<u64> {
+    let path = format!("{}:\\", letter.to_ascii_uppercase());
+    let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: only sets this process's error mode, and it is put back below.
+    let before = unsafe { SetErrorMode(SEM_FAILCRITICALERRORS) };
+    // SAFETY: `wide` is NUL-terminated and outlives the call.
+    let kind = unsafe { GetDriveTypeW(PCWSTR(wide.as_ptr())) };
+    let mut total = 0u64;
+    let ok = kind == FIXED
+        // SAFETY: `wide` is NUL-terminated; the out-pointer refers to a live local.
+        && unsafe {
+            GetDiskFreeSpaceExW(PCWSTR(wide.as_ptr()), None, Some(&raw mut total), None)
+        }
+        .is_ok();
+    // SAFETY: restores the value returned above.
+    unsafe { SetErrorMode(before) };
+    (ok && total > 0).then_some(total)
+}
+
 pub fn list() -> Vec<Drive> {
     // An empty card reader would otherwise raise a "no disk" dialog.
     // SAFETY: only sets this process's error mode, and it is put back below.

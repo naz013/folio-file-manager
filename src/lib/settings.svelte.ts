@@ -8,6 +8,9 @@ const KEY = "folio.settings";
 
 export const SPRING_DELAYS_MS = [500, 1000, 1500, 2000, 2500, 3000] as const;
 export type ViewMode = "grid" | "list";
+/** The thresholds cleanup offers for "large" (MB) and "old" (days). */
+export const CLEANUP_SIZES_MB = [10, 50, 100, 500, 1000, 5000] as const;
+export const CLEANUP_AGES_DAYS = [30, 90, 180, 365, 730] as const;
 
 export interface Settings {
   /** Where new tabs and a fresh start open: "home", "desktop", "documents", "downloads", or a path. */
@@ -22,6 +25,10 @@ export interface Settings {
   returnAfterDrop: boolean;
   /** Folders pinned to the sidebar's Favorites by dragging, in the order shown. */
   pinnedFolders: string[];
+  /** Cleanup suggests files bigger than this many MB ... */
+  cleanupMinMb: number;
+  /** ... that have not changed for this many days. */
+  cleanupAgeDays: number;
 }
 
 export const DEFAULTS: Settings = {
@@ -32,6 +39,8 @@ export const DEFAULTS: Settings = {
   springDelayMs: 2000,
   returnAfterDrop: false,
   pinnedFolders: [],
+  cleanupMinMb: 100,
+  cleanupAgeDays: 365,
 };
 
 /** The allowed delay closest to `ms`, so a hand-edited value still shows in the list. */
@@ -63,6 +72,12 @@ function read(): Settings {
           ? nearestDelay(delay)
           : DEFAULTS.springDelayMs,
     returnAfterDrop: saved.returnAfterDrop === true,
+    cleanupMinMb: (CLEANUP_SIZES_MB as readonly unknown[]).includes(saved.cleanupMinMb)
+      ? (saved.cleanupMinMb as number)
+      : DEFAULTS.cleanupMinMb,
+    cleanupAgeDays: (CLEANUP_AGES_DAYS as readonly unknown[]).includes(saved.cleanupAgeDays)
+      ? (saved.cleanupAgeDays as number)
+      : DEFAULTS.cleanupAgeDays,
     pinnedFolders: Array.isArray(saved.pinnedFolders)
       ? saved.pinnedFolders.filter(
           (p, i, all): p is string => typeof p === "string" && !!p && all.indexOf(p) === i,
