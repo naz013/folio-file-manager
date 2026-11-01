@@ -509,6 +509,7 @@
 
   function itemClick(index: number, e: MouseEvent) {
     const p = visible[index].path;
+    fileView.focusList();
     if (e.shiftKey && anchor >= 0) {
       selectRange(anchor, index);
       cursor = index;
@@ -532,6 +533,7 @@
     }
     cursor = next;
     fileView.scrollToIndex(next);
+    fileView.focusList();
   }
 
   // ---- Operations ----
@@ -2008,8 +2010,9 @@
       {sort}
       onsort={sortBy}
       folderSize={(p) => folderSizes[sizeKey(p)]}
+      cursorIndex={cursor}
     />
-    <footer class="status">
+    <footer class="status" role="status">
       <span
         >{plural(visible.length, "item")}{selection.size
           ? ` · ${selection.size} selected`
@@ -2160,7 +2163,9 @@
   {/if}
 
   {#if toast}
-    <div class="toast" class:error={toast.error} role="status">{toast.text}</div>
+    <div class="toast" class:error={toast.error} role={toast.error ? "alert" : "status"}>
+      {toast.text}
+    </div>
   {/if}
 </div>
 
@@ -2218,7 +2223,7 @@
   }
 
   .toast.error {
-    background: var(--status-danger);
-    color: #fff;
+    background: var(--bg-danger);
+    color: var(--text-on-danger);
   }
 </style>

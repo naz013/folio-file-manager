@@ -315,10 +315,20 @@
   {/if}
 
   <div class="switcher" role="group" aria-label="View">
-    <button class:active={view === "grid"} onclick={() => onview("grid")} aria-label="Grid view">
+    <button
+      class:active={view === "grid"}
+      aria-pressed={view === "grid"}
+      onclick={() => onview("grid")}
+      aria-label="Grid view"
+    >
       <Icon name="grid" size={15} />
     </button>
-    <button class:active={view === "list"} onclick={() => onview("list")} aria-label="List view">
+    <button
+      class:active={view === "list"}
+      aria-pressed={view === "list"}
+      onclick={() => onview("list")}
+      aria-label="List view"
+    >
       <Icon name="list" size={15} />
     </button>
   </div>

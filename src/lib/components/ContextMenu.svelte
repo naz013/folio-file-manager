@@ -155,6 +155,11 @@
     outline: none;
   }
 
+  button:focus-visible {
+    outline: 2px solid var(--accent-default);
+    outline-offset: -2px;
+  }
+
   button:disabled {
     color: var(--text-tertiary);
   }

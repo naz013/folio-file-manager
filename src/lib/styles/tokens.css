@@ -63,11 +63,13 @@
   --border-default: #e7e7ec;
   --border-strong: #d6d6de;
   --text-primary: #1d1d22;
-  --text-secondary: #6b6b76;
-  --text-tertiary: #a3a3ad;
+  --text-secondary: #5e5e69;
+  --text-tertiary: #686873;
   --text-on-accent: #ffffff;
-  --accent-default: #4d6bfe;
-  --accent-hover: #3f5bea;
+  --bg-danger: #d70015;
+  --text-on-danger: #ffffff;
+  --accent-default: #4561f2;
+  --accent-hover: #3650d8;
   --accent-subtle: #e8eefe;
   --folder-back: #7cb7f7;
   --folder-front: #a3cdfb;
@@ -95,8 +97,11 @@
     --border-default: #34343a;
     --border-strong: #44444c;
     --text-primary: #f4f4f6;
-    --text-secondary: #a4a4ae;
-    --text-tertiary: #6e6e78;
+    --text-secondary: #b0b0ba;
+    --text-tertiary: #9c9ca7;
+    --text-on-accent: #101014;
+    --bg-danger: #ff453a;
+    --text-on-danger: #101014;
     --accent-default: #6c85ff;
     --accent-hover: #7f95ff;
     --accent-subtle: #26315a;
@@ -118,8 +123,11 @@
   --border-default: #34343a;
   --border-strong: #44444c;
   --text-primary: #f4f4f6;
-  --text-secondary: #a4a4ae;
-  --text-tertiary: #6e6e78;
+  --text-secondary: #b0b0ba;
+  --text-tertiary: #9c9ca7;
+  --text-on-accent: #101014;
+  --bg-danger: #ff453a;
+  --text-on-danger: #101014;
   --accent-default: #6c85ff;
   --accent-hover: #7f95ff;
   --accent-subtle: #26315a;
@@ -128,4 +136,19 @@
   --shadow-raised: 0 1px 2px rgb(0 0 0 / 0.3), 0 1px 1px rgb(0 0 0 / 0.2);
   --shadow-popover: 0 8px 24px rgb(0 0 0 / 0.45), 0 0 1px rgb(0 0 0 / 0.3);
   color-scheme: dark;
+}
+
+/*
+ * Contrast (WCAG AA, checked for every text token on every background token in both modes:
+ * text 4.5:1 or more, white or dark text on the accent 4.5:1 or more). Keep to this when
+ * changing a color above. With "increase contrast" on in the OS, borders and quiet text go
+ * stronger still. The repeated :root outranks the data-theme rules above.
+ */
+@media (prefers-contrast: more) {
+  :root:root:root {
+    --border-default: light-dark(#767680, #8e8e98);
+    --border-strong: light-dark(#5e5e69, #a4a4ae);
+    --text-secondary: var(--text-primary);
+    --text-tertiary: var(--text-primary);
+  }
 }

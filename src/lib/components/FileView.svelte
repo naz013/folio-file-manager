@@ -52,7 +52,10 @@
     sort,
     onsort,
     folderSize,
+    cursorIndex = -1,
   }: {
+    /** The item the keyboard is on (an index into `entries`), for screen readers; -1 for none. */
+    cursorIndex?: number;
     /** The selection a rubber band drawn over the empty space gives: these paths. */
     onband: (paths: string[]) => void;
     /** What the list is ordered by, shown on the column headers. */
@@ -122,8 +125,26 @@
       .map((entry, i) => ({ entry, index: firstRow * cols + i })),
   );
 
+  /** The cursor's item exists in the page right now (the list shows only a window of it). */
+  const cursorShown = $derived(
+    cursorIndex >= 0 &&
+      cursorIndex < entries.length &&
+      cursorIndex >= firstRow * cols &&
+      cursorIndex < lastRow * cols,
+  );
+
   export function columns(): number {
     return cols;
+  }
+
+  /**
+   * Puts keyboard focus on the list, which is what lets a screen reader follow the cursor
+   * (`aria-activedescendant`). Focus on something else that takes keys is left alone.
+   */
+  export function focusList() {
+    const at = document.activeElement;
+    if (!at || at === document.body || scroller.contains(at))
+      scroller.focus({ preventScroll: true });
   }
 
   export function scrollToIndex(index: number) {
@@ -305,8 +326,15 @@
 
 <svelte:window onpointermove={pointerMove} onpointerup={() => (press = null)} />
 
+<!-- Keys are handled at window level in +page.svelte, whichever element has focus. -->
+<!-- svelte-ignore a11y_click_events_have_key_events -->
 <div
   class="scroller"
+  role="listbox"
+  aria-label="Files"
+  aria-multiselectable="true"
+  aria-activedescendant={cursorShown ? `file-${cursorIndex}` : undefined}
+  tabindex="0"
   bind:this={scroller}
   bind:clientWidth={width}
   bind:clientHeight={height}
@@ -324,7 +352,6 @@
     e.preventDefault();
     onbackgroundcontextmenu(e);
   }}
-  role="presentation"
 >
   <div class="canvas" bind:this={canvas} style:height="{padY * 2 + rows * rowH}px">
     {#if band}
@@ -349,6 +376,7 @@
         class:springing={springPath === entry.path}
         style="{position(index)};--spring-ms:{springMs}ms"
         data-drop-path={entry.isDir ? entry.path : undefined}
+        id="file-{index}"
         role="option"
         tabindex="-1"
         aria-selected={selected}
@@ -384,6 +412,7 @@
         {#if renaming === entry.path}
           <input
             class="rename"
+            aria-label="New name"
             value={entry.name}
             use:renameInput={entry}
             onkeydown={(e) => renameKey(e, entry)}
@@ -421,6 +450,10 @@
 </div>
 
 <style>
+  .scroller:focus-visible {
+    outline-offset: -2px;
+  }
+
   .scroller {
     flex: 1;
     overflow-y: auto;

@@ -39,6 +39,50 @@ button {
   outline-offset: 1px;
 }
 
+/* No motion for people who turned it off in the OS. The spring ring below is not decoration:
+   it shows how long until a folder opens, so it keeps its timing. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .springing::after {
+    animation-duration: var(--spring-ms) !important;
+  }
+}
+
+/* High contrast (Windows contrast themes): backgrounds are dropped, so what marks the focus
+   and the selection must be an outline in the system colors. */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 1px;
+  }
+
+  [aria-selected="true"],
+  [aria-pressed="true"],
+  [aria-current="true"],
+  [aria-current="page"],
+  .row.selected,
+  .tile.selected,
+  .item.selected,
+  .chosen,
+  .switcher .active {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  /* After the selection rule, so a selected item that has focus keeps its ring. */
+  :focus-visible {
+    outline-offset: -4px;
+  }
+}
+
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;

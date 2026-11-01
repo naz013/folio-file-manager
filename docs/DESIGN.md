@@ -99,3 +99,16 @@ blue `#0A84FF` · purple `#AF52DE` · gray `#8E8E93`
 - Destructive actions name the exact outcome ("Move 9.9 GB to Recycle Bin").
 - Section labels in the sidebar use Title case, tertiary color.
 - Icons: 1.75–2 px stroke, rounded caps, 16 px in chrome, 20 px in docs.
+
+## Accessibility
+
+- Contrast (WCAG AA): every text token is at least 4.5:1 on every background token in both
+  modes, and text on the accent is too. The values in `tokens.css` were changed for this
+  (light: secondary `#5e5e69`, tertiary `#686873`, accent `#4561f2`, accent hover `#3650d8`;
+  dark: secondary `#b0b0ba`, tertiary `#9c9ca7`, text on accent `#101014`). **Penpot still has
+  the old values; update it to match.** Recheck the pairs when changing any color.
+- Focus is always visible (2 px accent ring); never remove an outline without a replacement.
+- Motion follows `prefers-reduced-motion`; high contrast follows `prefers-contrast: more` and
+  Windows contrast themes (`forced-colors`), where selection and focus become system-color outlines.
+- The file list is a focusable listbox (`aria-activedescendant` follows the keyboard cursor);
+  buttons that only have an icon carry an `aria-label`.

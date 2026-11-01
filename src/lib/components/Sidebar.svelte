@@ -55,7 +55,7 @@
   ];
 </script>
 
-<aside class="sidebar">
+<aside class="sidebar" aria-label="Places and tags">
   <!-- The window has no native title bar; the brand row is part of the drag area. -->
   <div class="brand" data-tauri-drag-region>
     <span class="logo"><Icon name="folder" size={14} stroke={2.2} /></span>
@@ -70,6 +70,7 @@
       <button
         class="item"
         class:selected={path === current}
+        aria-current={path === current ? "page" : undefined}
         class:drop={dropTarget === path}
         class:springing={springPath === path}
         style:--spring-ms="{springMs}ms"
@@ -86,6 +87,7 @@
       <button
         class="item"
         class:selected={pinned === current}
+        aria-current={pinned === current ? "page" : undefined}
         class:drop={dropTarget === pinned}
         class:springing={springPath === pinned}
         style:--spring-ms="{springMs}ms"
@@ -110,18 +112,20 @@
     <span>Recycle Bin</span>
   </button>
 
-  <div class="label">Tags</div>
-  {#each tags as tag (tag.id)}
-    <button
-      class="item tag"
-      class:selected={activeTag === tag.id}
-      aria-pressed={activeTag === tag.id}
-      onclick={() => ontag(tag)}
-    >
-      <span class="dot" style:background={tagColor(tag.color)}></span>
-      <span>{tag.name}</span>
-    </button>
-  {/each}
+  <div class="label" id="tags-label">Tags</div>
+  <div role="group" aria-labelledby="tags-label">
+    {#each tags as tag (tag.id)}
+      <button
+        class="item tag"
+        class:selected={activeTag === tag.id}
+        aria-pressed={activeTag === tag.id}
+        onclick={() => ontag(tag)}
+      >
+        <span class="dot" style:background={tagColor(tag.color)}></span>
+        <span>{tag.name}</span>
+      </button>
+    {/each}
+  </div>
 </aside>
 
 <style>

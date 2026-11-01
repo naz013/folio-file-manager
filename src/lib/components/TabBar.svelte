@@ -349,7 +349,7 @@
   }
 
   .close-window:hover {
-    background: var(--status-danger);
-    color: var(--text-on-accent);
+    background: var(--bg-danger);
+    color: var(--text-on-danger);
   }
 </style>
