@@ -167,6 +167,20 @@ pub async fn start_drag(window: tauri::WebviewWindow, paths: Vec<String>) -> Cmd
     }
 }
 
+/// Names the one file the webview may read through `preview://`, replacing the last. `None`
+/// closes Quick Look's access altogether.
+#[tauri::command]
+pub fn preview_allow(current: tauri::State<'_, crate::preview::Current>, path: Option<String>) {
+    current.set(path.map(PathBuf::from));
+}
+
+/// The start of a text file for Quick Look; fails for files that are not text.
+#[tauri::command(async)]
+pub fn read_text_preview(path: String) -> CmdResult<crate::preview::TextPreview> {
+    crate::preview::read_text_preview(&PathBuf::from(&path))
+        .map_err(|e| format!("Cannot preview {path}: {e}"))
+}
+
 /// Which modifier keys are held down right now.
 #[derive(Serialize)]
 pub struct Modifiers {

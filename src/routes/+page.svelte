@@ -41,6 +41,7 @@
   } from "$lib/api/fs";
   import ConflictDialog from "$lib/components/ConflictDialog.svelte";
   import ContextMenu, { type MenuItem } from "$lib/components/ContextMenu.svelte";
+  import QuickLook from "$lib/components/QuickLook.svelte";
   import OpsPill from "$lib/components/OpsPill.svelte";
   import Sidebar from "$lib/components/Sidebar.svelte";
   import TabBar from "$lib/components/TabBar.svelte";
@@ -831,6 +832,53 @@
     }
   }
 
+  // ---- Quick Look ----
+
+  /** The file being previewed, by path so a refresh doesn't change what is shown. */
+  let look = $state<string | null>(null);
+  let lookIndex = $derived(look ? visible.findIndex((e) => e.path === look) : -1);
+
+  // The file went away (deleted, or another folder opened): nothing left to preview.
+  $effect(() => {
+    if (look && lookIndex < 0) look = null;
+  });
+
+  function openQuickLook() {
+    const at =
+      cursor >= 0 && selection.has(visible[cursor]?.path)
+        ? cursor
+        : visible.findIndex((e) => selection.has(e.path));
+    if (at >= 0) look = visible[at].path;
+  }
+
+  /** Moves the preview (and the selection with it) to the next or previous item. */
+  function lookStep(delta: number) {
+    const to = Math.min(visible.length - 1, Math.max(0, lookIndex + delta));
+    if (to === lookIndex) return;
+    selectOnly(to);
+    fileView.scrollToIndex(to);
+    look = visible[to].path;
+  }
+
+  function lookKey(e: KeyboardEvent) {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    // Holding Space (the key that opened it) must not close it again straight away.
+    if (e.repeat && (e.key === " " || e.key === "Escape")) {
+      e.preventDefault();
+      return;
+    }
+    const step =
+      e.key === "ArrowLeft" || e.key === "ArrowUp"
+        ? -1
+        : e.key === "ArrowRight" || e.key === "ArrowDown"
+          ? 1
+          : 0;
+    if (e.key === " " || e.key === "Escape") look = null;
+    else if (step) lookStep(step);
+    else return;
+    e.preventDefault();
+  }
+
   // ---- Context menu ----
 
   /** Folio's own menu, while one is open. */
@@ -862,6 +910,9 @@
       ...(one
         ? [
             { label: "Open", hint: "Enter", run: () => open(one) },
+            ...(one.isDir
+              ? []
+              : [{ label: "Quick Look", hint: "Space", run: () => (look = one.path) }]),
             ...(one.isDir
               ? [{ label: "Open in new tab", run: () => openTab(one.path, true) }]
               : []),
@@ -1041,6 +1092,8 @@
         return () => moveCursor(visible.length, shift);
       case "Enter":
         return cursor >= 0 ? () => open(visible[cursor]) : null;
+      case " ":
+        return selection.size ? openQuickLook : null;
       case "F2":
         return cursor >= 0 ? () => (renaming = visible[cursor].path) : null;
       case "Delete":
@@ -1058,6 +1111,13 @@
   function onkeydown(e: KeyboardEvent) {
     // A dialog handles its own keys; nothing behind it may act on them.
     if (asking || menu) return;
+    if (look) {
+      // Quick Look owns the keyboard, but the audio and video controls keep Space and the
+      // arrows (play, seek, volume).
+      if (!(e.target as HTMLElement).closest?.("audio, video")) lookKey(e);
+      else if (e.key === "Escape") lookKey(e);
+      return;
+    }
     const ctrl = e.ctrlKey || e.metaKey;
     const target = e.target as HTMLElement;
     // File shortcuts don't apply while renaming or typing, or on a keyboard-focused tab
@@ -1210,6 +1270,16 @@
       />
     </footer>
   </main>
+
+  {#if look && lookIndex >= 0}
+    <QuickLook
+      entry={visible[lookIndex]}
+      position={lookIndex + 1}
+      total={visible.length}
+      onopen={() => open(visible[lookIndex])}
+      onclose={() => (look = null)}
+    />
+  {/if}
 
   {#if inAppDrag}
     <div class="ghost" style:left="{inAppDrag.x + 14}px" style:top="{inAppDrag.y + 14}px">

@@ -41,6 +41,21 @@ export const startDrag = (paths: string[]) => invoke<void>("start_drag", { paths
 export const modifierKeys = () =>
   invoke<{ ctrl: boolean; shift: boolean; space: boolean }>("modifier_keys");
 
+/**
+ * Makes `path` the one file the `preview://` protocol serves, and resolves to its URL. Naming
+ * a file replaces the last; `releasePreview` closes the access.
+ */
+export async function previewUrl(path: string): Promise<string> {
+  await invoke<void>("preview_allow", { path });
+  return convertFileSrc(path, "preview");
+}
+
+export const releasePreview = () => invoke<void>("preview_allow", { path: null });
+
+/** The start of a text file; rejects for files that are not text. */
+export const readTextPreview = (path: string) =>
+  invoke<{ text: string; truncated: boolean }>("read_text_preview", { path });
+
 /** Shows the native OS context menu for `paths` at the cursor (Windows only for now). */
 export const showContextMenu = (paths: string[], extended: boolean) =>
   invoke<void>("show_context_menu", { paths, extended });

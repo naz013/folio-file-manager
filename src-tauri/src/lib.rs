@@ -4,6 +4,7 @@ mod journal;
 mod ops;
 mod perf;
 mod platform;
+mod preview;
 mod queue;
 mod session;
 mod thumbs;
@@ -40,6 +41,34 @@ fn open_journal(file: Option<&std::path::Path>) -> rusqlite::Result<journal::Jou
     }
 }
 
+/// The custom URL schemes the webview loads files through.
+trait Protocols {
+    fn with_protocols(self) -> Self;
+}
+
+impl<R: tauri::Runtime> Protocols for tauri::Builder<R> {
+    fn with_protocols(self) -> Self {
+        self.register_asynchronous_uri_scheme_protocol(
+            preview::SCHEME,
+            |ctx, request, responder| {
+                let app = ctx.app_handle().clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let current = app.state::<preview::Current>();
+                    responder.respond(preview::handle(&current, &request));
+                });
+            },
+        )
+        .register_asynchronous_uri_scheme_protocol(
+            thumbs::SCHEME,
+            |_ctx, request, responder| {
+                tauri::async_runtime::spawn_blocking(move || {
+                    responder.respond(thumbs::handle(&request));
+                });
+            },
+        )
+    }
+}
+
 /// Starts the app and blocks until the last window closes.
 ///
 /// # Panics
@@ -50,6 +79,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(watch::DirWatcher::default())
+        .manage(preview::Current::default())
         .setup(|app| {
             let file = app
                 .path()
@@ -112,11 +142,7 @@ pub fn run() {
             WindowEvent::Destroyed => window.state::<watch::DirWatcher>().unwatch(window.label()),
             _ => {}
         })
-        .register_asynchronous_uri_scheme_protocol(thumbs::SCHEME, |_ctx, request, responder| {
-            tauri::async_runtime::spawn_blocking(move || {
-                responder.respond(thumbs::handle(&request));
-            });
-        })
+        .with_protocols()
         .invoke_handler(tauri::generate_handler![
             commands::list_dir,
             commands::home_dir,
@@ -127,6 +153,8 @@ pub fn run() {
             commands::open_path,
             commands::start_drag,
             commands::modifier_keys,
+            commands::preview_allow,
+            commands::read_text_preview,
             commands::show_context_menu,
             commands::trash_paths,
             commands::rename_path,

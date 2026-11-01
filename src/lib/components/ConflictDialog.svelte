@@ -113,7 +113,7 @@
     z-index: 50;
     display: grid;
     place-items: center;
-    background: rgb(0 0 0 / 0.35);
+    background: var(--scrim);
   }
 
   .dialog {
