@@ -347,7 +347,20 @@ pub fn trash_paths(
     queue: tauri::State<'_, Arc<Queue>>,
     targets: Vec<String>,
 ) -> u64 {
-    let targets = paths(targets);
+    submit_trash(&app, &window, &queue, paths(targets), None)
+}
+
+/// Picks, when the job runs, which of the targets still go to the Recycle Bin: the ones to
+/// move, and how many were held back for lack of room in the bin.
+type TrashFilter = Box<dyn FnOnce(Vec<PathBuf>) -> (Vec<PathBuf>, usize) + Send>;
+
+fn submit_trash(
+    app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+    queue: &Arc<Queue>,
+    targets: Vec<PathBuf>,
+    filter: Option<TrashFilter>,
+) -> u64 {
     let label = describe("Move to Recycle Bin:", &targets);
     let lane = targets
         .first()
@@ -366,15 +379,48 @@ pub fn trash_paths(
             .zip(chosen)
             .partition(|(path, was)| was.is_none() || ops::identity(path).as_ref() == was.as_ref());
         let targets: Vec<PathBuf> = targets.into_iter().map(|(path, _)| path).collect();
-        let left_alone = changed.len();
+        let mut left_alone = changed.len();
+        // The room left in the bin is looked at now, not when the job was queued: other
+        // jobs ahead of this one may have filled it.
+        let (targets, no_room) = match filter {
+            Some(pick) => {
+                let before = targets.len();
+                let (kept, no_room) = pick(targets);
+                left_alone += before - kept.len() - no_room;
+                (kept, no_room)
+            }
+            None => (targets, 0),
+        };
         let (result, steps) = trash_with_steps(&journal, &targets);
         journal.finish(pending, &steps);
         for _ in &steps {
             ops::progress::add_item();
         }
-        result.map(|()| serde_json::json!({ "count": steps.len(), "leftAlone": left_alone }))
+        // On Windows an item that left its place with no Recycle Bin entry to restore may
+        // have been deleted for good (a bin set to delete at once, or one that overflowed);
+        // it is not counted as moved, and an error says so too.
+        let unconfirmed = if cfg!(windows) {
+            steps
+                .iter()
+                .filter(|s| matches!(s, Step::Trash { id: None, .. }))
+                .count()
+        } else {
+            0
+        };
+        match result {
+            Ok(()) => Ok(serde_json::json!({
+                "count": steps.len() - unconfirmed,
+                "leftAlone": left_alone,
+                "noRoom": no_room,
+                "unconfirmed": unconfirmed,
+            })),
+            Err(e) if unconfirmed > 0 => Err(format!(
+                "{e}. {unconfirmed} item(s) left without a Recycle Bin entry and may have been deleted permanently."
+            )),
+            Err(e) => Err(e),
+        }
     });
-    queue.submit(&app, window.label(), Kind::Trash, title, &lane, work)
+    queue.submit(app, window.label(), Kind::Trash, title, &lane, work)
 }
 
 #[tauri::command]
@@ -956,7 +1002,7 @@ pub struct CleanupTrash {
 
 /// Moves files from a cleanup list to the Recycle Bin, but only those still exactly as
 /// listed (same size, not changed since) and still allowed: the list may be old. Anything
-/// else is left alone.
+/// else is left alone. Which of them fit in the drive's bin is decided when the job runs.
 #[tauri::command(async)]
 pub fn cleanup_trash(
     app: tauri::AppHandle,
@@ -965,13 +1011,41 @@ pub fn cleanup_trash(
     items: Vec<BigFile>,
 ) -> CleanupTrash {
     let home = app.path().home_dir().ok();
-    let ok = cleanup::still_as_listed(&items, cleanup_skips(home));
-    // And together they must fit the bin: an overflowing one deletes its oldest items for good.
-    let ok = cleanup::within_bin(ok, crate::platform::recycle_limit);
+    let ok: Vec<BigFile> = cleanup::still_as_listed(&items, cleanup_skips(home.clone()))
+        .into_iter()
+        .map(|f| BigFile {
+            path: f.path.clone(),
+            size: f.size,
+            modified: f.modified,
+        })
+        .collect();
     let left_alone = items.len() - ok.len();
-    let targets: Vec<String> = ok.iter().map(|f| f.path.clone()).collect();
-    let job = (!targets.is_empty()).then(|| trash_paths(app.clone(), window, queue, targets));
-    CleanupTrash { job, left_alone }
+    if ok.is_empty() {
+        return CleanupTrash {
+            job: None,
+            left_alone,
+        };
+    }
+    let targets: Vec<PathBuf> = ok.iter().map(|f| PathBuf::from(&f.path)).collect();
+    let pick: TrashFilter = Box::new(move |targets| {
+        // Checked again now, then cut to what the bins can hold together.
+        let wanted: Vec<BigFile> = ok
+            .into_iter()
+            .filter(|f| targets.iter().any(|t| t.to_string_lossy() == f.path))
+            .collect();
+        let still = cleanup::still_as_listed(&wanted, cleanup_skips(home));
+        let fits = cleanup::within_bin(still.clone(), crate::platform::recycle_limit);
+        let no_room = still.len() - fits.len();
+        (
+            fits.iter().map(|f| PathBuf::from(&f.path)).collect(),
+            no_room,
+        )
+    });
+    let job = submit_trash(&app, &window, &queue, targets, Some(pick));
+    CleanupTrash {
+        job: Some(job),
+        left_alone,
+    }
 }
 
 /// A drive with its capacity and free space.

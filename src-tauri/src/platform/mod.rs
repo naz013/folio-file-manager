@@ -88,10 +88,11 @@ pub fn list_drives() -> Vec<DriveInfo> {
     }
 }
 
-/// How big a file can be and still be sure to reach the Recycle Bin, or `None` where it
-/// has none (removable and network drives, where a delete is for good). The bin holds only
-/// part of a drive and deletes what is bigger, so this is a share of the drive's size, a
-/// cautious guess rather than the user's own bin setting. Elsewhere the Trash has no limit.
+/// How much more the drive's Recycle Bin can take, so a batch moved there stays whole, or
+/// `None` where it has none, or is set to delete at once (removable and network drives,
+/// "Don't move files to the Recycle Bin"), where a delete is for good. This is read from
+/// the user's own setting for the drive, less what is already in the bin. Elsewhere the
+/// Trash has no limit.
 pub fn recycle_limit(path: &Path) -> Option<u64> {
     #[cfg(windows)]
     {
@@ -103,7 +104,7 @@ pub fn recycle_limit(path: &Path) -> Option<u64> {
             Prefix::Disk(l) | Prefix::VerbatimDisk(l) => char::from(l),
             _ => return None,
         };
-        drives::fixed_capacity(letter).map(|total| total / 20)
+        drives::bin_room(letter)
     }
     #[cfg(not(windows))]
     {
@@ -180,6 +181,20 @@ mod tests {
     fn encodes_png_signature() {
         let png = encode_png(2, 1, &[255, 0, 0, 255, 0, 0, 255, 128]).unwrap();
         assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_bin_of_the_system_drive_can_be_read() {
+        // The system drive is a fixed one; its bin is on unless the user turned it off, and
+        // either way the answer is a number or a plain "no bin", never a panic.
+        let windows = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+        let path = std::path::PathBuf::from(format!("{windows}\\x"));
+        let room = recycle_limit(&path);
+        println!("bin room on {windows}: {room:?}");
+        // A drive that does not exist has no bin.
+        assert_eq!(recycle_limit(Path::new("\\\\server\\share\\x")), None);
+        assert_eq!(recycle_limit(Path::new("relative\\x")), None);
     }
 
     #[cfg(windows)]

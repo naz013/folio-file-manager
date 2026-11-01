@@ -93,7 +93,7 @@
       const done = await cleanupTrash(chosen);
       for (const f of chosen) delete picked[f.path];
       if (done.leftAlone) {
-        error = `${done.leftAlone === 1 ? "1 file was" : `${done.leftAlone} files were`} left alone: changed since the list was made, or not safe to move.`;
+        error = `${done.leftAlone === 1 ? "1 file was" : `${done.leftAlone} files were`} left alone: changed since the list was made, or not safe to move. Files that do not fit in the Recycle Bin are reported when the move ends.`;
       }
       if (done.job === null) await load();
       else trashJob = done.job;

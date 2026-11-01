@@ -700,16 +700,33 @@
 
   function reportDone(job: Job) {
     if (job.kind === "trash") {
-      const { count, leftAlone } = (job.result as { count: number; leftAlone: number } | null) ?? {
-        count: 0,
-        leftAlone: 0,
-      };
+      const { count, leftAlone, unconfirmed, noRoom } = (job.result as {
+        count: number;
+        leftAlone: number;
+        unconfirmed?: number;
+        noRoom?: number;
+      } | null) ?? { count: 0, leftAlone: 0 };
       const note = leftAlone
         ? ` ${plural(leftAlone, "item")} changed before it could be deleted and was left alone.`
         : "";
-      notify(`Moved ${plural(count, "item")} to Recycle Bin.${note}`, leftAlone > 0);
+      if (unconfirmed) {
+        // Never say "moved" for what may be gone for good; keep the row so it is read.
+        notify(
+          `${plural(unconfirmed, "item")} left without a Recycle Bin entry and may have been deleted permanently (the bin may be turned off or full).${count ? ` ${plural(count, "item")} moved to the Recycle Bin.` : ""}${note}`,
+          true,
+        );
+        refresh([]);
+        return;
+      }
+      const full = noRoom
+        ? ` ${plural(noRoom, "item")} did not fit in the Recycle Bin and ${noRoom === 1 ? "was" : "were"} left alone: empty it and try again.`
+        : "";
+      notify(
+        `Moved ${plural(count, "item")} to Recycle Bin.${note}${full}`,
+        leftAlone > 0 || !!noRoom,
+      );
       // Finished and quiet: no need to keep the row around.
-      if (!leftAlone) dismissJob(job.id);
+      if (!leftAlone && !noRoom) dismissJob(job.id);
       refresh([]);
       return;
     }
