@@ -1,5 +1,7 @@
 mod bin;
 mod cleanup;
+#[cfg(test)]
+mod cleanup_corpus;
 mod commands;
 mod crash;
 mod fs;

@@ -5,15 +5,14 @@ use crate::scan::{BigFile, Scanner};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// Folders whose contents belong to the system, to installed programs or to a program's
-/// own library, in any spelling of case. A file with one of these anywhere in its path is
-/// never suggested.
-const PROTECTED_DIRS: [&str; 28] = [
+/// Folders whose contents belong to the system, to installed programs, to a program's own
+/// library or to a backup, in any spelling of case. A file with one of these anywhere in
+/// its path is never suggested. Folders that merely start the same way are in
+/// [`PROTECTED_PREFIXES`].
+const PROTECTED_DIRS: &[&str] = &[
+    // The system.
     "windows",
-    "windows.old",
     "windowsapps",
-    "program files",
-    "program files (x86)",
     "programdata",
     "appdata",
     "$recycle.bin",
@@ -28,19 +27,49 @@ const PROTECTED_DIRS: [&str; 28] = [
     "$winreagent",
     "$sysreset",
     "$getcurrent",
+    "perflogs",
+    "inetpub",
+    "onedrivetemp",
+    "wpsystem",
+    // Programs and runtimes people install into their own folders, and game libraries.
+    "anaconda3",
+    "miniconda3",
+    "miniforge3",
+    "scoop",
     "steamapps",
     "xboxgames",
-    ".trash",
-    ".cache",
-    ".local",
-    ".var",
-    ".config",
+    "epic games",
+    "gog games",
+    "gog galaxy",
+    "ea games",
+    "origin games",
+    "riot games",
+    "ubisoft game launcher",
+    "battle.net",
     "node_modules",
     ".git",
+    // Backups and virtual machines: taking a piece out breaks the whole.
+    "filehistory",
+    "windowsimagebackup",
+    "backups.backupdb",
+    "mobilesync",
+    "virtualbox vms",
+    "virtual machines",
+    "hyper-v",
+    // The trash and index folders of other volumes.
+    ".trashes",
+    ".spotlight-v100",
+    ".fseventsd",
+    ".documentrevisions-v100",
+    ".mobilebackups",
 ];
 
+/// Folder names that start these are protected too (`Program Files (Arm)`, `Windows.old.000`,
+/// `.Trash-1000`).
+const PROTECTED_PREFIXES: &[&str] = &["program files", "windows.old", ".trash"];
+
 /// Top-level folders of a Unix-like system that cleanup leaves alone.
-const PROTECTED_ROOTS: [&str; 17] = [
+const PROTECTED_ROOTS: &[&str] = &[
     "usr",
     "bin",
     "sbin",
@@ -53,6 +82,12 @@ const PROTECTED_ROOTS: [&str; 17] = [
     "sys",
     "var",
     "opt",
+    "nix",
+    "gnu",
+    "run",
+    "srv",
+    "root",
+    "lost+found",
     "system",
     "library",
     "applications",
@@ -62,39 +97,110 @@ const PROTECTED_ROOTS: [&str; 17] = [
 
 /// Folders that are one thing to the program that owns them: taking a file out of one
 /// breaks the whole.
-const BUNDLE_EXTENSIONS: [&str; 7] = [
+const BUNDLE_EXTENSIONS: &[&str] = &[
     "app",
     "photoslibrary",
+    "photolibrary",
+    "migratedphotolibrary",
     "fcpbundle",
     "musiclibrary",
+    "imovielibrary",
+    "tvlibrary",
+    "aplibrary",
+    "logicx",
+    "band",
+    "lrdata",
     "framework",
     "bundle",
     "xcodeproj",
+    "xcworkspace",
+    "xcarchive",
+    "sparsebundle",
+    "backupbundle",
+    "pvm",
+    "vmwarevm",
+    "utm",
+    "plugin",
+    "kext",
+    "appex",
+    "vst",
+    "vst3",
+    "component",
+    "prefpane",
+    "pages",
+    "numbers",
+    "key",
+    "rtfd",
+    "scriv",
+    "dsym",
 ];
 
+/// Kinds of file that are one piece of something that cannot be cut up: a virtual disk, a
+/// mail store, a database, a backup image. Never suggested, wherever they sit.
+const PROTECTED_KINDS: &[&str] = &[
+    "vhd", "vhdx", "avhdx", "vmdk", "vdi", "qcow2", "vmem", "vmsn", "vmss", "nvram", "hds", "pst",
+    "ost", "nst", "lrcat", "kdbx", "mdf", "ldf", "ndf", "ibd", "tib", "mrimg", "vbk", "vib",
+];
+
+/// Files that hold a machine's or user's state, wherever they are found.
+const PROTECTED_NAMES: &[&str] = &["pagefile.sys", "hiberfil.sys", "swapfile.sys"];
+
 /// Whether cleanup must leave `path` alone: system and program folders, application
-/// bundles, a user's `Library`, a file sitting directly in any user profile or at the top
-/// of a drive, and (on Windows) files that exist only in the cloud. The path is read as
-/// text, so the rule is the same whichever system built the cache. A `\\?\` prefix is
-/// ignored. A path is also checked after its links are resolved, in [`large_old`].
+/// bundles, a user's `Library` and dot-folders, a file sitting directly in any user profile
+/// or at the top of a drive, files that are one piece of something larger (see
+/// [`PROTECTED_KINDS`]), network and device paths, and (on Windows) files that exist only in
+/// the cloud. The path is read as text, so the rule is the same whichever system built the
+/// cache. A `\\?\` prefix is ignored. A path is also checked after its links are resolved,
+/// in [`large_old`].
 pub fn is_protected(path: &Path, home: Option<&Path>) -> bool {
     let full = path.to_string_lossy().to_lowercase();
+    // Network shares (`\\server\share`, `\\wsl.localhost\...`) and device paths
+    // (`\\.\C:`) are not read as places on this machine; only `\\?\C:\` is.
+    let slashed = full.replace('/', "\\");
+    if slashed.starts_with("\\\\") {
+        let verbatim_drive = slashed
+            .strip_prefix("\\\\?\\")
+            .is_some_and(|rest| rest.as_bytes().get(1) == Some(&b':'));
+        if !verbatim_drive {
+            return true;
+        }
+    }
     let text = full.strip_prefix("\\\\?\\").unwrap_or(&full);
     let parts: Vec<&str> = text.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
-    if parts.iter().any(|p| {
-        PROTECTED_DIRS.contains(p)
-            || Path::new(p)
-                .extension()
-                .is_some_and(|e| BUNDLE_EXTENSIONS.iter().any(|b| e == *b))
-    }) {
+    let last = parts.len().saturating_sub(1);
+    let in_a_profile = |i: usize| i >= 2 && ["users", "home"].contains(&parts[i - 2]);
+    for (i, part) in parts.iter().enumerate() {
+        let is_dir = i < last;
+        let extension = Path::new(part).extension().and_then(|e| e.to_str());
+        let named = PROTECTED_DIRS.contains(part)
+            || PROTECTED_PREFIXES.iter().any(|p| part.starts_with(p))
+            || extension.is_some_and(|e| BUNDLE_EXTENSIONS.contains(&e))
+            // `C:\Users\me\.rustup`, `/home/me/.thunderbird`, `~/snap`, `/Users/me/Library`:
+            // what programs keep in the profile.
+            || (is_dir && in_a_profile(i) && (part.starts_with('.') || ["snap", "library"].contains(part)));
+        if named {
+            return true;
+        }
+    }
+    let name = parts.last().copied().unwrap_or("");
+    let kind = Path::new(name).extension().and_then(|e| e.to_str());
+    if PROTECTED_NAMES.contains(&name)
+        || name.starts_with("ntuser.dat")
+        || name.starts_with("usrclass.dat")
+        || kind.is_some_and(|k| PROTECTED_KINDS.contains(&k))
+    {
         return true;
     }
-    if text.starts_with('/') && parts.first().is_some_and(|p| PROTECTED_ROOTS.contains(p)) {
-        return true;
-    }
-    // `/Users/me/Library`, `/home/me/Library`.
-    if parts.len() >= 3 && ["users", "home"].contains(&parts[0]) && parts[2] == "library" {
-        return true;
+    // `/usr/...`, and the same on another volume (`/Volumes/Old/System/...`).
+    if text.starts_with('/') {
+        let top = if parts.first() == Some(&"volumes") {
+            2
+        } else {
+            0
+        };
+        if parts.get(top).is_some_and(|p| PROTECTED_ROOTS.contains(p)) {
+            return true;
+        }
     }
     // `C:\Users\<anyone>\file` holds profile and registry files; `Default` is a template.
     let profile_file = parts.get(1) == Some(&"users") && parts.len() == 4;
@@ -565,7 +671,7 @@ fn live_copies(same: Vec<BigFile>, skip: &impl Fn(&Path, u64) -> bool) -> Vec<Bi
 
 /// [`duplicates`] with its own test for being replaced. A search that is replaced stops,
 /// says it is incomplete, and does not count what it left unread as unreadable.
-fn duplicates_with(
+pub(crate) fn duplicates_with(
     scanner: &Scanner,
     skip: impl Fn(&Path, u64) -> bool,
     min_bytes: u64,
@@ -868,6 +974,40 @@ mod tests {
             "\\\\?\\C:\\Windows\\Installer\\x.msp",
             "/Users/me/Library/Mail/x",
             "/Volumes/Data/Photos Library.photoslibrary/originals/a.heic",
+            "C:\\Users\\me\\anaconda3\\Library\\bin\\mkl_core.dll",
+            "C:\\Users\\me\\scoop\\apps\\tool\\1.0\\tool.exe",
+            "C:\\Users\\me\\.rustup\\toolchains\\stable\\bin\\rustc_driver.dll",
+            "C:\\Users\\me\\.ollama\\models\\blobs\\sha256-abc",
+            "C:\\Users\\me\\Library\\Mail\\x",
+            "D:\\Epic Games\\Fortnite\\Content\\Paks\\a.pak",
+            "D:\\GOG Games\\Witcher 3\\content\\a.bin",
+            "C:\\Riot Games\\League of Legends\\Game\\DATA\\a.wad",
+            "D:\\FileHistory\\me\\PC\\Data\\C\\Users\\me\\Pictures\\photo.jpg",
+            "D:\\WindowsImageBackup\\PC\\Backup 2020\\disk.bin",
+            "C:\\Users\\me\\VirtualBox VMs\\Win\\Win.vdi",
+            "D:\\Disks\\machine.vhdx",
+            "C:\\Users\\me\\Documents\\Outlook Files\\archive.pst",
+            "C:\\Program Files (Arm)\\App\\data.pak",
+            "C:\\Windows.old.000\\Users\\x\\old.bin",
+            "D:\\Profiles\\other\\NTUSER.DAT",
+            "D:\\hiberfil.sys",
+            "E:\\data\\pagefile.sys",
+            "/nix/store/abc/lib/x.so",
+            "/Volumes/Ext/.Trashes/501/x.iso",
+            "/media/me/usb/.Trash-1000/files/x.iso",
+            "/Volumes/TM/Backups.backupdb/x",
+            "/Users/me/Parallels/Win.pvm/disk.hdd/a.hds",
+            "/Volumes/Ext/B.sparsebundle/bands/1",
+            "/Users/me/Movies/M.imovielibrary/x",
+            "/Users/me/Docs/Talk.key/Data/img.jpg",
+            "/home/me/.thunderbird/p.default/Mail/Local Folders/Archives",
+            "/home/me/snap/firefox/common/x",
+            "/Volumes/OldMac/Users/bob/Library/x",
+            "/Volumes/OldMac/System/Library/x",
+            "\\\\wsl.localhost\\Ubuntu\\usr\\lib\\x.so",
+            "\\\\server\\share\\file.bin",
+            "\\\\.\\C:\\Users\\me\\NTUSER.DAT",
+            "\\\\?\\UNC\\srv\\share\\x.bin",
         ] {
             assert!(protected(p), "{p} should be protected");
         }
@@ -887,6 +1027,10 @@ mod tests {
             "D:\\Backups\\2019\\disk.img",
             "/home/me/Videos/a.mkv",
             "/mnt/data/a.iso",
+            "C:\\Users\\me\\Videos\\Windows Movie Maker\\x.wmv",
+            "C:\\Users\\me\\Documents\\programs-notes.docx",
+            "\\\\?\\D:\\Backups\\disk.img",
+            "/home/me/Videos/library.mkv",
         ] {
             assert!(!protected(p), "{p} should be offered");
         }
