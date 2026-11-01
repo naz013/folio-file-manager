@@ -81,7 +81,14 @@
   import TabBar from "$lib/components/TabBar.svelte";
   import Toolbar, { type View } from "$lib/components/Toolbar.svelte";
   import { createSpring } from "$lib/spring";
-  import { settings, startPath, updateSettings } from "$lib/settings.svelte";
+  import {
+    movePinned,
+    pinFolders,
+    settings,
+    startPath,
+    unpinFolder,
+    updateSettings,
+  } from "$lib/settings.svelte";
   import SettingsDialog from "$lib/components/SettingsDialog.svelte";
   import CrashPrompt from "$lib/components/CrashPrompt.svelte";
   import StorageView from "$lib/components/StorageView.svelte";
@@ -183,6 +190,8 @@
 
   /** Folder under a native drag (from Folio itself or another app). */
   let dropTarget = $state<string | null>(null);
+  /** A folder drag is over the sidebar's Favorites, where dropping pins it. */
+  let pinHover = $state(false);
 
   let toast = $state<{ text: string; error: boolean } | null>(null);
   let toastTimer: ReturnType<typeof setTimeout>;
@@ -926,10 +935,21 @@
     }
   }
 
+  /** Whether a drag at this position is over the Favorites but not on one of them (pins). */
+  function pinZoneAt(el: Element | null): boolean {
+    return !el?.closest("[data-drop-path]") && !!el?.closest("[data-pin-drop]");
+  }
+
+  /** The dragged folders, for pinning; a drag of files (or from another app) pins nothing. */
+  function foldersOf(paths: string[]): string[] {
+    return paths.filter((p) => entries.some((e) => e.path === p && e.isDir));
+  }
+
   function hoverAt(pos: { x: number; y: number }) {
     dragPos = pos;
     const el = document.elementFromPoint(pos.x, pos.y);
     dropTarget = el?.closest<HTMLElement>("[data-drop-path]")?.dataset.dropPath ?? null;
+    pinHover = !shelfDrag && pinZoneAt(el) && foldersOf(dragPaths).length > 0;
     const target = dropTarget ?? el?.closest<HTMLElement>("[data-spring]")?.dataset.spring ?? null;
     if (target !== spent) spent = null;
     spring.hover(target);
@@ -983,6 +1003,7 @@
     dragPaths = [];
     spring.stop();
     dropTarget = null;
+    pinHover = false;
     const started = trip;
     trip = null;
     if (!started) return;
@@ -1079,11 +1100,18 @@
       y: e.clientY * devicePixelRatio,
     });
     const fromShelf = shelfDrag;
+    // Decided from where the button was released, not from the last move.
+    const pin =
+      !fromShelf &&
+      pinZoneAt(document.elementFromPoint(e.clientX, e.clientY)) &&
+      foldersOf(paths).length > 0;
     stopInAppDrag();
     void dragEnded();
     // A shelf item is pasted only where it was dropped on a folder, never just "here".
     if (fromShelf) {
       if (onFolder) pasteShelfItem(fromShelf, onFolder);
+    } else if (pin) {
+      pinFolders(foldersOf(paths));
     } else {
       const dest = onFolder ?? dropFallback();
       if (dest) dropPaths(paths, dest);
@@ -1819,6 +1847,25 @@
     ontag={openTagView}
     onbin={() => (binOpen = true)}
     folderTint={(p) => tintOf(sideTags[p])}
+    {pinHover}
+    onpinmenu={(p, e) => {
+      const list = settings.pinnedFolders;
+      const i = list.indexOf(p);
+      menu = {
+        x: e.clientX,
+        y: e.clientY,
+        items: [
+          { label: "Move up", disabled: i <= 0, run: () => movePinned(p, -1) },
+          {
+            label: "Move down",
+            disabled: i < 0 || i >= list.length - 1,
+            run: () => movePinned(p, 1),
+          },
+          "separator",
+          { label: "Unpin from Favorites", run: () => unpinFolder(p) },
+        ],
+      };
+    }}
   />
   <main class="main">
     <TabBar

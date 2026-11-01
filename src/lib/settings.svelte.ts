@@ -20,6 +20,8 @@ export interface Settings {
   springDelayMs: number | null;
   /** After a drop or cancel in a spring-loaded trip, go back to the folder it began in. */
   returnAfterDrop: boolean;
+  /** Folders pinned to the sidebar's Favorites by dragging, in the order shown. */
+  pinnedFolders: string[];
 }
 
 export const DEFAULTS: Settings = {
@@ -29,6 +31,7 @@ export const DEFAULTS: Settings = {
   defaultView: "grid",
   springDelayMs: 2000,
   returnAfterDrop: false,
+  pinnedFolders: [],
 };
 
 /** The allowed delay closest to `ms`, so a hand-edited value still shows in the list. */
@@ -60,6 +63,11 @@ function read(): Settings {
           ? nearestDelay(delay)
           : DEFAULTS.springDelayMs,
     returnAfterDrop: saved.returnAfterDrop === true,
+    pinnedFolders: Array.isArray(saved.pinnedFolders)
+      ? saved.pinnedFolders.filter(
+          (p, i, all): p is string => typeof p === "string" && !!p && all.indexOf(p) === i,
+        )
+      : [],
   };
 }
 
@@ -80,6 +88,33 @@ if (typeof window !== "undefined") {
   window.addEventListener("storage", (e) => {
     if (e.key === KEY || e.key === null) Object.assign(settings, read());
   });
+}
+
+/** Pins `paths` to the end of the Favorites; ones already pinned stay where they are. */
+export function pinFolders(paths: string[]) {
+  // Windows paths differ by case and trailing separators without being different folders.
+  const key = (p: string) => p.replace(/[\\/]+$/, "").toLowerCase();
+  const have = settings.pinnedFolders.map(key);
+  const fresh = paths.filter((p) => {
+    if (have.includes(key(p))) return false;
+    have.push(key(p));
+    return true;
+  });
+  if (fresh.length) updateSettings({ pinnedFolders: [...settings.pinnedFolders, ...fresh] });
+}
+
+export function unpinFolder(path: string) {
+  updateSettings({ pinnedFolders: settings.pinnedFolders.filter((p) => p !== path) });
+}
+
+/** Moves a pinned folder one place up (`-1`) or down (`1`). */
+export function movePinned(path: string, by: -1 | 1) {
+  const list = [...settings.pinnedFolders];
+  const from = list.indexOf(path);
+  const to = from + by;
+  if (from < 0 || to < 0 || to >= list.length) return;
+  [list[from], list[to]] = [list[to], list[from]];
+  updateSettings({ pinnedFolders: list });
 }
 
 /** The folder new tabs open in, given the user's home folder. */

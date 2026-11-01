@@ -2,6 +2,9 @@
   import Icon, { type IconName } from "./Icon.svelte";
   import { joinPath, type Tag } from "$lib/api/fs";
   import { tagColor } from "$lib/tags";
+  import { settings } from "$lib/settings.svelte";
+
+  const baseName = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
 
   let {
     home,
@@ -16,6 +19,8 @@
     ontag,
     onbin,
     folderTint,
+    pinHover,
+    onpinmenu,
   }: {
     home: string;
     current: string;
@@ -35,6 +40,10 @@
     onbin: () => void;
     /** The CSS colour a folder takes from its first colour tag, if it has one. */
     folderTint: (path: string) => string | null;
+    /** A folder drag is over the Favorites section, where dropping pins it. */
+    pinHover: boolean;
+    /** Right-click on a pinned folder. */
+    onpinmenu: (path: string, e: MouseEvent) => void;
   } = $props();
 
   const favorites: { label: string; icon: IconName; sub: string | null }[] = [
@@ -53,24 +62,48 @@
     <span class="name">Folio</span>
   </div>
 
-  <div class="label">Favorites</div>
-  {#each favorites as fav (fav.label)}
-    {@const path = fav.sub ? joinPath(home, fav.sub) : home}
-    <button
-      class="item"
-      class:selected={path === current}
-      class:drop={dropTarget === path}
-      class:springing={springPath === path}
-      style:--spring-ms="{springMs}ms"
-      data-drop-path={path}
-      onclick={() => onnavigate(path)}
-      onmousedown={(e) => e.button === 1 && e.preventDefault()}
-      onauxclick={(e) => e.button === 1 && onopentab(path)}
-    >
-      <span class="icon" style:color={folderTint(path)}><Icon name={fav.icon} /></span>
-      <span>{fav.label}</span>
-    </button>
-  {/each}
+  <!-- Dropping a folder anywhere in here (not on a favorite) pins it. -->
+  <div class="favorites" class:pin={pinHover} data-pin-drop>
+    <div class="label">Favorites</div>
+    {#each favorites as fav (fav.label)}
+      {@const path = fav.sub ? joinPath(home, fav.sub) : home}
+      <button
+        class="item"
+        class:selected={path === current}
+        class:drop={dropTarget === path}
+        class:springing={springPath === path}
+        style:--spring-ms="{springMs}ms"
+        data-drop-path={path}
+        onclick={() => onnavigate(path)}
+        onmousedown={(e) => e.button === 1 && e.preventDefault()}
+        onauxclick={(e) => e.button === 1 && onopentab(path)}
+      >
+        <span class="icon" style:color={folderTint(path)}><Icon name={fav.icon} /></span>
+        <span>{fav.label}</span>
+      </button>
+    {/each}
+    {#each settings.pinnedFolders as pinned (pinned)}
+      <button
+        class="item"
+        class:selected={pinned === current}
+        class:drop={dropTarget === pinned}
+        class:springing={springPath === pinned}
+        style:--spring-ms="{springMs}ms"
+        data-drop-path={pinned}
+        title={pinned}
+        onclick={() => onnavigate(pinned)}
+        onmousedown={(e) => e.button === 1 && e.preventDefault()}
+        onauxclick={(e) => e.button === 1 && onopentab(pinned)}
+        oncontextmenu={(e) => {
+          e.preventDefault();
+          onpinmenu(pinned, e);
+        }}
+      >
+        <span class="icon" style:color={folderTint(pinned)}><Icon name="folder" /></span>
+        <span>{baseName(pinned)}</span>
+      </button>
+    {/each}
+  </div>
 
   <button class="item" onclick={onbin}>
     <Icon name="trash" />
@@ -156,6 +189,18 @@
 
   .item span {
     color: var(--text-primary);
+  }
+
+  .favorites {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2xs);
+    border-radius: var(--radius-sm);
+  }
+
+  .favorites.pin {
+    outline: 2px solid var(--accent-default);
+    outline-offset: -2px;
   }
 
   .item .icon {
