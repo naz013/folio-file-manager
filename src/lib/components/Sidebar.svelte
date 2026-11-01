@@ -62,69 +62,74 @@
     <span class="name">Folio</span>
   </div>
 
-  <!-- Dropping a folder anywhere in here (not on a favorite) pins it. -->
-  <div class="favorites" class:pin={pinHover} data-pin-drop>
-    <div class="label">Favorites</div>
-    {#each favorites as fav (fav.label)}
-      {@const path = fav.sub ? joinPath(home, fav.sub) : home}
-      <button
-        class="item"
-        class:selected={path === current}
-        aria-current={path === current ? "page" : undefined}
-        class:drop={dropTarget === path}
-        class:springing={springPath === path}
-        style:--spring-ms="{springMs}ms"
-        data-drop-path={path}
-        onclick={() => onnavigate(path)}
-        onmousedown={(e) => e.button === 1 && e.preventDefault()}
-        onauxclick={(e) => e.button === 1 && onopentab(path)}
-      >
-        <span class="icon" style:color={folderTint(path)}><Icon name={fav.icon} /></span>
-        <span>{fav.label}</span>
-      </button>
-    {/each}
-    {#each settings.pinnedFolders as pinned (pinned)}
-      <button
-        class="item"
-        class:selected={pinned === current}
-        aria-current={pinned === current ? "page" : undefined}
-        class:drop={dropTarget === pinned}
-        class:springing={springPath === pinned}
-        style:--spring-ms="{springMs}ms"
-        data-drop-path={pinned}
-        title={pinned}
-        onclick={() => onnavigate(pinned)}
-        onmousedown={(e) => e.button === 1 && e.preventDefault()}
-        onauxclick={(e) => e.button === 1 && onopentab(pinned)}
-        oncontextmenu={(e) => {
-          e.preventDefault();
-          onpinmenu(pinned, e);
-        }}
-      >
-        <span class="icon" style:color={folderTint(pinned)}><Icon name="folder" /></span>
-        <span>{baseName(pinned)}</span>
-      </button>
-    {/each}
+  <div class="places">
+    <!-- Dropping a folder anywhere in here (not on a favorite) pins it. -->
+    <div class="favorites" class:pin={pinHover} data-pin-drop>
+      <div class="label">Favorites</div>
+      {#each favorites as fav (fav.label)}
+        {@const path = fav.sub ? joinPath(home, fav.sub) : home}
+        <button
+          class="item"
+          class:selected={path === current}
+          aria-current={path === current ? "page" : undefined}
+          class:drop={dropTarget === path}
+          class:springing={springPath === path}
+          style:--spring-ms="{springMs}ms"
+          data-drop-path={path}
+          onclick={() => onnavigate(path)}
+          onmousedown={(e) => e.button === 1 && e.preventDefault()}
+          onauxclick={(e) => e.button === 1 && onopentab(path)}
+        >
+          <span class="icon" style:color={folderTint(path)}><Icon name={fav.icon} /></span>
+          <span>{fav.label}</span>
+        </button>
+      {/each}
+      {#each settings.pinnedFolders as pinned (pinned)}
+        <button
+          class="item"
+          class:selected={pinned === current}
+          aria-current={pinned === current ? "page" : undefined}
+          class:drop={dropTarget === pinned}
+          class:springing={springPath === pinned}
+          style:--spring-ms="{springMs}ms"
+          data-drop-path={pinned}
+          title={pinned}
+          onclick={() => onnavigate(pinned)}
+          onmousedown={(e) => e.button === 1 && e.preventDefault()}
+          onauxclick={(e) => e.button === 1 && onopentab(pinned)}
+          oncontextmenu={(e) => {
+            e.preventDefault();
+            onpinmenu(pinned, e);
+          }}
+        >
+          <span class="icon" style:color={folderTint(pinned)}><Icon name="folder" /></span>
+          <span>{baseName(pinned)}</span>
+        </button>
+      {/each}
+    </div>
+
+    <div class="label" id="tags-label">Tags</div>
+    <div role="group" aria-labelledby="tags-label">
+      {#each tags as tag (tag.id)}
+        <button
+          class="item tag"
+          class:selected={activeTag === tag.id}
+          aria-pressed={activeTag === tag.id}
+          onclick={() => ontag(tag)}
+        >
+          <span class="dot" style:background={tagColor(tag.color)}></span>
+          <span>{tag.name}</span>
+        </button>
+      {/each}
+    </div>
   </div>
 
-  <button class="item" onclick={onbin}>
-    <Icon name="trash" />
-    <span>Recycle Bin</span>
-  </button>
-
-  <div class="label" id="tags-label">Tags</div>
-  <div role="group" aria-labelledby="tags-label">
-    {#each tags as tag (tag.id)}
-      <button
-        class="item tag"
-        class:selected={activeTag === tag.id}
-        aria-pressed={activeTag === tag.id}
-        onclick={() => ontag(tag)}
-      >
-        <span class="dot" style:background={tagColor(tag.color)}></span>
-        <span>{tag.name}</span>
-      </button>
-    {/each}
+  <!-- Apart from the places above: the bin is not a folder to pin or drop on. -->
+  <div class="bin">
+    <button class="item" onclick={onbin}>
+      <Icon name="trash" />
+      <span>Recycle Bin</span>
+    </button>
   </div>
 </aside>
 
@@ -137,7 +142,23 @@
     gap: 2px;
     padding: 0 10px 12px;
     background: var(--bg-sidebar);
+    overflow: hidden;
+  }
+
+  /* Favorites and tags scroll; the bin below stays in view. */
+  .places {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
     overflow-y: auto;
+  }
+
+  .bin {
+    flex-shrink: 0;
+    padding-top: var(--space-sm);
+    border-top: 1px solid var(--border-default);
   }
 
   /* Same height as the tab bar, so the whole top edge of the window drags it. */
