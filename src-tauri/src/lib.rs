@@ -7,6 +7,7 @@ mod perf;
 mod platform;
 mod preview;
 mod queue;
+mod scan;
 mod session;
 mod shelf;
 mod tags;
@@ -58,6 +59,25 @@ fn manage_tags(app: &tauri::App) {
 fn manage_stores(app: &tauri::App) {
     manage_tags(app);
     manage_shelf(app);
+    manage_scanner(app);
+}
+
+/// Opens the size cache in the app data directory. Without it sizes are just not kept
+/// between runs.
+fn manage_scanner(app: &tauri::App) {
+    let file = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("scan.sqlite"));
+    let scanner = scan::Scanner::open(file.as_deref()).unwrap_or_else(|e| {
+        eprintln!("the size cache can't be opened ({e}); sizes won't be kept");
+        scan::Scanner::open(None).expect("an in-memory cache opens")
+    });
+    app.manage(scanner);
+    // Roots scanned in an earlier run are watched again, off the start-up path.
+    let handle = app.handle().clone();
+    std::thread::spawn(move || handle.state::<scan::Scanner>().resume_watching());
 }
 
 /// Opens the clipboard shelf in the app data directory. Like tags, a shelf that can't be
@@ -241,6 +261,13 @@ pub fn run() {
             commands::undo_state,
             commands::perf_config,
             commands::perf_report,
+            commands::scan_start,
+            commands::scan_cancel,
+            commands::scan_children,
+            commands::scan_large,
+            commands::scan_running,
+            commands::scan_size,
+            commands::scan_roots,
             commands::crash_state,
             commands::crash_set,
             commands::crash_clear,

@@ -11,6 +11,10 @@
     tagDelete,
     tagList,
     clipboardMirror,
+    onScanDone,
+    scanRunning,
+    scanCancel,
+    scanStart,
     crashSet,
     crashState,
     clipboardTake,
@@ -57,6 +61,7 @@
     type Job,
     type Moved,
   } from "$lib/api/fs";
+  import { formatSize } from "$lib/format";
   import ConflictDialog from "$lib/components/ConflictDialog.svelte";
   import ContextMenu, { type MenuItem } from "$lib/components/ContextMenu.svelte";
   import QuickLook from "$lib/components/QuickLook.svelte";
@@ -95,6 +100,21 @@
   let view = $derived<View>(settings.defaultView);
 
   let settingsOpen = $state(false);
+  /** A size scan is running (it is shared by every window). */
+  let scanning = $state(false);
+
+  async function startScan() {
+    if (tagView) return notify("Open a folder first", true);
+    // Set first: the scan can end before the call returns.
+    scanning = true;
+    try {
+      await scanStart(path);
+      notify("Scanning folder sizes in the background");
+    } catch (e) {
+      scanning = false;
+      notify(String(e), true);
+    }
+  }
   /** Asked once, in the first window, until the user has answered. */
   let askCrash = $state(false);
   let theme = $state<Theme>(loadTheme());
@@ -1235,6 +1255,8 @@
         theme !== "system",
       ),
       ...action("Settings", "Ctrl+,", () => (settingsOpen = true)),
+      ...action("Scan this folder for sizes", "", startScan, !scanning && !tagView),
+      ...action("Cancel the size scan", "", () => scanCancel(), scanning),
     ];
     return [...Object.values(places), ...actions];
   }
@@ -1577,6 +1599,12 @@
       applyTheme(t);
     });
     const unlistenQueue = onQueueUpdate(onJobUpdate);
+    const unlistenScan = onScanDone((d) => {
+      scanning = false;
+      if (d.error) notify(`Scan failed: ${d.error}`, true);
+      else if (d.cancelled) notify("Scan cancelled");
+      else notify(`Scanned ${plural(d.files, "file")}, ${formatSize(d.bytes)}`);
+    });
     const unlistenBlocked = onCloseBlocked(() =>
       notify("Operations are still running. Wait for them, or cancel them, before closing.", true),
     );
@@ -1604,6 +1632,10 @@
     });
     loadTagDefs();
     loadShelf();
+    scanRunning().then(
+      (running) => (scanning = running),
+      () => {},
+    );
     if (getCurrentWindow().label === "main") {
       crashState().then(
         (s) => (askCrash = s.consent === null),
@@ -1632,6 +1664,7 @@
       window.removeEventListener("focus", onFocus);
       unlisten.then((u) => u());
       unlistenQueue.then((u) => u());
+      unlistenScan.then((u) => u());
       unlistenBlocked.then((u) => u());
       unlistenDrop.then((u) => u());
       unlistenClose.then((u) => u());

@@ -1,5 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import type { UnlistenFn } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 /** A directory entry (decoded from `fs::Entry` in src-tauri/src/fs/mod.rs). */
@@ -68,6 +68,50 @@ export const releasePreview = () => invoke<void>("preview_allow", { path: null }
 /** The start of a text file; rejects for files that are not text. */
 export const readTextPreview = (path: string) =>
   invoke<{ text: string; truncated: boolean }>("read_text_preview", { path });
+
+/** A folder with its size from the scan cache. */
+export interface SizedDir {
+  path: string;
+  name: string;
+  bytes: number;
+  files: number;
+}
+export interface BigFile {
+  path: string;
+  size: number;
+  /** Seconds since 1970. */
+  modified: number;
+}
+export interface ScanRoot {
+  root: string;
+  scannedAt: number;
+  bytes: number;
+  files: number;
+}
+export interface ScanProgress {
+  root: string;
+  files: number;
+  bytes: number;
+}
+export interface ScanDone extends ScanProgress {
+  cancelled: boolean;
+  error: string | null;
+}
+/** Scans a folder in the background; progress and the end arrive as events. */
+export const scanStart = (root: string) => invoke<void>("scan_start", { root });
+export const scanCancel = () => invoke<void>("scan_cancel");
+/** The subfolders of a scanned folder, largest first. */
+export const scanChildren = (dir: string) => invoke<SizedDir[]>("scan_children", { dir });
+export const scanLarge = (min: number, limit: number) =>
+  invoke<BigFile[]>("scan_large", { min, limit });
+export const scanRunning = () => invoke<boolean>("scan_running");
+/** The size of a scanned folder: [bytes, files], or null if it hasn't been scanned. */
+export const scanSize = (dir: string) => invoke<[number, number] | null>("scan_size", { dir });
+export const scanRoots = () => invoke<ScanRoot[]>("scan_roots");
+export const onScanProgress = (cb: (p: ScanProgress) => void): Promise<UnlistenFn> =>
+  listen<ScanProgress>("scan-progress", (e) => cb(e.payload));
+export const onScanDone = (cb: (d: ScanDone) => void): Promise<UnlistenFn> =>
+  listen<ScanDone>("scan-done", (e) => cb(e.payload));
 
 /** Opt-in crash reporting, kept on this computer. */
 export interface CrashState {

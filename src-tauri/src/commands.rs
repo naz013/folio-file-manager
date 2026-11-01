@@ -10,6 +10,7 @@ use crate::fs::{self, Entry};
 use crate::journal::{self, Journal, Step};
 use crate::ops;
 use crate::queue::{self, Kind, Queue};
+use crate::scan::{BigFile, RootInfo, Scanner, Sized};
 use crate::session::{Session, WindowTabs};
 use crate::shelf::{Shelf, ShelfItem};
 use crate::tags::{Tag, Tags};
@@ -682,6 +683,105 @@ pub fn clipboard_mirror(paths: Vec<String>, cut: bool) -> CmdResult<()> {
 #[tauri::command(async)]
 pub fn clipboard_take() -> Option<(Vec<String>, bool)> {
     crate::platform::clipboard_take_files().map(|(paths, cut)| (strings(paths), cut))
+}
+
+// ---- Disk scanner ----
+
+#[derive(Clone, Serialize)]
+struct ScanProgress {
+    root: String,
+    files: u64,
+    bytes: u64,
+}
+
+#[derive(Clone, Serialize)]
+struct ScanDone {
+    root: String,
+    files: u64,
+    bytes: u64,
+    cancelled: bool,
+    error: Option<String>,
+}
+
+/// Starts scanning `root` in the background; progress and the end are events for every
+/// window. One scan runs at a time.
+#[tauri::command]
+pub fn scan_start(app: tauri::AppHandle, root: String) -> CmdResult<()> {
+    use crate::scan::Outcome;
+    use tauri::Emitter;
+    let flag = app
+        .state::<Scanner>()
+        .begin()
+        .ok_or("A scan is already running")?;
+    let root_path = PathBuf::from(&root);
+    std::thread::spawn(move || {
+        let scanner = app.state::<Scanner>();
+        let progress = |files, bytes| {
+            let _ = app.emit(
+                "scan-progress",
+                ScanProgress {
+                    root: root.clone(),
+                    files,
+                    bytes,
+                },
+            );
+        };
+        let result = scanner.scan(&root_path, &flag, &progress);
+        let (files, bytes, cancelled, error) = match result {
+            Ok(Outcome::Done { files, bytes }) => (files, bytes, false, None),
+            Ok(Outcome::Cancelled) => (0, 0, true, None),
+            Err(e) => (0, 0, false, Some(e)),
+        };
+        let _ = app.emit(
+            "scan-done",
+            ScanDone {
+                root,
+                files,
+                bytes,
+                cancelled,
+                error,
+            },
+        );
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn scan_cancel(scanner: tauri::State<'_, Scanner>) {
+    scanner.cancel();
+}
+
+#[tauri::command(async)]
+pub fn scan_children(scanner: tauri::State<'_, Scanner>, dir: String) -> CmdResult<Vec<Sized>> {
+    scanner
+        .children(&PathBuf::from(dir))
+        .map_err(|e| e.to_string())
+}
+
+/// Whether a scan is running, for a window that opened while one was.
+#[tauri::command]
+pub fn scan_running(scanner: tauri::State<'_, Scanner>) -> bool {
+    scanner.is_running()
+}
+
+/// The size of a scanned folder and everything in it: (bytes, files).
+#[tauri::command(async)]
+pub fn scan_size(scanner: tauri::State<'_, Scanner>, dir: String) -> Option<(u64, u64)> {
+    scanner.size_of(&PathBuf::from(dir))
+}
+
+#[tauri::command(async)]
+pub fn scan_large(
+    scanner: tauri::State<'_, Scanner>,
+    min: u64,
+    limit: u32,
+) -> CmdResult<Vec<BigFile>> {
+    scanner.large(min, limit).map_err(|e| e.to_string())
+}
+
+#[tauri::command(async)]
+pub fn scan_roots(scanner: tauri::State<'_, Scanner>) -> CmdResult<Vec<RootInfo>> {
+    scanner.roots().map_err(|e| e.to_string())
 }
 
 // ---- Crash reporting (local, opt-in) ----

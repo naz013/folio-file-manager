@@ -28,6 +28,7 @@ notify-debouncer-mini = "0.7.0"
 drag = { path = "vendor/drag" }
 png = "0.18.1"
 percent-encoding = "2.3.2"
+jwalk = "0.9"
 rusqlite = { version = "0.41.1", features = ["bundled"] }
 
 [dev-dependencies]
