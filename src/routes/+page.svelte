@@ -10,6 +10,7 @@
     tagCreate,
     tagDelete,
     tagList,
+    tagFiles,
     tagToggle,
     tagsInDir,
     type Tag,
@@ -21,6 +22,7 @@
     onCloseBlocked,
     onQueueUpdate,
     openWindow,
+    joinPath,
     parentOf,
     pathSegments,
     queueCancel,
@@ -49,6 +51,7 @@
   import ContextMenu, { type MenuItem } from "$lib/components/ContextMenu.svelte";
   import QuickLook from "$lib/components/QuickLook.svelte";
   import TagDialog from "$lib/components/TagDialog.svelte";
+  import TagChips from "$lib/components/TagChips.svelte";
   import { tagColor } from "$lib/tags";
   import OpsPill from "$lib/components/OpsPill.svelte";
   import Sidebar from "$lib/components/Sidebar.svelte";
@@ -132,7 +135,16 @@
   let fileView: FileView;
   let toolbar: Toolbar | undefined = $state();
 
-  let visible = $derived(settings.showHidden ? entries : entries.filter((e) => !e.hidden));
+  /** Ids of the tags the folder is filtered by: an item must have all of them. */
+  let tagFilter = $state<number[]>([]);
+  /** The tag whose items the list shows, from every folder, instead of a folder. */
+  let tagView = $state<Tag | null>(null);
+  let visible = $derived(
+    entries.filter(
+      (e) =>
+        (settings.showHidden || !e.hidden) && tagFilter.every((id) => tagMap[e.path]?.includes(id)),
+    ),
+  );
 
   function notify(text: string, error = false) {
     toast = { text, error };
@@ -146,16 +158,22 @@
   async function refresh(select?: string[]) {
     const gen = navGen;
     let list: Entry[];
+    let tags: Record<string, number[]>;
     try {
-      list = await listDir(path);
+      if (tagView) {
+        ({ entries: list, tags } = await tagFiles(tagView.id));
+      } else {
+        [list, tags] = await Promise.all([listDir(path), fetchTagMap(path)]);
+      }
     } catch (e) {
       notify(String(e), true);
       return;
     }
     if (gen !== navGen) return; // the tab switched or navigated meanwhile
     entries = list;
-    loadTagMap(path);
-    const existing = new Set(entries.map((e) => e.path));
+    tagMap = tags;
+    // Only what is shown can stay selected.
+    const existing = new Set(visible.map((e) => e.path));
     const keep = (select ?? [...selection]).filter((p) => existing.has(p));
     selection.clear();
     keep.forEach((p) => selection.add(p));
@@ -167,8 +185,9 @@
   async function load(target: string, quiet = false): Promise<boolean | null> {
     const gen = ++navGen;
     let list: Entry[];
+    let tags: Record<string, number[]>;
     try {
-      list = await listDir(target);
+      [list, tags] = await Promise.all([listDir(target), fetchTagMap(target)]);
     } catch (e) {
       if (gen !== navGen) return null;
       if (!quiet) notify(String(e), true);
@@ -177,8 +196,9 @@
     if (gen !== navGen) return null;
     entries = list;
     path = target;
-    tagMap = {};
-    loadTagMap(target);
+    tagView = null;
+    tagFilter = [];
+    tagMap = tags;
     if (tabs[active]) {
       tabs[active].path = target;
       shownTabId = tabs[active].id;
@@ -193,7 +213,7 @@
 
   /** Opens `target`; resolves to whether it is now shown (null: a newer navigation won). */
   async function navigate(target: string, quiet = false): Promise<boolean | null> {
-    if (target === path) return true;
+    if (target === path && !tagView) return true;
     const from = path;
     const ok = await load(target, quiet);
     if (ok) {
@@ -204,6 +224,11 @@
   }
 
   async function goBack() {
+    // A tag view is not a step in the history: back leaves it, for the folder it came from.
+    if (tagView) {
+      await load(path);
+      return;
+    }
     const prev = back.pop();
     if (!prev) return;
     const from = path;
@@ -412,6 +437,7 @@
   }
 
   async function newFolder() {
+    if (tagView) return notify("Open a folder first: a tag's items are in many folders", true);
     const created = await run(() => createFolder(path, "New folder"));
     if (created) {
       await refresh([created]);
@@ -563,6 +589,7 @@
 
   async function paste() {
     if (!clipboard) return;
+    if (tagView) return notify("Open a folder first: a tag's items are in many folders", true);
     const { mode, paths } = clipboard;
     if (mode === "cut") clipboard = null;
     await transfer(paths, path, mode === "copy");
@@ -745,6 +772,9 @@
     }
   }
 
+  /** Where a drop that lands on no folder goes: the folder shown, if one is. */
+  const dropFallback = (): string | null => (tagView ? null : path);
+
   async function dropPaths(paths: string[], dest: string) {
     // Dropping items back into the folder they came from is a no-op.
     const sources = paths.filter((p) => p !== dest && parentOf(p) !== dest);
@@ -821,10 +851,11 @@
     const { paths } = inAppDrag;
     dragKeys = { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey };
     const dest =
-      folderAt({ x: e.clientX * devicePixelRatio, y: e.clientY * devicePixelRatio }) ?? path;
+      folderAt({ x: e.clientX * devicePixelRatio, y: e.clientY * devicePixelRatio }) ??
+      dropFallback();
     stopInAppDrag();
     void dragEnded();
-    dropPaths(paths, dest);
+    if (dest) dropPaths(paths, dest);
   }
 
   function dragCancel() {
@@ -863,17 +894,14 @@
     tagDefs = await tagList().catch(() => tagDefs);
   }
 
-  /** Reads which items of `dir` are tagged; drops the answer if the tab moved on. */
-  let tagMapGen = 0;
-  async function loadTagMap(dir: string) {
-    const gen = ++tagMapGen;
+  /** Which items of `dir` are tagged, by path. Empty if the index can't be read. */
+  async function fetchTagMap(dir: string): Promise<Record<string, number[]>> {
     const found = await tagsInDir(dir).catch(() => []);
-    // The newest answer for the folder shown wins.
-    if (gen === tagMapGen && dir === path) tagMap = Object.fromEntries(found);
+    return Object.fromEntries(found.map(([name, ids]) => [joinPath(dir, name), ids]));
   }
 
-  const tagColors = (name: string) =>
-    (tagMap[name] ?? [])
+  const tagColors = (path: string) =>
+    (tagMap[path] ?? [])
       .map((id) => tagDefs.find((t) => t.id === id))
       .filter((t): t is Tag => !!t)
       .map((t) => ({ name: t.name, color: tagColor(t.color) }));
@@ -889,7 +917,7 @@
       ),
     );
     if (!done) return;
-    await loadTagMap(path);
+    await refresh();
     const name = tagDefs.find((t) => t.id === id)?.name ?? "tag";
     const count = picked.length - done.skipped;
     const left = done.skipped ? ` (${plural(done.skipped, "item")} can't be tagged)` : "";
@@ -904,7 +932,7 @@
     const picked = selected();
     const out: Record<number, "all" | "some" | "none"> = {};
     for (const t of tagDefs) {
-      const have = picked.filter((e) => tagMap[e.name]?.includes(t.id)).length;
+      const have = picked.filter((e) => tagMap[e.path]?.includes(t.id)).length;
       out[t.id] = have === 0 ? "none" : have === picked.length ? "all" : "some";
     }
     return out;
@@ -923,7 +951,38 @@
   async function removeTag(id: number) {
     await run(() => tagDelete(id));
     await loadTagDefs();
-    await loadTagMap(path);
+    if (tagView?.id === id) await load(path);
+    else await refresh();
+  }
+
+  /** The tags that can filter this folder: the ones on its items, plus any in use. */
+  let chipTags = $derived(
+    tagDefs.filter(
+      (t) => tagFilter.includes(t.id) || Object.values(tagMap).some((ids) => ids.includes(t.id)),
+    ),
+  );
+
+  function toggleFilter(id: number) {
+    tagFilter = tagFilter.includes(id) ? tagFilter.filter((t) => t !== id) : [...tagFilter, id];
+    selection.clear();
+    anchor = cursor = -1;
+  }
+
+  /** Shows every item with `tag`, from any folder, in the list. */
+  async function openTagView(tag: Tag) {
+    const gen = navGen;
+    const found = await run(() => tagFiles(tag.id));
+    // Another navigation began while the items were being found: it wins.
+    if (!found || gen !== navGen) return;
+    navGen++;
+    tagView = tag;
+    tagFilter = [];
+    entries = found.entries;
+    tagMap = found.tags;
+    selection.clear();
+    anchor = cursor = -1;
+    renaming = null;
+    fileView?.scrollToTop();
   }
 
   // ---- Quick Look ----
@@ -993,6 +1052,8 @@
   function backgroundContextMenu(e: MouseEvent) {
     selection.clear();
     anchor = cursor = -1;
+    // A tag's items are in many folders: there is no folder to act on.
+    if (tagView) return;
     if (e.shiftKey) nativeMenu([path], true);
     else menu = { items: backgroundMenu(), x: e.clientX, y: e.clientY };
   }
@@ -1076,17 +1137,22 @@
   const ignore: Action = () => {};
 
   function goUp() {
+    if (tagView) {
+      load(path);
+      return;
+    }
     const up = parentOf(path);
     if (up) navigate(up);
   }
 
   function copySelection() {
-    clipboard = { mode: "copy", paths: [...selection] };
-    notify(`Copied ${plural(selection.size, "item")} to clipboard`);
+    const paths = selected().map((e) => e.path);
+    clipboard = { mode: "copy", paths };
+    notify(`Copied ${plural(paths.length, "item")} to clipboard`);
   }
 
   function cutSelection() {
-    clipboard = { mode: "cut", paths: [...selection] };
+    clipboard = { mode: "cut", paths: selected().map((e) => e.path) };
   }
 
   function clearSelectionAndClipboard() {
@@ -1121,7 +1187,7 @@
     if (!ctrl) return null;
     const key = e.key.toLowerCase();
     if (key === "," && !e.shiftKey) return () => (settingsOpen = true);
-    if (key === "l" && !e.shiftKey) return () => toolbar?.edit();
+    if (key === "l" && !e.shiftKey) return () => !tagView && toolbar?.edit();
     if (key === "t" || key === "w") {
       // Held-down Ctrl+T / Ctrl+W must not open or close tabs in a burst.
       if (!restored || e.repeat) return ignore;
@@ -1262,10 +1328,10 @@
       } else if (payload.type === "over") {
         hoverAt(at);
       } else if (payload.type === "drop") {
-        const dest = folderAt(payload.position) ?? path;
+        const dest = folderAt(payload.position) ?? dropFallback();
         // Settle the trip first: the drop's own transfer then lands in the folder shown.
         dragEnded();
-        dropPaths(payload.paths, dest);
+        if (dest) dropPaths(payload.paths, dest);
       } else dragEnded();
     });
     loadTagDefs();
@@ -1300,13 +1366,15 @@
 <div class="app">
   <Sidebar
     {home}
-    current={path}
+    current={tagView ? "" : path}
     onnavigate={navigate}
     onopentab={(p) => openTab(p, true)}
     {dropTarget}
     {springPath}
     {springMs}
     tags={tagDefs}
+    activeTag={tagView?.id ?? null}
+    ontag={openTagView}
   />
   <main class="main">
     <TabBar
@@ -1338,7 +1406,16 @@
         setTheme(theme);
       }}
       onsettings={() => (settingsOpen = true)}
+      tagLabel={tagView?.name ?? null}
     />
+    {#if !tagView && (chipTags.length || tagFilter.length)}
+      <TagChips
+        tags={chipTags}
+        active={tagFilter}
+        ontoggle={toggleFilter}
+        onclear={() => (tagFilter = [])}
+      />
+    {/if}
     <FileView
       bind:this={fileView}
       entries={visible}

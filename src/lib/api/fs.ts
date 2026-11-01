@@ -18,17 +18,30 @@ type WireEntry = [name: string, flags: number, size: number, modified: number | 
 const FLAG_DIR = 1;
 const FLAG_HIDDEN = 2;
 
+const decode = (path: string, [name, flags, size, modified]: WireEntry): Entry => ({
+  name,
+  path,
+  isDir: (flags & FLAG_DIR) !== 0,
+  size,
+  modified,
+  hidden: (flags & FLAG_HIDDEN) !== 0,
+});
+
 export async function listDir(path: string): Promise<Entry[]> {
   const wire = await invoke<WireEntry[]>("list_dir", { path });
   const base = joinPath(path, "");
-  return wire.map(([name, flags, size, modified]) => ({
-    name,
-    path: base + name,
-    isDir: (flags & FLAG_DIR) !== 0,
-    size,
-    modified,
-    hidden: (flags & FLAG_HIDDEN) !== 0,
-  }));
+  return wire.map((w) => decode(base + w[0], w));
+}
+
+/** Every item that carries `tag`, from any folder, with the tag ids of each, by path. */
+export async function tagFiles(
+  tag: number,
+): Promise<{ entries: Entry[]; tags: Record<string, number[]> }> {
+  const wire = await invoke<[string, WireEntry, number[]][]>("tag_files", { tag });
+  return {
+    entries: wire.map(([path, w]) => decode(path, w)),
+    tags: Object.fromEntries(wire.map(([path, , ids]) => [path, ids])),
+  };
 }
 export const homeDir = () => invoke<string>("home_dir");
 export const watchDir = (path: string) => invoke<void>("watch_dir", { path });

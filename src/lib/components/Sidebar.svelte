@@ -12,6 +12,8 @@
     springPath,
     springMs,
     tags,
+    activeTag,
+    ontag,
   }: {
     home: string;
     current: string;
@@ -23,6 +25,10 @@
     springPath: string | null;
     springMs: number;
     tags: Tag[];
+    /** The tag whose items the list shows, if any. */
+    activeTag: number | null;
+    /** Show every item with this tag. */
+    ontag: (tag: Tag) => void;
   } = $props();
 
   const favorites: { label: string; icon: IconName; sub: string | null }[] = [
@@ -62,10 +68,15 @@
 
   <div class="label">Tags</div>
   {#each tags as tag (tag.id)}
-    <div class="item tag">
+    <button
+      class="item tag"
+      class:selected={activeTag === tag.id}
+      aria-pressed={activeTag === tag.id}
+      onclick={() => ontag(tag)}
+    >
       <span class="dot" style:background={tagColor(tag.color)}></span>
       <span>{tag.name}</span>
-    </div>
+    </button>
   {/each}
 </aside>
 

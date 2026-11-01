@@ -36,6 +36,21 @@ impl Serialize for Entry {
     }
 }
 
+/// The entry for an item called `name` with metadata `meta`.
+pub fn entry_from(name: String, meta: &fs::Metadata) -> Entry {
+    Entry {
+        hidden: is_hidden(&name, meta),
+        is_dir: meta.is_dir(),
+        size: if meta.is_dir() { 0 } else { meta.len() },
+        modified: meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX)),
+        name,
+    }
+}
+
 /// Lists a directory, folders first, then case-insensitive by name.
 ///
 /// Entries whose metadata cannot be read (e.g. broken links, permission errors)
@@ -45,18 +60,10 @@ pub fn list_dir(dir: &Path) -> io::Result<Vec<Entry>> {
         .filter_map(Result::ok)
         .filter_map(|e| {
             let meta = e.metadata().ok()?;
-            let name = e.file_name().to_string_lossy().into_owned();
-            Some(Entry {
-                hidden: is_hidden(&name, &meta),
-                is_dir: meta.is_dir(),
-                size: if meta.is_dir() { 0 } else { meta.len() },
-                modified: meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                    .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX)),
-                name,
-            })
+            Some(entry_from(
+                e.file_name().to_string_lossy().into_owned(),
+                &meta,
+            ))
         })
         .collect();
 

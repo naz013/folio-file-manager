@@ -178,6 +178,7 @@ pub fn run() {
             commands::tag_create,
             commands::tag_delete,
             commands::tag_toggle,
+            commands::tag_files,
             commands::tags_in_dir,
             commands::read_text_preview,
             commands::show_context_menu,

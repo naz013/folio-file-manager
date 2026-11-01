@@ -3,6 +3,7 @@
 //! file's last known place is kept too, so a folder can ask which of its items are tagged
 //! without looking up every one.
 
+use crate::fs::{self as listing, Entry};
 use crate::ops;
 use rusqlite::{Connection, params};
 use serde::Serialize;
@@ -273,6 +274,38 @@ impl Tags {
         out.into_iter().collect()
     }
 
+    /// Every item that carries `tag`, wherever it is, with its entry and all its tags. Items
+    /// that are gone, or replaced by another file, are left out.
+    pub fn files_with(&self, tag: i64) -> Vec<(PathBuf, Entry, Vec<i64>)> {
+        let rows: Vec<(String, String)> = {
+            let conn = self.conn();
+            let Ok(mut stmt) = conn.prepare(
+                "SELECT f.identity, f.path FROM files f
+                 JOIN file_tags t ON t.identity = f.identity WHERE t.tag_id = ?1",
+            ) else {
+                return Vec::new();
+            };
+            stmt.query_map(params![tag], |r| Ok((r.get(0)?, r.get(1)?)))
+                .map(|rows| rows.filter_map(Result::ok).collect())
+                .unwrap_or_default()
+        };
+        let mut found: Vec<(PathBuf, Entry, Vec<i64>)> = rows
+            .into_iter()
+            .filter_map(|(identity, path)| {
+                let path = PathBuf::from(path);
+                if ops::identity(&path).as_deref() != Some(&identity) {
+                    return None;
+                }
+                let meta = std::fs::symlink_metadata(&path).ok()?;
+                let name = path.file_name()?.to_string_lossy().into_owned();
+                let tags = self.tag_ids(&identity);
+                Some((path, listing::entry_from(name, &meta), tags))
+            })
+            .collect();
+        found.sort_by_cached_key(|(_, e, _)| (!e.is_dir, e.name.to_lowercase()));
+        found
+    }
+
     fn tag_ids(&self, identity: &str) -> Vec<i64> {
         let conn = self.conn();
         let Ok(mut stmt) =
@@ -499,6 +532,25 @@ mod tests {
         fs::copy(&a, dir.path().join("copy.txt")).unwrap();
         let listed = t.in_dir(dir.path());
         assert_eq!(listed, [("a.txt".to_owned(), vec![1])]);
+    }
+
+    #[test]
+    fn files_with_a_tag_come_from_every_folder_and_skip_what_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = file(&dir.path().join("x").join("a.txt"));
+        let b = file(&dir.path().join("y").join("B.txt"));
+        let gone = file(&dir.path().join("z").join("gone.txt"));
+        let other = file(&dir.path().join("z").join("other.txt"));
+        let t = index();
+        t.toggle(&[a.clone(), b.clone(), gone.clone()], 3).unwrap();
+        t.toggle(std::slice::from_ref(&other), 4).unwrap();
+        fs::remove_file(&gone).unwrap();
+
+        let found = t.files_with(3);
+        let names: Vec<_> = found.iter().map(|(_, e, _)| e.name.as_str()).collect();
+        assert_eq!(names, ["a.txt", "B.txt"]);
+        assert_eq!(found[0].0, a);
+        assert_eq!(found[0].2, [3]);
     }
 
     #[test]

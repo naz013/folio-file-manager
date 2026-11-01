@@ -66,8 +66,8 @@
     /** Folder whose spring-loading countdown is running, and its length. */
     springPath: string | null;
     springMs: number;
-    /** The tags on the item with this name: each tag's name and CSS colour. */
-    tagColors: (name: string) => { name: string; color: string }[];
+    /** The tags on the item at this path: each tag's name and CSS colour. */
+    tagColors: (path: string) => { name: string; color: string }[];
   } = $props();
 
   let scroller: HTMLDivElement;
@@ -232,7 +232,7 @@
             ondblclick={(e) => e.stopPropagation()}
           />
         {:else}
-          {@const dots = tagColors(entry.name)}
+          {@const dots = tagColors(entry.path)}
           <span class="name"
             >{entry.name}{#if dots.length}<span
                 class="dots"

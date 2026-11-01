@@ -654,6 +654,15 @@ pub fn tag_toggle(
     tags.toggle(&self::paths(paths), tag)
 }
 
+/// Every item with the tag, from any folder: (path, entry, the item's tag ids).
+#[tauri::command(async)]
+pub fn tag_files(tags: tauri::State<'_, Tags>, tag: i64) -> Vec<(String, Entry, Vec<i64>)> {
+    tags.files_with(tag)
+        .into_iter()
+        .map(|(path, entry, ids)| (path.to_string_lossy().into_owned(), entry, ids))
+        .collect()
+}
+
 /// The tagged items directly in `dir`: (name, tag ids).
 #[tauri::command(async)]
 pub fn tags_in_dir(tags: tauri::State<'_, Tags>, dir: String) -> Vec<(String, Vec<i64>)> {

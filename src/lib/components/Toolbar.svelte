@@ -20,6 +20,7 @@
     onnavigate,
     ontheme,
     onsettings,
+    tagLabel,
   }: {
     path: string;
     view: View;
@@ -36,6 +37,8 @@
     onnavigate: (path: string, quiet?: boolean) => Promise<boolean | null>;
     ontheme: () => void;
     onsettings: () => void;
+    /** Set while the list shows the items of a tag instead of a folder. */
+    tagLabel: string | null;
   } = $props();
 
   let segments = $derived(pathSegments(path));
@@ -228,7 +231,13 @@
     <Icon name="chevronRight" />
   </button>
 
-  {#if editing}
+  {#if tagLabel}
+    <div class="tagview">
+      <span class="label">Tagged</span>
+      <strong>{tagLabel}</strong>
+      <span class="hint">in all folders</span>
+    </div>
+  {:else if editing}
     <div class="editor">
       <input
         bind:this={input}
@@ -409,6 +418,20 @@
   .sep.open {
     background: var(--bg-hover);
     color: var(--text-primary);
+  }
+
+  .tagview {
+    display: flex;
+    flex: 1;
+    align-items: baseline;
+    gap: var(--space-sm);
+    min-width: 0;
+    padding-left: var(--space-sm);
+  }
+
+  .tagview .label,
+  .tagview .hint {
+    color: var(--text-secondary);
   }
 
   .editor {
