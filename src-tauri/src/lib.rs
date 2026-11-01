@@ -296,6 +296,8 @@ pub fn run() {
             commands::crash_state,
             commands::crash_set,
             commands::crash_clear,
+            commands::pdf_merge,
+            commands::pdf_compress,
             commands::update_gate,
             commands::update_restart,
         ])

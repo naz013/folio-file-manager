@@ -31,6 +31,8 @@ percent-encoding = "2.3.2"
 jwalk = "0.9"
 rusqlite = { version = "0.41.1", features = ["bundled"] }
 blake3 = "1.8.7"
+lopdf = "0.46"
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 
 [dev-dependencies]
 tempfile = "3"

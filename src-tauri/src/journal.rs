@@ -69,6 +69,13 @@ pub enum Step {
         #[serde(default)]
         seal: Option<Seal>,
     },
+    /// A file with content made by a tool (a merged or compressed PDF). Undo trashes it, if
+    /// it is still exactly as made. It can't be made again by redo.
+    Made {
+        path: PathBuf,
+        #[serde(default)]
+        seal: Option<Seal>,
+    },
     /// `id` identifies the item in the Recycle Bin / Trash; `None` where it can't be
     /// found again (macOS, or a bin that wouldn't list it).
     Trash {
@@ -96,6 +103,11 @@ impl Step {
     pub fn moved(from: PathBuf, to: PathBuf) -> Self {
         let id = ops::identity(&to);
         Self::Move { from, to, id }
+    }
+
+    pub fn made(path: PathBuf) -> Self {
+        let seal = seal(&path);
+        Self::Made { path, seal }
     }
 
     pub fn copied(from: PathBuf, to: PathBuf) -> Self {
@@ -631,6 +643,19 @@ fn undo_step(step: &Step) -> io::Result<()> {
             }
             ops::trash(std::slice::from_ref(to)).map_err(|e| trash_error(&e))
         }
+        Step::Made { path, seal: sealed } => {
+            if !exists(path) {
+                return Err(gone(path));
+            }
+            // Without a seal there is no telling whether the file was edited since.
+            if sealed.is_none() || seal(path) != *sealed {
+                return Err(changed(format!(
+                    "Folio can't tell that \"{}\" is unchanged since it was made",
+                    name_of(path)
+                )));
+            }
+            ops::trash(std::slice::from_ref(path)).map_err(|e| trash_error(&e))
+        }
         Step::Trash { original, id } => restore(original, id.as_deref()),
     }
 }
@@ -677,6 +702,10 @@ fn redo_step(step: &Step, in_use: &HashSet<String>) -> io::Result<Step> {
             let to = copied.paths.into_iter().next().ok_or_else(|| gone(from))?;
             Ok(Step::copied(from.clone(), to))
         }
+        Step::Made { path, .. } => Err(changed(format!(
+            "\"{}\" can't be made again; run the tool again",
+            name_of(path)
+        ))),
         Step::Trash { original, .. } => {
             if !exists(original) {
                 return Err(gone(original));
@@ -1311,6 +1340,31 @@ mod tests {
         assert!(j.undo().is_err());
         assert!(to.exists(), "the edited copy stays");
         assert_eq!(j.undo().unwrap(), "older");
+    }
+
+    #[test]
+    fn a_made_file_with_content_is_undone_only_while_it_is_unchanged() {
+        let t = tmp();
+        let (a, b) = (t.path().join("a"), t.path().join("b"));
+        std::fs::write(&b, "x").unwrap();
+        let made = t.path().join("Merged.pdf");
+        std::fs::write(&made, "%PDF content").unwrap();
+        let j = journal();
+        done(&j, "older", &[rename_step(&a, &b)]);
+        done(&j, "Merge", &[Step::made(made.clone())]);
+        // Edited since: refused, and the file stays.
+        std::fs::write(&made, "%PDF content, edited later").unwrap();
+        assert!(j.undo().is_err());
+        assert!(made.exists());
+    }
+
+    #[test]
+    fn redoing_a_made_file_never_creates_an_empty_one() {
+        let t = tmp();
+        let made = t.path().join("Merged.pdf");
+        let step = Step::made(made.clone());
+        assert!(redo_step(&step, &HashSet::new()).is_err());
+        assert!(!made.exists());
     }
 
     #[test]

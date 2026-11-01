@@ -64,9 +64,11 @@
     type Conflict,
     type Entry,
     type Job,
+    type PdfMade,
     type Moved,
   } from "$lib/api/fs";
   import { formatSize } from "$lib/format";
+  import { previewKind } from "$lib/preview";
   import { sizeKey, sortEntries, type SortKey, type SortState } from "$lib/sort";
   import ConflictDialog from "$lib/components/ConflictDialog.svelte";
   import ContextMenu, { type MenuItem } from "$lib/components/ContextMenu.svelte";
@@ -94,6 +96,7 @@
   } from "$lib/settings.svelte";
   import SettingsDialog from "$lib/components/SettingsDialog.svelte";
   import OnboardingTour from "$lib/components/OnboardingTour.svelte";
+  import PdfToolsDialog from "$lib/components/PdfToolsDialog.svelte";
   import UpdateBanner from "$lib/components/UpdateBanner.svelte";
   import { checkForUpdate } from "$lib/updates.svelte";
   import CrashPrompt from "$lib/components/CrashPrompt.svelte";
@@ -737,6 +740,20 @@
       // Finished and quiet: no need to keep the row around.
       if (!leftAlone && !noRoom) dismissJob(job.id);
       refresh([]);
+      return;
+    }
+    if (job.kind === "pdf") {
+      const made = job.result as PdfMade | null;
+      if (!made) return;
+      const name = made.path.split(/[\\/]/).pop() ?? made.path;
+      const smaller = made.before - made.after;
+      notify(
+        made.compressed && smaller > 0
+          ? `Saved ${name}: ${formatSize(smaller)} smaller (${Math.round((smaller / made.before) * 100)}%)`
+          : `Saved ${name}`,
+      );
+      dismissJob(job.id);
+      refresh(parentOf(made.path) === path ? [made.path] : []);
       return;
     }
     const result = job.result as Copied | Moved | null;
@@ -1482,6 +1499,19 @@
 
   /** The file being previewed, by path so a refresh doesn't change what is shown. */
   let look = $state<string | null>(null);
+  /** The PDFs the PDF tools dialog works on, while it is open. */
+  let pdfTools = $state<Entry[] | null>(null);
+
+  const isPdf = (e: Entry) => !e.isDir && previewKind(e.name, false) === "pdf";
+  /** The selected PDFs if there are several, else the one previewed or selected. */
+  function openPdfTools(fallback?: Entry) {
+    const chosen = selected().filter(isPdf);
+    // A previewed file that is not in the selection is the one meant, not the selection.
+    const previewed = fallback && isPdf(fallback) ? fallback : null;
+    const usesSelection = chosen.length >= 2 && (!previewed || selection.has(previewed.path));
+    const pdfs = usesSelection ? chosen : previewed ? [previewed] : chosen;
+    if (pdfs.length) pdfTools = pdfs;
+  }
   let lookIndex = $derived(look ? visible.findIndex((e) => e.path === look) : -1);
 
   // The file went away (deleted, or another folder opened): nothing left to preview.
@@ -1577,6 +1607,9 @@
         ? [{ label: "Rename…", hint: "F2", run: () => (bulkOpen = true) }]
         : []),
       { label: "Tags…", run: () => (tagsOpen = true) },
+      ...(picked.some(isPdf)
+        ? [{ label: "PDF tools…", run: () => openPdfTools(one ?? undefined) }]
+        : []),
       { label: "Move to Recycle Bin", hint: "Del", danger: true, run: trashSelected },
       "separator",
       { label: "More options", run: () => nativeMenu([...selection]) },
@@ -1797,6 +1830,7 @@
       settingsOpen ||
       askCrash ||
       tourOpen ||
+      pdfTools ||
       storageOpen ||
       cleanupOpen ||
       binOpen ||
@@ -2108,6 +2142,10 @@
     <OnboardingTour onclose={() => updateSettings({ onboarded: true })} />
   {/if}
 
+  {#if pdfTools}
+    <PdfToolsDialog pdfs={pdfTools} onclose={() => (pdfTools = null)} />
+  {/if}
+
   {#if askCrash}
     <CrashPrompt
       ondismiss={() => (askCrash = false)}
@@ -2135,6 +2173,7 @@
       position={lookIndex + 1}
       total={visible.length}
       onopen={() => open(visible[lookIndex])}
+      ontools={isPdf(visible[lookIndex]) ? () => openPdfTools(visible[lookIndex]) : undefined}
       onclose={() => (look = null)}
     />
   {/if}

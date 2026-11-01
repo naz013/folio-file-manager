@@ -13,6 +13,7 @@ mod cross_volume;
 #[cfg(windows)]
 mod links;
 mod noclobber;
+pub mod pdf;
 pub mod progress;
 
 pub fn trash(paths: &[PathBuf]) -> Result<(), trash::Error> {
@@ -378,7 +379,7 @@ fn split_name(name: &str) -> (&str, &str) {
     }
 }
 
-fn validate_name(name: &str) -> io::Result<()> {
+pub(crate) fn validate_name(name: &str) -> io::Result<()> {
     let invalid = name.trim().is_empty()
         || name == "."
         || name == ".."

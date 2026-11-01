@@ -370,10 +370,28 @@ export const movePaths = (
   replaceIds: (string | null)[] = [],
 ) => invoke<number>("move_paths", { sources, dest, replace, replaceIds });
 
+/** How far a PDF is made smaller (`ops::pdf::Preset`). */
+export type PdfPreset = "lossless" | "high" | "balanced" | "small" | "smallest";
+/** What a finished PDF job made. */
+export interface PdfMade {
+  path: string;
+  /** Bytes of the inputs together, and of the new file. */
+  before: number;
+  after: number;
+  /** One PDF made smaller, as opposed to several joined. */
+  compressed: boolean;
+}
+/** Joins the PDFs in the order given into a new file called `name` next to the first. */
+export const pdfMerge = (paths: string[], name: string) =>
+  invoke<number>("pdf_merge", { paths, name });
+/** Saves a smaller copy of a PDF as `name` next to it. */
+export const pdfCompress = (path: string, preset: PdfPreset, name: string) =>
+  invoke<number>("pdf_compress", { path, preset, name });
+
 /** A copy, move or delete in the operations queue (`queue::JobView`). */
 export interface Job {
   id: number;
-  kind: "copy" | "move" | "trash";
+  kind: "copy" | "move" | "trash" | "pdf";
   label: string;
   state: "queued" | "running" | "paused" | "done" | "failed" | "cancelled";
   bytesDone: number;
@@ -385,7 +403,7 @@ export interface Job {
   etaSecs: number | null;
   error: string | null;
   /** `Copied`, `Moved` or `{ count, leftAlone }` once the job is done. */
-  result: Copied | Moved | { count: number; leftAlone: number } | null;
+  result: Copied | Moved | PdfMade | { count: number; leftAlone: number } | null;
 }
 /** Fires whenever a job started from this window changes. */
 export const onQueueUpdate = (cb: (job: Job) => void): Promise<UnlistenFn> =>

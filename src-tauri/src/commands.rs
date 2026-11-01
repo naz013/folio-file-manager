@@ -1356,6 +1356,118 @@ pub fn scan_roots(scanner: tauri::State<'_, Scanner>) -> CmdResult<Vec<RootInfo>
 /// Where crash reports and session counts are kept.
 pub struct CrashDir(pub PathBuf);
 
+/// The result of a finished PDF job, for the UI.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PdfMade {
+    path: String,
+    /// Bytes of the inputs together, and of the new file.
+    before: u64,
+    after: u64,
+    /// A single PDF was made smaller (not a merge).
+    compressed: bool,
+}
+
+/// Runs `make` in the background and writes what it returns as `dir/name` (or the next free
+/// name). One journal entry covers it, so undo moves the new file to the Recycle Bin.
+fn submit_pdf(
+    app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+    queue: &Arc<Queue>,
+    label: String,
+    sources: Vec<PathBuf>,
+    name: String,
+    make: impl FnOnce() -> std::io::Result<Vec<u8>> + Send + 'static,
+) -> CmdResult<u64> {
+    ops::validate_name(&name).map_err(|e| e.to_string())?;
+    if !name.to_lowercase().ends_with(".pdf") || cleanup::is_partial_name(&name) {
+        return Err(format!("\"{name}\" must end in .pdf"));
+    }
+    if ops::total_bytes(&sources) > ops::pdf::MAX_INPUT_BYTES {
+        return Err("These PDFs are too big to work on (over 1 GB together)".into());
+    }
+    let dir = sources
+        .first()
+        .and_then(|p| p.parent())
+        .ok_or("No folder to save in")?
+        .to_path_buf();
+    let lane = ops::volume_key(&dir);
+    let title = label.clone();
+    let handle = app.clone();
+    let work: queue::Work = Box::new(move |progress| {
+        let journal = handle.state::<Journal>();
+        progress.set_totals(ops::total_bytes(&sources), sources.len() as u64);
+        // Building only reads, so nothing is in the journal until there is a file to write:
+        // a failed, cancelled or crashed build leaves no entry that could block undo.
+        let bytes = make().map_err(|e| e.to_string())?;
+        ops::progress::checkpoint().map_err(|e| e.to_string())?;
+        let pending = begin(&journal, &label)?;
+        let result = ops::pdf::write_new(&dir, &name, &bytes);
+        let steps: Vec<Step> = result
+            .as_ref()
+            .map(|p| Step::made(p.clone()))
+            .into_iter()
+            .collect();
+        journal.finish(pending, &steps);
+        let output = result.map_err(|e| e.to_string())?;
+        Ok(serde_json::to_value(PdfMade {
+            before: sources
+                .iter()
+                .filter_map(|p| std::fs::metadata(p).ok())
+                .map(|m| m.len())
+                .sum(),
+            after: std::fs::metadata(&output).map_or(0, |m| m.len()),
+            // Merging needs two files, so one file is a compression.
+            compressed: sources.len() == 1,
+            path: output.to_string_lossy().into_owned(),
+        })
+        .unwrap_or_default())
+    });
+    Ok(queue.submit(app, window.label(), Kind::Pdf, title, &lane, work))
+}
+
+/// Joins `paths`, in the order given, into a new PDF named `name` next to the first one.
+/// Returns the job id.
+#[tauri::command(async)]
+pub fn pdf_merge(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    queue: tauri::State<'_, Arc<Queue>>,
+    paths: Vec<String>,
+    name: String,
+) -> CmdResult<u64> {
+    let sources = self::paths(paths);
+    let label = format!("Merge {} PDFs into \"{name}\"", sources.len());
+    let inputs = sources.clone();
+    submit_pdf(&app, &window, &queue, label, sources, name, move || {
+        ops::pdf::merge(&inputs)
+    })
+}
+
+/// Makes a smaller copy of the PDF at `path` as "`name`", next to it. Returns the job id.
+#[tauri::command(async)]
+pub fn pdf_compress(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    queue: tauri::State<'_, Arc<Queue>>,
+    path: String,
+    preset: ops::pdf::Preset,
+    name: String,
+) -> CmdResult<u64> {
+    let source = PathBuf::from(path);
+    let label = describe("Compress", std::slice::from_ref(&source));
+    let input = source.clone();
+    submit_pdf(
+        &app,
+        &window,
+        &queue,
+        label,
+        vec![source],
+        name,
+        move || ops::pdf::compress(&input, preset),
+    )
+}
+
 /// Whether an update may be installed now. Installing can end the app (the Windows installer
 /// closes it), so it must not start while a copy, move or delete is going: that would leave
 /// a half-done job for the next start to find.

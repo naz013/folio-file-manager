@@ -30,6 +30,8 @@ pub enum Kind {
     Copy,
     Move,
     Trash,
+    /// A PDF merged or made smaller.
+    Pdf,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -236,7 +238,8 @@ impl Queue {
     /// leftover while one is.
     pub fn copy_running(&self) -> bool {
         lock(&self.jobs).iter().any(|j| {
-            matches!(j.kind, Kind::Copy | Kind::Move) && !lock(&j.live).state.is_finished()
+            matches!(j.kind, Kind::Copy | Kind::Move | Kind::Pdf)
+                && !lock(&j.live).state.is_finished()
         })
     }
 

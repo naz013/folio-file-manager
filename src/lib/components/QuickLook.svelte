@@ -11,6 +11,7 @@
     position,
     total,
     onopen,
+    ontools,
     onclose,
   }: {
     entry: Entry;
@@ -19,6 +20,8 @@
     total: number;
     /** "Open": hand the file to its default app. */
     onopen: () => void;
+    /** "PDF tools": merge or compress; given only for a PDF. */
+    ontools?: () => void;
     onclose: () => void;
   } = $props();
 
@@ -85,6 +88,7 @@
         </span>
       </div>
       <span class="count">{position} of {total}</span>
+      {#if ontools}<button class="open" onclick={ontools}>PDF tools…</button>{/if}
       <button class="open" onclick={onopen}>Open</button>
       <button class="open" onclick={onclose}>Close</button>
     </header>
