@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon, { type IconName } from "./Icon.svelte";
-  import { joinPath } from "$lib/api/fs";
+  import { joinPath, type Tag } from "$lib/api/fs";
+  import { tagColor } from "$lib/tags";
 
   let {
     home,
@@ -10,6 +11,7 @@
     dropTarget,
     springPath,
     springMs,
+    tags,
   }: {
     home: string;
     current: string;
@@ -20,6 +22,7 @@
     dropTarget: string | null;
     springPath: string | null;
     springMs: number;
+    tags: Tag[];
   } = $props();
 
   const favorites: { label: string; icon: IconName; sub: string | null }[] = [
@@ -28,15 +31,6 @@
     { label: "Documents", icon: "fileText", sub: "Documents" },
     { label: "Downloads", icon: "download", sub: "Downloads" },
     { label: "Pictures", icon: "image", sub: "Pictures" },
-  ];
-
-  const tags = [
-    ["Work", "--tag-red"],
-    ["Urgent", "--tag-orange"],
-    ["Ideas", "--tag-yellow"],
-    ["Done", "--tag-green"],
-    ["Personal", "--tag-blue"],
-    ["Design", "--tag-purple"],
   ];
 </script>
 
@@ -67,10 +61,10 @@
   {/each}
 
   <div class="label">Tags</div>
-  {#each tags as [name, color] (name)}
+  {#each tags as tag (tag.id)}
     <div class="item tag">
-      <span class="dot" style:background="var({color})"></span>
-      <span>{name}</span>
+      <span class="dot" style:background={tagColor(tag.color)}></span>
+      <span>{tag.name}</span>
     </div>
   {/each}
 </aside>

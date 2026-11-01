@@ -56,6 +56,26 @@ export const releasePreview = () => invoke<void>("preview_allow", { path: null }
 export const readTextPreview = (path: string) =>
   invoke<{ text: string; truncated: boolean }>("read_text_preview", { path });
 
+/** A tag: one of the seven colours, or a named tag with an optional colour. */
+export interface Tag {
+  id: number;
+  name: string;
+  /** One of the seven colour names, or null for a plain named tag. */
+  color: string | null;
+}
+export const tagList = () => invoke<Tag[]>("tag_list");
+export const tagCreate = (name: string, color: string | null) =>
+  invoke<Tag>("tag_create", { name, color });
+export const tagDelete = (id: number) => invoke<void>("tag_delete", { id });
+/**
+ * Tags `paths` with `tag`, or untags them if they all have it. `skipped` counts items that
+ * couldn't be tagged.
+ */
+export const tagToggle = (paths: string[], tag: number) =>
+  invoke<{ on: boolean; skipped: number }>("tag_toggle", { paths, tag });
+/** The tagged items directly in `dir`: [name, tag ids]. */
+export const tagsInDir = (dir: string) => invoke<[string, number[]][]>("tags_in_dir", { dir });
+
 /** Shows the native OS context menu for `paths` at the cursor (Windows only for now). */
 export const showContextMenu = (paths: string[], extended: boolean) =>
   invoke<void>("show_context_menu", { paths, extended });

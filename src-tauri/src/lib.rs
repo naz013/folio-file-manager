@@ -7,6 +7,7 @@ mod platform;
 mod preview;
 mod queue;
 mod session;
+mod tags;
 mod thumbs;
 mod watch;
 mod window;
@@ -39,6 +40,24 @@ fn open_journal(file: Option<&std::path::Path>) -> rusqlite::Result<journal::Jou
         }
         other => other,
     }
+}
+
+/// Opens the tag index in the app data directory.
+fn manage_tags(app: &tauri::App) {
+    let file = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("tags.sqlite"));
+    app.manage(open_tags(file.as_deref()));
+}
+
+/// Tags are not worth stopping for: without an index they just aren't kept.
+fn open_tags(file: Option<&std::path::Path>) -> tags::Tags {
+    tags::Tags::open(file).unwrap_or_else(|e| {
+        eprintln!("the tag index can't be opened ({e}); tags won't be kept");
+        tags::Tags::open(None).expect("an in-memory index opens")
+    })
 }
 
 /// The custom URL schemes the webview loads files through.
@@ -97,6 +116,7 @@ pub fn run() {
             // Without a journal nothing could be undone, and operations are refused, so
             // a journal that can't open is a failed start.
             app.manage(open_journal(journal_file.as_deref())?);
+            manage_tags(app);
             // The main window comes from tauri.conf.json, hidden until it is back where
             // it was. Other saved windows open in the background so they don't hold up
             // the main window's start.
@@ -154,6 +174,11 @@ pub fn run() {
             commands::start_drag,
             commands::modifier_keys,
             commands::preview_allow,
+            commands::tag_list,
+            commands::tag_create,
+            commands::tag_delete,
+            commands::tag_toggle,
+            commands::tags_in_dir,
             commands::read_text_preview,
             commands::show_context_menu,
             commands::trash_paths,

@@ -7,6 +7,12 @@
     copyPaths,
     createFolder,
     findConflicts,
+    tagCreate,
+    tagDelete,
+    tagList,
+    tagToggle,
+    tagsInDir,
+    type Tag,
     homeDir,
     listDir,
     movePaths,
@@ -42,6 +48,8 @@
   import ConflictDialog from "$lib/components/ConflictDialog.svelte";
   import ContextMenu, { type MenuItem } from "$lib/components/ContextMenu.svelte";
   import QuickLook from "$lib/components/QuickLook.svelte";
+  import TagDialog from "$lib/components/TagDialog.svelte";
+  import { tagColor } from "$lib/tags";
   import OpsPill from "$lib/components/OpsPill.svelte";
   import Sidebar from "$lib/components/Sidebar.svelte";
   import TabBar from "$lib/components/TabBar.svelte";
@@ -146,6 +154,7 @@
     }
     if (gen !== navGen) return; // the tab switched or navigated meanwhile
     entries = list;
+    loadTagMap(path);
     const existing = new Set(entries.map((e) => e.path));
     const keep = (select ?? [...selection]).filter((p) => existing.has(p));
     selection.clear();
@@ -168,6 +177,8 @@
     if (gen !== navGen) return null;
     entries = list;
     path = target;
+    tagMap = {};
+    loadTagMap(target);
     if (tabs[active]) {
       tabs[active].path = target;
       shownTabId = tabs[active].id;
@@ -836,6 +847,85 @@
     }
   }
 
+  // ---- Tags ----
+
+  let tagDefs = $state<Tag[]>([]);
+  /** Tag ids of the tagged items in this folder, by item name. */
+  let tagMap = $state<Record<string, number[]>>({});
+  let tagsOpen = $state(false);
+
+  // Nothing selected (it was moved or deleted meanwhile): nothing to tag.
+  $effect(() => {
+    if (tagsOpen && selection.size === 0) tagsOpen = false;
+  });
+
+  async function loadTagDefs() {
+    tagDefs = await tagList().catch(() => tagDefs);
+  }
+
+  /** Reads which items of `dir` are tagged; drops the answer if the tab moved on. */
+  let tagMapGen = 0;
+  async function loadTagMap(dir: string) {
+    const gen = ++tagMapGen;
+    const found = await tagsInDir(dir).catch(() => []);
+    // The newest answer for the folder shown wins.
+    if (gen === tagMapGen && dir === path) tagMap = Object.fromEntries(found);
+  }
+
+  const tagColors = (name: string) =>
+    (tagMap[name] ?? [])
+      .map((id) => tagDefs.find((t) => t.id === id))
+      .filter((t): t is Tag => !!t)
+      .map((t) => ({ name: t.name, color: tagColor(t.color) }));
+
+  /** Gives the tag to the selected items, or takes it from them if they all have it. */
+  async function toggleTag(id: number) {
+    const picked = selected();
+    if (!picked.length) return;
+    const done = await run(() =>
+      tagToggle(
+        picked.map((e) => e.path),
+        id,
+      ),
+    );
+    if (!done) return;
+    await loadTagMap(path);
+    const name = tagDefs.find((t) => t.id === id)?.name ?? "tag";
+    const count = picked.length - done.skipped;
+    const left = done.skipped ? ` (${plural(done.skipped, "item")} can't be tagged)` : "";
+    notify(
+      (done.on ? `Tagged ${plural(count, "item")}: ${name}` : `Removed ${name}`) + left,
+      done.skipped > 0,
+    );
+  }
+
+  /** For the tag dialog: how many of the selected items have each tag. */
+  let tagState = $derived.by(() => {
+    const picked = selected();
+    const out: Record<number, "all" | "some" | "none"> = {};
+    for (const t of tagDefs) {
+      const have = picked.filter((e) => tagMap[e.name]?.includes(t.id)).length;
+      out[t.id] = have === 0 ? "none" : have === picked.length ? "all" : "some";
+    }
+    return out;
+  });
+
+  async function createTag(name: string, color: string | null): Promise<string | null> {
+    try {
+      await tagCreate(name, color);
+      await loadTagDefs();
+      return null;
+    } catch (e) {
+      return String(e);
+    }
+  }
+
+  async function removeTag(id: number) {
+    await run(() => tagDelete(id));
+    await loadTagDefs();
+    await loadTagMap(path);
+  }
+
   // ---- Quick Look ----
 
   /** The file being previewed, by path so a refresh doesn't change what is shown. */
@@ -926,6 +1016,7 @@
       { label: "Cut", hint: "Ctrl+X", run: cutSelection },
       { label: "Copy", hint: "Ctrl+C", run: copySelection },
       ...(one ? [{ label: "Rename", hint: "F2", run: () => (renaming = one.path) }] : []),
+      { label: "Tags…", run: () => (tagsOpen = true) },
       { label: "Move to Recycle Bin", hint: "Del", danger: true, run: trashSelected },
       "separator",
       { label: "More options", run: () => nativeMenu([...selection]) },
@@ -1099,6 +1190,17 @@
         return cursor >= 0 ? () => open(visible[cursor]) : null;
       case " ":
         return selection.size ? openQuickLook : null;
+      case "1":
+      case "2":
+      case "3":
+      case "4":
+      case "5":
+      case "6":
+      case "7":
+        // The colour tags, in the order of their keys.
+        // Held down, it must not flip the tag on and off.
+        if (shift || e.altKey || !selection.size) return null;
+        return e.repeat ? ignore : () => toggleTag(Number(key));
       case "F2":
         return cursor >= 0 ? () => (renaming = visible[cursor].path) : null;
       case "Delete":
@@ -1115,7 +1217,7 @@
 
   function onkeydown(e: KeyboardEvent) {
     // A dialog handles its own keys; nothing behind it may act on them.
-    if (asking || menu || settingsOpen) return;
+    if (asking || menu || settingsOpen || tagsOpen) return;
     if (look) {
       // Quick Look owns the keyboard, but the audio and video controls keep Space and the
       // arrows (play, seek, volume).
@@ -1166,6 +1268,7 @@
         dropPaths(payload.paths, dest);
       } else dragEnded();
     });
+    loadTagDefs();
     homeDir().then(async (h) => {
       home = h;
       const saved = await windowTabs().catch(() => null);
@@ -1203,6 +1306,7 @@
     {dropTarget}
     {springPath}
     {springMs}
+    tags={tagDefs}
   />
   <main class="main">
     <TabBar
@@ -1254,6 +1358,7 @@
       {dropTarget}
       {springPath}
       {springMs}
+      {tagColors}
     />
     <footer class="status">
       <span
@@ -1276,6 +1381,18 @@
       />
     </footer>
   </main>
+
+  {#if tagsOpen}
+    <TagDialog
+      tags={tagDefs}
+      have={tagState}
+      count={selected().length}
+      ontoggle={toggleTag}
+      oncreate={createTag}
+      ondelete={removeTag}
+      onclose={() => (tagsOpen = false)}
+    />
+  {/if}
 
   {#if settingsOpen}
     <SettingsDialog

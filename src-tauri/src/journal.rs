@@ -100,6 +100,8 @@ pub struct Pending(i64);
 
 pub struct Journal {
     conn: Mutex<Connection>,
+    /// Where items went in the last undo or redo, as (from, to), until taken.
+    relocations: Mutex<Vec<(PathBuf, PathBuf)>>,
 }
 
 impl Journal {
@@ -135,7 +137,19 @@ impl Journal {
         }
         Ok(Self {
             conn: Mutex::new(conn),
+            relocations: Mutex::default(),
         })
+    }
+
+    /// The renames and moves the last undo or redo carried out, as (from, to). They are
+    /// handed over once, for whatever keeps track of items by place (the tag index).
+    pub fn take_relocations(&self) -> Vec<(PathBuf, PathBuf)> {
+        std::mem::take(
+            &mut *self
+                .relocations
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        )
     }
 
     /// The connection. A panic in another thread must not stop every later operation.
@@ -295,6 +309,10 @@ impl Journal {
             done.reverse();
             retry.reverse();
         }
+        *self
+            .relocations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = relocations(&done, direction);
         if problems.is_empty() {
             save(&conn, entry.id, to_state, &done);
             return Ok(entry.label);
@@ -323,6 +341,25 @@ impl Journal {
         }
         Err(message)
     }
+}
+
+/// Where `done` (steps in the order they were recorded) put things when replayed in
+/// `direction`, as (from, to) in the order they happened.
+fn relocations(done: &[Step], direction: Direction) -> Vec<(PathBuf, PathBuf)> {
+    let moved = |step: &Step| match (step, direction) {
+        (Step::Rename { from, to, .. } | Step::Move { from, to, .. }, Direction::Undo) => {
+            Some((to.clone(), from.clone()))
+        }
+        (Step::Rename { from, to, .. } | Step::Move { from, to, .. }, Direction::Redo) => {
+            Some((from.clone(), to.clone()))
+        }
+        _ => None,
+    };
+    let mut order: Vec<_> = done.iter().filter_map(moved).collect();
+    if matches!(direction, Direction::Undo) {
+        order.reverse();
+    }
+    order
 }
 
 #[derive(Clone, Copy)]

@@ -41,6 +41,7 @@
     dropTarget,
     springPath,
     springMs,
+    tagColors,
   }: {
     entries: Entry[];
     view: View;
@@ -65,6 +66,8 @@
     /** Folder whose spring-loading countdown is running, and its length. */
     springPath: string | null;
     springMs: number;
+    /** The tags on the item with this name: each tag's name and CSS colour. */
+    tagColors: (name: string) => { name: string; color: string }[];
   } = $props();
 
   let scroller: HTMLDivElement;
@@ -229,7 +232,14 @@
             ondblclick={(e) => e.stopPropagation()}
           />
         {:else}
-          <span class="name">{entry.name}</span>
+          {@const dots = tagColors(entry.name)}
+          <span class="name"
+            >{entry.name}{#if dots.length}<span
+                class="dots"
+                title={dots.map((d) => d.name).join(", ")}
+                >{#each dots as d (d.name)}<i style:background={d.color}></i>{/each}</span
+              >{/if}</span
+          >
         {/if}
 
         {#if !grid}
@@ -255,6 +265,19 @@
   .tile,
   .row {
     position: absolute;
+  }
+
+  .dots {
+    display: inline-flex;
+    gap: var(--space-2xs);
+    margin-left: var(--space-xs);
+    vertical-align: middle;
+  }
+
+  .dots i {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
   }
 
   /* Grid */

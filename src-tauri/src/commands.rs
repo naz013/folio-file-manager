@@ -11,6 +11,7 @@ use crate::journal::{self, Journal, Step};
 use crate::ops;
 use crate::queue::{self, Kind, Queue};
 use crate::session::{Session, WindowTabs};
+use crate::tags::{Tag, Tags};
 use crate::watch::DirWatcher;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -375,6 +376,9 @@ pub async fn rename_path(
             .into_iter()
             .collect();
         journal.finish(pending, &steps);
+        if let Ok(to) = &result {
+            app.state::<Tags>().relocated(&from, to);
+        }
         result
             .map(|p| p.to_string_lossy().into_owned())
             .map_err(|e| e.to_string())
@@ -524,6 +528,7 @@ pub fn move_paths(
                 .map(|(from, to)| Step::moved(from.clone(), to.clone())),
         );
         journal.finish(pending, &steps);
+        handle.state::<Tags>().relocated_all(&done.pairs);
         result.map(|()| {
             serde_json::to_value(Moved {
                 dest: dest.to_string_lossy().into_owned(),
@@ -584,9 +589,17 @@ pub async fn undo_state(app: tauri::AppHandle) -> CmdResult<UndoState> {
 pub async fn undo(app: tauri::AppHandle) -> CmdResult<String> {
     blocking(move || {
         wait_for_queue(&app)?;
-        app.state::<Journal>().undo()
+        let result = app.state::<Journal>().undo();
+        follow_relocations(&app);
+        result
     })
     .await
+}
+
+/// What an undo or redo moved, even partly, keeps its tags.
+fn follow_relocations(app: &tauri::AppHandle) {
+    let moves = app.state::<Journal>().take_relocations();
+    app.state::<Tags>().relocated_all(&moves);
 }
 
 /// Undo and redo act on what the queue's jobs are about to change, so they wait.
@@ -603,9 +616,48 @@ fn wait_for_queue(app: &tauri::AppHandle) -> CmdResult<()> {
 pub async fn redo(app: tauri::AppHandle) -> CmdResult<String> {
     blocking(move || {
         wait_for_queue(&app)?;
-        app.state::<Journal>().redo()
+        let result = app.state::<Journal>().redo();
+        follow_relocations(&app);
+        result
     })
     .await
+}
+
+// ---- Tags ----
+
+#[tauri::command]
+pub fn tag_list(tags: tauri::State<'_, Tags>) -> Vec<Tag> {
+    tags.list()
+}
+
+#[tauri::command]
+pub fn tag_create(
+    tags: tauri::State<'_, Tags>,
+    name: String,
+    color: Option<String>,
+) -> CmdResult<Tag> {
+    tags.create(&name, color.as_deref())
+}
+
+#[tauri::command]
+pub fn tag_delete(tags: tauri::State<'_, Tags>, id: i64) -> CmdResult<()> {
+    tags.delete(id)
+}
+
+/// Gives the tag to `paths`, or takes it from them if they all have it.
+#[tauri::command(async)]
+pub fn tag_toggle(
+    tags: tauri::State<'_, Tags>,
+    paths: Vec<String>,
+    tag: i64,
+) -> CmdResult<crate::tags::Toggled> {
+    tags.toggle(&self::paths(paths), tag)
+}
+
+/// The tagged items directly in `dir`: (name, tag ids).
+#[tauri::command(async)]
+pub fn tags_in_dir(tags: tauri::State<'_, Tags>, dir: String) -> Vec<(String, Vec<i64>)> {
+    tags.in_dir(&PathBuf::from(dir))
 }
 
 #[tauri::command]
