@@ -117,6 +117,7 @@
   import CleanupView from "$lib/components/CleanupView.svelte";
   import BinView from "$lib/components/BinView.svelte";
   import { applyTheme, loadTheme, onThemeChange, setTheme, type Theme } from "$lib/theme";
+  import ColumnView from "$lib/components/ColumnView.svelte";
   import FileView from "$lib/components/FileView.svelte";
   import { measureJumps, measureScroll, nextPaint, perfConfig, perfReport } from "$lib/perf";
 
@@ -208,7 +209,8 @@
   const tourOpen = $derived(restored && crashKnown && !askCrash && !settings.onboarded);
   let saveTimer: ReturnType<typeof setTimeout>;
 
-  const asView = (v: string | undefined): View | null => (v === "grid" || v === "list" ? v : null);
+  const asView = (v: string | undefined): View | null =>
+    v === "grid" || v === "list" || v === "columns" ? v : null;
 
   const folderName = (p: string) => placeTitle(p) ?? pathSegments(p).at(-1)?.name ?? p;
   let tabPaths = $derived(tabs.map((t) => t.path));
@@ -240,7 +242,17 @@
   let toast = $state<{ text: string; error: boolean } | null>(null);
   let toastTimer: ReturnType<typeof setTimeout>;
 
-  let fileView = $state<FileView>();
+  /** What the page asks of the list showing the folder, whichever view that is. */
+  interface ListApi {
+    focusList(): void;
+    scrollToIndex(index: number): void;
+    scrollToTop(): void;
+    scrollElement(): HTMLElement;
+    columns(): number;
+  }
+  let fileView = $state<ListApi>();
+  /** The tint a folder takes from its tags; one function, so the lists don't see a new one on every render. */
+  const tintFor = (p: string) => tintOf(tagMap[p]);
   let toolbar: Toolbar | undefined = $state();
 
   /** Ids of the tags the folder is filtered by: an item must have all of them. */
@@ -615,6 +627,17 @@
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => persistTabs(paths, index, views, collapsed), 300);
   });
+
+  /** Open `dir` and put the selection on `item` in it, or on its first item if there is none. */
+  async function goSelect(dir: string, item: string | null) {
+    const ok = await navigate(dir);
+    if (!ok) return;
+    const at =
+      item === null ? (visible.length ? 0 : -1) : visible.findIndex((e) => e.path === item);
+    selectOnly(at);
+    if (at >= 0) fileView?.scrollToIndex(at);
+    fileView?.focusList();
+  }
 
   function open(entry: Entry) {
     if (entry.isDir) navigate(entry.path);
@@ -1634,6 +1657,7 @@
       ...action("Clear recent folders", undefined, clearRecent),
       ...action("Grid view", undefined, () => setView("grid"), view !== "grid"),
       ...action("List view", undefined, () => setView("list"), view !== "list"),
+      ...action("Column view", undefined, () => setView("columns"), view !== "columns"),
       ...action(settings.showHidden ? "Hide hidden files" : "Show hidden files", "Ctrl+H", () =>
         updateSettings({ showHidden: !settings.showHidden }),
       ),
@@ -1968,6 +1992,7 @@
           return () => updateSettings({ showHidden: !settings.showHidden });
       }
     }
+    const inColumns = view === "columns" && !tagView && !search && !place;
     const row = view === "grid" ? (fileView?.columns() ?? 1) : 1;
     const grid = view === "grid";
     switch (key) {
@@ -1978,8 +2003,17 @@
       case "ArrowUp":
         return () => moveCursor(-row, shift);
       case "ArrowRight":
+        if (inColumns) {
+          // Into the folder the cursor is on, as in Finder.
+          const here = cursor >= 0 ? visible[cursor] : null;
+          return here?.isDir && !shift ? () => goSelect(here.path, null) : null;
+        }
         return grid ? () => moveCursor(1, shift) : null;
       case "ArrowLeft":
+        if (inColumns) {
+          const up = parentOf(path);
+          return up && !shift ? () => goSelect(up, path) : null;
+        }
         return grid ? () => moveCursor(-1, shift) : null;
       case "Home":
         return () => moveCursor(-visible.length, shift);
@@ -2249,11 +2283,31 @@
           setTheme(t);
         }}
       />
+    {:else if view === "columns" && !tagView && !search}
+      <ColumnView
+        bind:this={fileView}
+        {path}
+        entries={visible}
+        {selection}
+        cursorIndex={cursor}
+        cut={cutSet}
+        {renaming}
+        showHidden={settings.showHidden}
+        folderTint={tintFor}
+        onitemclick={itemClick}
+        onopen={open}
+        onitemcontextmenu={itemContextMenu}
+        onbackgroundclick={() => selectOnly(-1)}
+        onrename={commitRename}
+        oncancelrename={() => (renaming = null)}
+        ondragout={dragOut}
+        onselectin={goSelect}
+      />
     {:else}
       <FileView
         bind:this={fileView}
         entries={visible}
-        {view}
+        view={view === "columns" ? "list" : view}
         {selection}
         cut={cutSet}
         {renaming}

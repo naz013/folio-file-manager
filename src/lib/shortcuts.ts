@@ -30,6 +30,7 @@ export const shortcutGroups: ShortcutGroup[] = [
       { keys: "Arrow keys", does: "Move the selection (Shift extends it)" },
       { keys: "Home / End", does: "First or last item" },
       { keys: "Enter", does: "Open" },
+      { keys: "→  /  ←", does: "Column view: into the folder, or back to the one above" },
       { keys: "Space", does: "Quick Look" },
       { keys: "Backspace", does: "Up one folder" },
       { keys: "Alt+←  /  Alt+→", does: "Back and forward" },
