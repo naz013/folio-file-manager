@@ -18,6 +18,7 @@
     activeTag,
     ontag,
     onbin,
+    binShown = false,
     folderTint,
     pinHover,
     onpinmenu,
@@ -38,6 +39,8 @@
     ontag: (tag: Tag) => void;
     /** Open the Recycle Bin. */
     onbin: () => void;
+    /** The tab shows the Recycle Bin. */
+    binShown?: boolean;
     /** The CSS colour a folder takes from its first colour tag, if it has one. */
     folderTint: (path: string) => string | null;
     /** A folder drag is over the Favorites section, where dropping pins it. */
@@ -126,7 +129,12 @@
 
   <!-- Apart from the places above: the bin is not a folder to pin or drop on. -->
   <div class="bin">
-    <button class="item" onclick={onbin}>
+    <button
+      class="item"
+      class:selected={binShown}
+      aria-current={binShown ? "page" : undefined}
+      onclick={onbin}
+    >
       <Icon name="trash" />
       <span>Recycle Bin</span>
     </button>

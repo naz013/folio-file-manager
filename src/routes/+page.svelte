@@ -67,6 +67,7 @@
     type Job,
     type MadeFile,
     type Moved,
+    BIN_PATH,
   } from "$lib/api/fs";
   import { formatSize } from "$lib/format";
   import { editableImage, previewKind } from "$lib/preview";
@@ -118,12 +119,11 @@
   let storageOpen = $state(false);
   let cleanupOpen = $state(false);
   let cleanupStart = $state<"large" | "downloads" | "duplicates" | "partials">("large");
-  let binOpen = $state(false);
   /** A size scan is running (it is shared by every window). */
   let scanning = $state(false);
 
   async function startScan() {
-    if (tagView) return notify("Open a folder first", true);
+    if (noFolder) return notify("Open a folder first", true);
     // Set first: the scan can end before the call returns.
     scanning = true;
     try {
@@ -185,7 +185,8 @@
 
   const asView = (v: string | undefined): View | null => (v === "grid" || v === "list" ? v : null);
 
-  const folderName = (p: string) => pathSegments(p).at(-1)?.name ?? p;
+  const folderName = (p: string) =>
+    p === BIN_PATH ? "Recycle Bin" : (pathSegments(p).at(-1)?.name ?? p);
   let tabPaths = $derived(tabs.map((t) => t.path));
   let tabViews = $derived(tabs.map((t) => t.view ?? ""));
   let tabList = $derived(tabs.map((t, i) => ({ id: t.id, title: folderName(tabPaths[i]) })));
@@ -214,13 +215,17 @@
   let toast = $state<{ text: string; error: boolean } | null>(null);
   let toastTimer: ReturnType<typeof setTimeout>;
 
-  let fileView: FileView;
+  let fileView = $state<FileView>();
   let toolbar: Toolbar | undefined = $state();
 
   /** Ids of the tags the folder is filtered by: an item must have all of them. */
   let tagFilter = $state<number[]>([]);
   /** The tag whose items the list shows, from every folder, instead of a folder. */
   let tagView = $state<Tag | null>(null);
+  /** The tab shows the Recycle Bin instead of a folder. */
+  const inBin = $derived(path === BIN_PATH);
+  /** There is no folder to create in, paste into or open a terminal in. */
+  const noFolder = $derived(!!tagView || inBin);
   /** The list's order, set from the column headers. */
   let sort = $state<SortState>({ key: "name", desc: false });
   /** Sizes of the folders shown, from the scan cache; empty where nothing was scanned. */
@@ -280,6 +285,7 @@
 
   /** Reloads the current folder, keeping the selection for paths that still exist. */
   async function refresh(select?: string[]) {
+    if (inBin) return;
     const gen = navGen;
     let list: Entry[];
     let tags: Record<string, number[]>;
@@ -308,6 +314,21 @@
   /** Shows `target` in the active tab. Resolves to false on error, null if a newer navigation took over. */
   async function load(target: string, quiet = false): Promise<boolean | null> {
     const gen = ++navGen;
+    if (target === BIN_PATH) {
+      entries = [];
+      path = target;
+      tagView = null;
+      tagFilter = [];
+      tagMap = {};
+      if (tabs[active]) {
+        tabs[active].path = target;
+        shownTabId = tabs[active].id;
+      }
+      selection.clear();
+      anchor = cursor = -1;
+      renaming = null;
+      return true;
+    }
     let list: Entry[];
     let tags: Record<string, number[]>;
     try {
@@ -418,7 +439,7 @@
     const gen = navGen;
     await tick();
     if (gen !== navGen) return;
-    if (m.scrollTop) fileView.scrollElement().scrollTop = m.scrollTop;
+    if (m.scrollTop && fileView) fileView.scrollElement().scrollTop = m.scrollTop;
     if (!m.selection.length) return;
     // Restore the selection after the folder has painted; on a huge selection it is the slow part.
     await nextPaint();
@@ -520,7 +541,7 @@
 
   function itemClick(index: number, e: MouseEvent) {
     const p = visible[index].path;
-    fileView.focusList();
+    fileView?.focusList();
     if (e.shiftKey && anchor >= 0) {
       selectRange(anchor, index);
       cursor = index;
@@ -543,8 +564,8 @@
       anchor = next;
     }
     cursor = next;
-    fileView.scrollToIndex(next);
-    fileView.focusList();
+    fileView?.scrollToIndex(next);
+    fileView?.focusList();
   }
 
   // ---- Operations ----
@@ -577,7 +598,7 @@
   }
 
   async function newFolder() {
-    if (tagView) return notify("Open a folder first: a tag's items are in many folders", true);
+    if (noFolder) return notify("Open a folder first", true);
     const created = await run(() => createFolder(path, "New folder"));
     if (created) {
       await refresh([created]);
@@ -587,7 +608,7 @@
 
   /** Makes an empty file with `name` in the folder shown and opens its name for editing. */
   async function newFile(name = "New file.txt") {
-    if (tagView) return notify("Open a folder first: a tag's items are in many folders", true);
+    if (noFolder) return notify("Open a folder first", true);
     const created = await run(() => createFile(path, name));
     if (created) {
       await refresh([created]);
@@ -824,7 +845,7 @@
    * queued. An item that can't be pasted here stays on it.
    */
   async function pasteItems(items: ShelfItem[]) {
-    if (tagView) return notify("Open a folder first: a tag's items are in many folders", true);
+    if (noFolder) return notify("Open a folder first", true);
     const dest = path;
     const ready = items.filter((i) => i.exists);
     if (!ready.length) return notify("Nothing on the shelf can be pasted", true);
@@ -1078,7 +1099,7 @@
   }
 
   /** Where a drop that lands on no folder goes: the folder shown, if one is. */
-  const dropFallback = (): string | null => (tagView ? null : path);
+  const dropFallback = (): string | null => (noFolder ? null : path);
 
   async function dropPaths(paths: string[], dest: string) {
     // Dropping items back into the folder they came from is a no-op.
@@ -1389,13 +1410,13 @@
     const action = (label: string, detail: string | undefined, run: () => void, when = true) =>
       when ? [{ kind: "action" as const, label, detail, run }] : [];
     const actions: PaletteItem[] = [
-      ...action("New folder", "Ctrl+Shift+N", newFolder, !tagView),
-      ...action("New text file", "", () => newFile(), !tagView),
-      ...action("New Markdown file", "", () => newFile("New file.md"), !tagView),
-      ...action("Open in terminal", "", () => terminalIn(path), !tagView),
+      ...action("New folder", "Ctrl+Shift+N", newFolder, !noFolder),
+      ...action("New text file", "", () => newFile(), !noFolder),
+      ...action("New Markdown file", "", () => newFile("New file.md"), !noFolder),
+      ...action("Open in terminal", "", () => terminalIn(path), !noFolder),
       ...action("Copy", "Ctrl+C", copySelection, any),
       ...action("Cut", "Ctrl+X", cutSelection, any),
-      ...action("Paste", "Ctrl+V", paste, !tagView),
+      ...action("Paste", "Ctrl+V", paste, !noFolder),
       ...action("Open the clipboard shelf", "Ctrl+Shift+V", () => (shelfOpen = true)),
       ...action("Open", "Enter", () => open(selected()[0]), one),
       ...action(
@@ -1431,7 +1452,7 @@
       ...action("Forward", "Alt+→", goForward, forward.length > 0),
       ...action("Up one folder", "Alt+↑", goUp),
       ...action("Refresh", undefined, () => refresh()),
-      ...action("Go to a path…", "Ctrl+L", () => toolbar?.edit(), !tagView),
+      ...action("Go to a path…", "Ctrl+L", () => toolbar?.edit(), !noFolder),
       ...action("New tab", "Ctrl+T", () => openTab(startPath(home))),
       ...action("Close tab", "Ctrl+W", () => closeTab(active)),
       ...action(
@@ -1474,7 +1495,7 @@
         theme !== "system",
       ),
       ...action("Settings", "Ctrl+,", () => (settingsOpen = true)),
-      ...action("Recycle Bin", "", () => (binOpen = true)),
+      ...action("Recycle Bin", "", () => navigate(BIN_PATH)),
       ...action("Storage breakdown", "", () => (storageOpen = true)),
       ...action("Clean up large and old files", "", () => {
         cleanupStart = "large";
@@ -1492,7 +1513,7 @@
         cleanupStart = "downloads";
         cleanupOpen = true;
       }),
-      ...action("Scan this folder for sizes", "", startScan, !scanning && !tagView),
+      ...action("Scan this folder for sizes", "", startScan, !scanning && !noFolder),
       ...action("Cancel the size scan", "", () => scanCancel(), scanning),
     ];
     return [...Object.values(places), ...actions];
@@ -1549,7 +1570,7 @@
     const to = Math.min(visible.length - 1, Math.max(0, lookIndex + delta));
     if (to === lookIndex) return;
     selectOnly(to);
-    fileView.scrollToIndex(to);
+    fileView?.scrollToIndex(to);
     look = visible[to].path;
   }
 
@@ -1593,7 +1614,7 @@
     selection.clear();
     anchor = cursor = -1;
     // A tag's items are in many folders: there is no folder to act on.
-    if (tagView) return;
+    if (noFolder) return;
     if (e.shiftKey) nativeMenu([path], true);
     else menu = { items: backgroundMenu(), x: e.clientX, y: e.clientY };
   }
@@ -1670,7 +1691,7 @@
         await navigate(dir);
         await nextPaint();
         const openMs = (performance.now() - t).toFixed(1);
-        const el = fileView.scrollElement();
+        const el = fileView!.scrollElement();
         const scroll = await measureScroll(el);
         const jumpMs = await measureJumps(el);
         await perfReport(
@@ -1726,7 +1747,7 @@
     // Open at the cursor row; the list is virtualized, so bring it into view first.
     const row = cursor >= 0 && selection.has(visible[cursor]?.path) ? cursor : -1;
     if (row >= 0) {
-      fileView.scrollToIndex(row);
+      fileView?.scrollToIndex(row);
       await tick();
     }
     const at = document.querySelector<HTMLElement>("[role=option][aria-selected=true]");
@@ -1743,7 +1764,7 @@
       return () => updateSettings({ showInspector: !settings.showInspector });
     if (key === "k" && !e.shiftKey && !e.altKey)
       return renaming || (e.target as HTMLElement).tagName === "INPUT" ? ignore : openPalette;
-    if (key === "l" && !e.shiftKey) return () => !tagView && toolbar?.edit();
+    if (key === "l" && !e.shiftKey) return () => !noFolder && toolbar?.edit();
     if (key === "t" || key === "w") {
       // Held-down Ctrl+T / Ctrl+W must not open or close tabs in a burst.
       if (!restored || e.repeat) return ignore;
@@ -1793,7 +1814,7 @@
           return () => updateSettings({ showHidden: !settings.showHidden });
       }
     }
-    const row = view === "grid" ? fileView.columns() : 1;
+    const row = view === "grid" ? (fileView?.columns() ?? 1) : 1;
     const grid = view === "grid";
     switch (key) {
       case "Backspace":
@@ -1826,7 +1847,7 @@
         if (shift || e.altKey || !selection.size) return null;
         return e.repeat ? ignore : () => toggleTag(Number(key));
       case "F2":
-        if (selection.size > 1 && !tagView) return () => (bulkOpen = true);
+        if (selection.size > 1 && !noFolder) return () => (bulkOpen = true);
         return cursor >= 0 ? () => (renaming = visible[cursor].path) : null;
       case "Delete":
         return trashSelected;
@@ -1852,7 +1873,6 @@
       imageTools ||
       storageOpen ||
       cleanupOpen ||
-      binOpen ||
       tagsOpen ||
       bulkOpen ||
       paletteOpen
@@ -1978,7 +1998,8 @@
     tags={tagDefs}
     activeTag={tagView?.id ?? null}
     ontag={openTagView}
-    onbin={() => (binOpen = true)}
+    onbin={() => navigate(BIN_PATH)}
+    binShown={inBin}
     folderTint={(p) => tintOf(sideTags[p])}
     {pinHover}
     onpinmenu={(p, e) => {
@@ -2028,10 +2049,11 @@
       {springMs}
       onsettings={() => (settingsOpen = true)}
       tagLabel={tagView?.name ?? null}
+      {inBin}
       inspectorOpen={settings.showInspector}
       oninspector={() => updateSettings({ showInspector: !settings.showInspector })}
     />
-    {#if !tagView && (chipTags.length || tagFilter.length)}
+    {#if !noFolder && (chipTags.length || tagFilter.length)}
       <TagChips
         tags={chipTags}
         active={tagFilter}
@@ -2039,33 +2061,37 @@
         onclear={() => (tagFilter = [])}
       />
     {/if}
-    <FileView
-      bind:this={fileView}
-      entries={visible}
-      {view}
-      {selection}
-      cut={cutSet}
-      {renaming}
-      onitemclick={itemClick}
-      onbackgroundclick={() => selectOnly(-1)}
-      onopen={open}
-      onrename={commitRename}
-      oncancelrename={() => (renaming = null)}
-      ondragout={dragOut}
-      onitemcontextmenu={itemContextMenu}
-      onbackgroundcontextmenu={backgroundContextMenu}
-      onopentab={(p) => openTab(p, true)}
-      {dropTarget}
-      {springPath}
-      {springMs}
-      {tagColors}
-      folderTint={(p) => tintOf(tagMap[p])}
-      onband={bandSelect}
-      {sort}
-      onsort={sortBy}
-      folderSize={(p) => folderSizes[sizeKey(p)]}
-      cursorIndex={cursor}
-    />
+    {#if inBin}
+      <BinView onrestored={() => refresh()} />
+    {:else}
+      <FileView
+        bind:this={fileView}
+        entries={visible}
+        {view}
+        {selection}
+        cut={cutSet}
+        {renaming}
+        onitemclick={itemClick}
+        onbackgroundclick={() => selectOnly(-1)}
+        onopen={open}
+        onrename={commitRename}
+        oncancelrename={() => (renaming = null)}
+        ondragout={dragOut}
+        onitemcontextmenu={itemContextMenu}
+        onbackgroundcontextmenu={backgroundContextMenu}
+        onopentab={(p) => openTab(p, true)}
+        {dropTarget}
+        {springPath}
+        {springMs}
+        {tagColors}
+        folderTint={(p) => tintOf(tagMap[p])}
+        onband={bandSelect}
+        {sort}
+        onsort={sortBy}
+        folderSize={(p) => folderSizes[sizeKey(p)]}
+        cursorIndex={cursor}
+      />
+    {/if}
     <footer class="status" role="status">
       <span
         >{plural(visible.length, "item")}{selection.size
@@ -2084,7 +2110,7 @@
 
   {#if settings.showInspector}
     <Inspector
-      folder={tagView ? null : path}
+      folder={noFolder ? null : path}
       entries={visible}
       picked={selected()}
       tags={tagDefs}
@@ -2132,11 +2158,6 @@
   {#if bulkOpen}
     <BulkRenameDialog items={selected()} onapply={renameBatch} onclose={() => (bulkOpen = false)} />
   {/if}
-
-  {#if binOpen}
-    <BinView onclose={() => (binOpen = false)} onrestored={() => refresh()} />
-  {/if}
-
   {#if cleanupOpen}
     <CleanupView
       start={cleanupStart}

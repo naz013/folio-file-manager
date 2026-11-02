@@ -19,6 +19,7 @@
     onnavigate,
     onsettings,
     tagLabel,
+    inBin = false,
     inspectorOpen,
     oninspector,
   }: {
@@ -38,6 +39,8 @@
     onsettings: () => void;
     /** Set while the list shows the items of a tag instead of a folder. */
     tagLabel: string | null;
+    /** The tab shows the Recycle Bin. */
+    inBin?: boolean;
     inspectorOpen: boolean;
     oninspector: () => void;
   } = $props();
@@ -230,7 +233,11 @@
     <Icon name="chevronRight" />
   </button>
 
-  {#if tagLabel}
+  {#if inBin}
+    <div class="tagview">
+      <strong>Recycle Bin</strong>
+    </div>
+  {:else if tagLabel}
     <div class="tagview">
       <span class="label">Tagged</span>
       <strong>{tagLabel}</strong>

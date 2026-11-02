@@ -83,6 +83,9 @@ export interface BinSize {
   size: number | null;
   entries: number | null;
 }
+/** The Recycle Bin as a place a tab can show, in the spot of a folder path. */
+export const BIN_PATH = "folio:recycle-bin";
+
 export const binList = () => invoke<BinItem[]>("bin_list");
 export const binSizes = () => invoke<BinSize[]>("bin_sizes");
 /** An item as listed; the core acts on it only if all of it still matches. */

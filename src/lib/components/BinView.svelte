@@ -4,16 +4,11 @@
   import { formatDate, formatSize } from "$lib/format";
 
   let {
-    onclose,
     onrestored,
   }: {
-    onclose: () => void;
     /** Items were put back, so the folder shown may have changed. */
     onrestored: () => void;
   } = $props();
-
-  let dialog: HTMLElement;
-  const opener = document.activeElement as HTMLElement | null;
 
   let items = $state<BinItem[]>([]);
   /** Item id → what it weighs, which arrives after the list. */
@@ -82,49 +77,23 @@
   };
 
   onMount(() => {
-    dialog.focus();
     load();
-    return () => opener?.focus?.();
   });
 
   function onkeydown(e: KeyboardEvent) {
-    // Nothing behind the view may act on keys while it is open.
-    e.stopPropagation();
-    if (e.key === "Escape") {
+    // A confirmation open: Escape answers it, and nothing else acts behind it.
+    if (e.key === "Escape" && asking) {
       e.preventDefault();
-      if (asking) asking = null;
-      else onclose();
-    }
-    if (e.key === "Tab") {
-      // Keep focus inside the view.
-      const stops = [...dialog.querySelectorAll<HTMLElement>("button, input")].filter(
-        (el) => !el.hasAttribute("disabled"),
-      );
-      const first = stops[0];
-      const last = stops[stops.length - 1];
-      const at = document.activeElement;
-      if (e.shiftKey && (at === first || at === dialog)) {
-        e.preventDefault();
-        last?.focus();
-      } else if (!e.shiftKey && at === last) {
-        e.preventDefault();
-        first?.focus();
-      }
+      e.stopPropagation();
+      asking = null;
     }
   }
 </script>
 
-<div
-  bind:this={dialog}
-  class="bin"
-  role="dialog"
-  aria-modal="true"
-  aria-labelledby="bin-title"
-  tabindex="-1"
-  {onkeydown}
->
+<!-- Only answers Escape for the confirmation inside it. -->
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<section class="bin" aria-label="Recycle Bin" {onkeydown}>
   <header>
-    <h2 id="bin-title">Recycle Bin</h2>
     <span class="note">{items.length} {items.length === 1 ? "item" : "items"}</span>
     <span class="grow"></span>
     <button class="primary" disabled={!chosen.length || busy || asking !== null} onclick={restore}>
@@ -136,7 +105,6 @@
     <button class="danger" disabled={!items.length || busy} onclick={() => (asking = "all")}>
       Empty Recycle Bin…
     </button>
-    <button onclick={onclose} aria-label="Close the Recycle Bin">✕</button>
   </header>
 
   {#if asking}
@@ -178,31 +146,23 @@
       {/each}
     </ul>
   {/if}
-</div>
+</section>
 
 <style>
   .bin {
-    position: fixed;
-    inset: 0;
-    z-index: 50;
+    flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     gap: var(--space-md);
-    padding: var(--space-lg);
+    padding: var(--space-md) var(--space-lg);
     background: var(--bg-window);
-    outline: none;
   }
 
   header {
     display: flex;
     align-items: center;
     gap: var(--space-sm);
-  }
-
-  h2 {
-    margin: 0;
-    font-size: var(--font-size-heading);
-    font-weight: var(--font-weight-semibold);
   }
 
   .grow {
