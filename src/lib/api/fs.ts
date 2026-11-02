@@ -1,4 +1,4 @@
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
@@ -510,3 +510,34 @@ export function pathSegments(path: string): { name: string; path: string }[] {
     return { name, path: p };
   });
 }
+
+/** What a recursive search looks for (see `search::Query` in src-tauri/src/search.rs). */
+export interface SearchQuery {
+  /** Part of a name, or a pattern with `*` and `?`; empty matches every name. */
+  text: string;
+  /** Size limits in bytes; folders have no size, so a limit leaves them out. */
+  minSize: number | null;
+  maxSize: number | null;
+  hidden: boolean;
+}
+
+/** One message of a running search: more matches, or the end. */
+export type SearchEvent =
+  | { kind: "hits"; hits: Entry[] }
+  | { kind: "done"; scanned: number; cancelled: boolean; truncated: boolean };
+
+/**
+ * Searches `dir` and everything below it, calling `onEvent` as matches are found. Resolves
+ * when the search is over (it ends with a "done" event); `searchCancel(id)` ends it early.
+ */
+export async function searchDir(
+  id: number,
+  dir: string,
+  query: SearchQuery,
+  onEvent: (event: SearchEvent) => void,
+): Promise<void> {
+  const events = new Channel<SearchEvent>();
+  events.onmessage = onEvent;
+  await invoke<void>("search_dir", { id, dir, query, events });
+}
+export const searchCancel = (id: number) => invoke<void>("search_cancel", { id });

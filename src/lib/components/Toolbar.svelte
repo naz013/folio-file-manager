@@ -18,6 +18,8 @@
     onforward,
     onnavigate,
     onsettings,
+    onsearch,
+    searchOpen = false,
     tagLabel,
     placeTitle = null,
     inspectorOpen,
@@ -37,6 +39,9 @@
     /** Resolves to whether the folder was opened (null if superseded); `quiet` leaves the error to the caller. */
     onnavigate: (path: string, quiet?: boolean) => Promise<boolean | null>;
     onsettings: () => void;
+    /** Opens the search bar for the folder. */
+    onsearch: () => void;
+    searchOpen?: boolean;
     /** Set while the list shows the items of a tag instead of a folder. */
     tagLabel: string | null;
     /** The name of the screen the tab shows instead of a folder, if it does. */
@@ -340,6 +345,17 @@
     </button>
   </div>
 
+  <button
+    class="icon-btn"
+    class:on={searchOpen}
+    aria-pressed={searchOpen}
+    disabled={!!placeTitle || !!tagLabel}
+    onclick={onsearch}
+    aria-label="Search (Ctrl+F)"
+    title="Search (Ctrl+F)"
+  >
+    <Icon name="search" size={16} />
+  </button>
   <button
     class="icon-btn"
     class:on={inspectorOpen}

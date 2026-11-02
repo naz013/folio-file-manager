@@ -44,6 +44,7 @@ Only `commands/` and `fs/` exist today; the other modules arrive with their mile
 - Rust reads directories and returns compact entry records (name, kind, size, modified, hidden).
 - Large folders stream in chunks via events so the first screen paints immediately.
 - The UI uses a virtualized list/grid; only visible rows are in the DOM.
+- Recursive search (`search.rs`) walks a folder on a worker thread, never following links, and streams matches over a Tauri `Channel` in batches of up to 64; it stops on cancel and at 5,000 matches. The list shows matches instead of the folder's items, updated in 100 ms steps.
 
 ### Operations engine
 

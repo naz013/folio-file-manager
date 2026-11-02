@@ -12,6 +12,7 @@ use crate::journal::{self, Journal, Step};
 use crate::ops;
 use crate::queue::{self, Kind, Queue};
 use crate::scan::{self, BigFile, Measured, RootInfo, Scanner, Sized};
+use crate::search::{self, Hit, Query};
 use crate::session::{Session, WindowTabs};
 use crate::shelf::{Shelf, ShelfItem};
 use crate::tags::{Tag, Tags};
@@ -1011,6 +1012,64 @@ pub fn measure_cancel(jobs: tauri::State<'_, Measuring>, id: u64) {
     if let Some(cancel) = jobs.jobs().get(&id) {
         cancel.store(true, Ordering::Relaxed);
     }
+}
+
+/// What a search tells the window that started it.
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum SearchEvent {
+    /// More matches, in the order they were found.
+    Hits { hits: Vec<Hit> },
+    /// The search is over; no event follows.
+    Done(search::Outcome),
+}
+
+/// The searches under way, by the id the window gave each, so it can stop them.
+#[derive(Default)]
+pub struct Searching(std::sync::Mutex<std::collections::HashMap<(String, u64), Arc<AtomicBool>>>);
+
+impl Searching {
+    /// The cancel flag of search `id` of the window called `window`. A cancel that comes
+    /// before the search has started leaves the flag set, so the search ends at once.
+    fn flag(&self, window: &str, id: u64) -> Arc<AtomicBool> {
+        let mut jobs = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Arc::clone(jobs.entry((window.to_owned(), id)).or_default())
+    }
+
+    fn forget(&self, window: &str, id: u64) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&(window.to_owned(), id));
+    }
+}
+
+/// Searches a folder and everything below it by name and size. Matches stream to
+/// `events` while the walk goes on; the last event is `Done`. `search_cancel` stops it.
+#[tauri::command(async)]
+pub fn search_dir(
+    window: tauri::WebviewWindow,
+    jobs: tauri::State<'_, Searching>,
+    id: u64,
+    dir: String,
+    query: Query,
+    events: tauri::ipc::Channel<SearchEvent>,
+) {
+    // Ids are counted per window, so the window's name is part of the key.
+    let cancel = jobs.flag(window.label(), id);
+    let outcome = search::search(&PathBuf::from(dir), &query, &cancel, &mut |hits| {
+        events.send(SearchEvent::Hits { hits }).is_ok()
+    });
+    jobs.forget(window.label(), id);
+    let _ = events.send(SearchEvent::Done(outcome));
+}
+
+#[tauri::command]
+pub fn search_cancel(window: tauri::WebviewWindow, jobs: tauri::State<'_, Searching>, id: u64) {
+    jobs.flag(window.label(), id).store(true, Ordering::Relaxed);
 }
 
 #[tauri::command(async)]

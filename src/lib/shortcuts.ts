@@ -35,6 +35,7 @@ export const shortcutGroups: ShortcutGroup[] = [
       { keys: "Alt+←  /  Alt+→", does: "Back and forward" },
       { keys: "Alt+↑", does: "Up one folder" },
       { keys: "Ctrl+L", does: "Go to a path" },
+      { keys: "Ctrl+F", does: "Search the folder and its subfolders" },
       { keys: "Ctrl+K", does: "Command palette" },
     ],
   },

@@ -12,6 +12,7 @@ mod platform;
 mod preview;
 mod queue;
 mod scan;
+mod search;
 mod session;
 mod shelf;
 mod tags;
@@ -151,6 +152,7 @@ pub fn run() {
         .manage(watch::DirWatcher::default())
         .manage(preview::Current::default())
         .manage(commands::Measuring::default())
+        .manage(commands::Searching::default())
         .setup(|app| {
             #[cfg(desktop)]
             app.handle()
@@ -293,6 +295,8 @@ pub fn run() {
             commands::scan_size,
             commands::measure_dir,
             commands::measure_cancel,
+            commands::search_dir,
+            commands::search_cancel,
             commands::scan_roots,
             commands::scan_categories,
             commands::list_drives,

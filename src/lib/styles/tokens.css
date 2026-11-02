@@ -40,6 +40,7 @@
   /* core: size */
   --size-inspector: clamp(220px, 24vw, 280px);
   --size-titlebar: 46px;
+  --size-control-sm: 26px;
 
   /* core: typography */
   --font-sans: "Inter Variable", "Inter", system-ui, "Segoe UI", sans-serif;

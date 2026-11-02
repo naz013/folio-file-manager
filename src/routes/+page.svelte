@@ -28,6 +28,9 @@
     shelfSetMode,
     type ShelfItem,
     tagFiles,
+    searchCancel,
+    searchDir,
+    type SearchQuery,
     tagToggle,
     tagsInDir,
     type Tag,
@@ -82,6 +85,7 @@
   import QuickLook from "$lib/components/QuickLook.svelte";
   import TagDialog from "$lib/components/TagDialog.svelte";
   import BulkRenameDialog from "$lib/components/BulkRenameDialog.svelte";
+  import SearchBar from "$lib/components/SearchBar.svelte";
   import TagChips from "$lib/components/TagChips.svelte";
   import Inspector from "$lib/components/Inspector.svelte";
   import Palette, { type PaletteItem } from "$lib/components/Palette.svelte";
@@ -243,11 +247,24 @@
   let tagFilter = $state<number[]>([]);
   /** The tag whose items the list shows, from every folder, instead of a folder. */
   let tagView = $state<Tag | null>(null);
+  /** The search whose matches the list shows instead of the folder's items; null when none. */
+  let search = $state<{ running: boolean; found: number; truncated: boolean } | null>(null);
+  /** Whether the search bar is open. */
+  let searchOpen = $state(false);
+  let searchBar: SearchBar | undefined = $state();
+  /** What the list's matches were found by, to find them again after a change. */
+  let searchQuery: SearchQuery | null = null;
+  /** Tells a search's answers from those of an older one. */
+  let searchId = 0;
+  /** Matches that have arrived but are not in the list yet: the list is updated in steps. */
+  let searchPending: Entry[] = [];
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
+  const SEARCH_STEP_MS = 100;
   /** The screen the tab shows instead of a folder: the Recycle Bin, Storage, Cleanup or Settings. */
   const place = $derived(placeOf(path));
   const inBin = $derived(place === "bin");
   /** There is no folder to create in, paste into or open a terminal in. */
-  const noFolder = $derived(!!tagView || place !== null);
+  const noFolder = $derived(!!tagView || !!search || place !== null);
   /** The last real folder a tab showed, for Storage to open on. */
   let lastFolder = $state("");
   /** The list's order, set from the column headers. */
@@ -263,6 +280,7 @@
       ),
       sort,
       (p) => folderSizes[sizeKey(p)],
+      !search,
     ),
   );
 
@@ -293,7 +311,7 @@
   async function loadFolderSizes(dir: string) {
     const sizes = await scanChildren(dir).catch(() => []);
     // A tag's items come from many folders, so there is nothing to read for them.
-    if (dir !== path || tagView) return;
+    if (dir !== path || tagView || search) return;
     keepCursor(() => {
       folderSizes = Object.fromEntries(sizes.map((s) => [sizeKey(s.path), s.bytes]));
     });
@@ -307,8 +325,34 @@
 
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
+  /** Ends a search in progress and drops its answers; the list is the caller's to reload. */
+  function stopSearch() {
+    if (search?.running) searchCancel(searchId).catch(() => {});
+    searchId++;
+    search = null;
+    clearTimeout(searchTimer);
+    searchTimer = undefined;
+    searchPending = [];
+  }
+
+  /** Puts the matches that have arrived into the list. */
+  function showFound() {
+    clearTimeout(searchTimer);
+    searchTimer = undefined;
+    if (!searchPending.length) return;
+    entries = entries.concat(searchPending);
+    searchPending = [];
+    if (search) search = { ...search, found: entries.length };
+  }
+
   /** Reloads the current folder, keeping the selection for paths that still exist. */
   async function refresh(select?: string[]) {
+    if (search) {
+      // The matches are not the folder's items: they are found again, unless the search
+      // is still going and will find the change by itself.
+      if (!search.running && searchQuery) runSearch(searchQuery);
+      return;
+    }
     if (place) return;
     const gen = navGen;
     let list: Entry[];
@@ -338,6 +382,9 @@
   /** Shows `target` in the active tab. Resolves to false on error, null if a newer navigation took over. */
   async function load(target: string, quiet = false): Promise<boolean | null> {
     const gen = ++navGen;
+    stopSearch();
+    // Looking at the same folder again (leaving a search) keeps the bar.
+    if (target !== path) searchOpen = false;
     if (placeOf(target)) {
       entries = [];
       path = target;
@@ -385,7 +432,7 @@
 
   /** Opens `target`; resolves to whether it is now shown (null: a newer navigation won). */
   async function navigate(target: string, quiet = false): Promise<boolean | null> {
-    if (target === path && !tagView) return true;
+    if (target === path && !tagView && !search) return true;
     const from = path;
     const ok = await load(target, quiet);
     if (ok) {
@@ -396,8 +443,9 @@
   }
 
   async function goBack() {
-    // A tag view is not a step in the history: back leaves it, for the folder it came from.
-    if (tagView) {
+    // A tag view or a search is not a step in the history: back leaves it, for the folder it came from.
+    if (tagView || search) {
+      searchOpen = false;
       await load(path);
       return;
     }
@@ -1411,6 +1459,63 @@
     anchor = cursor = -1;
   }
 
+  /** Opens the search bar, or moves to it when it is open. */
+  function openSearch() {
+    if (place || tagView) return;
+    searchOpen = true;
+    searchBar?.focus();
+  }
+
+  /** Closes the search bar and shows the folder again. */
+  async function closeSearch() {
+    const was = search;
+    searchOpen = false;
+    stopSearch();
+    if (was) await load(path);
+  }
+
+  /** Searches the open folder and everything below it, showing matches as they come in. */
+  async function runSearch(query: SearchQuery | null) {
+    if (place || tagView) return;
+    if (!query) {
+      // Nothing to look for any more: the folder's own items come back.
+      if (search) {
+        stopSearch();
+        await load(path);
+      }
+      return;
+    }
+    stopSearch();
+    searchQuery = query;
+    const id = ++searchId;
+    navGen++;
+    entries = [];
+    tagMap = {};
+    folderSizes = {};
+    selection.clear();
+    anchor = cursor = -1;
+    renaming = null;
+    search = { running: true, found: 0, truncated: false };
+    fileView?.scrollToTop();
+    try {
+      await searchDir(id, path, { ...query, hidden: settings.showHidden }, (event) => {
+        if (id !== searchId) return;
+        if (event.kind === "hits") {
+          // Sorting the whole list for every batch would stall the window.
+          searchPending.push(...event.hits);
+          searchTimer ??= setTimeout(showFound, SEARCH_STEP_MS);
+        } else {
+          showFound();
+          search = { running: false, found: entries.length, truncated: event.truncated };
+        }
+      });
+    } catch (e) {
+      if (id !== searchId) return;
+      search = { running: false, found: entries.length, truncated: false };
+      notify(String(e), true);
+    }
+  }
+
   /** Shows every item with `tag`, from any folder, in the list. */
   async function openTagView(tag: Tag) {
     const gen = navGen;
@@ -1418,6 +1523,8 @@
     // Another navigation began while the items were being found: it wins.
     if (!found || gen !== navGen) return;
     navGen++;
+    stopSearch();
+    searchOpen = false;
     tagView = tag;
     tagFilter = [];
     entries = found.entries;
@@ -1494,9 +1601,10 @@
         () => selectRange(0, visible.length - 1),
         visible.length > 0,
       ),
+      ...action("Search this folder", "Ctrl+F", openSearch, !place && !tagView),
       ...action("Undo", "Ctrl+Z", () => stepHistory(false)),
       ...action("Redo", "Ctrl+Y", () => stepHistory(true)),
-      ...action("Back", "Alt+←", goBack, back.length > 0 || !!tagView),
+      ...action("Back", "Alt+←", goBack, back.length > 0 || !!tagView || !!search),
       ...action("Forward", "Alt+→", goForward, forward.length > 0),
       ...action("Up one folder", "Alt+↑", goUp),
       ...action("Refresh", undefined, () => refresh()),
@@ -1756,7 +1864,8 @@
   const ignore: Action = () => {};
 
   function goUp() {
-    if (tagView) {
+    if (tagView || search) {
+      searchOpen = false;
       load(path);
       return;
     }
@@ -1809,6 +1918,7 @@
     if (key === "k" && !e.shiftKey && !e.altKey)
       return renaming || (e.target as HTMLElement).tagName === "INPUT" ? ignore : openPalette;
     if (key === "l" && !e.shiftKey) return () => !noFolder && toolbar?.edit();
+    if (key === "f" && !e.shiftKey && !e.altKey) return openSearch;
     if (key === "t" || key === "w") {
       // Held-down Ctrl+T / Ctrl+W must not open or close tabs in a burst.
       if (!restored || e.repeat) return ignore;
@@ -2098,6 +2208,8 @@
       {springPath}
       {springMs}
       onsettings={() => showScreen(SETTINGS_PATH)}
+      onsearch={openSearch}
+      {searchOpen}
       tagLabel={tagView?.name ?? null}
       placeTitle={placeTitle(path)}
       inspectorOpen={settings.showInspector}
@@ -2109,6 +2221,16 @@
         active={tagFilter}
         ontoggle={toggleFilter}
         onclear={() => (tagFilter = [])}
+      />
+    {/if}
+    {#if searchOpen && !place && !tagView}
+      <SearchBar
+        bind:this={searchBar}
+        folder={path.split(/[\\/]/).filter(Boolean).pop() ?? path}
+        status={search}
+        onquery={runSearch}
+        onstop={() => searchCancel(searchId).catch(() => {})}
+        onclose={closeSearch}
       />
     {/if}
     {#if place === "bin"}
