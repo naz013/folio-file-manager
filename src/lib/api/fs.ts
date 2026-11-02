@@ -162,6 +162,25 @@ export const cleanupPartials = (olderThanDays: number, limit: number) =>
 /** Moves listed unfinished copies to the Recycle Bin, those still exactly as listed. */
 export const cleanupTrashPartials = (items: PartialCopy[]) =>
   invoke<CleanupTrash>("cleanup_trash_partials", { items });
+/** A file that programs can make again, in one of the few places cleanup looks for them. */
+export interface TempFile extends BigFile {
+  /** The kind of place it is in: "Temporary files", "Chrome cache". */
+  place: string;
+}
+/** A place on the list of where temp files and caches are looked for. */
+export interface TempPlace {
+  label: string;
+  path: string;
+  minAgeDays: number;
+}
+/** Files in the short list of places that keep throw-away files, and the places looked in. */
+export const cleanupTemp = (limit: number) =>
+  invoke<{ files: TempFile[]; places: TempPlace[]; complete: boolean }>("cleanup_temp", {
+    limit,
+  });
+/** Moves listed temp files to the Recycle Bin: those still in a listed place and exactly as listed. */
+export const cleanupTrashTemp = (items: TempFile[]) =>
+  invoke<CleanupTrash>("cleanup_trash_temp", { items });
 /** Copies of one file: same size and same content, newest first. */
 export interface DuplicateGroup {
   id: string;

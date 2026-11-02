@@ -6,9 +6,11 @@
     cleanupLargeOld,
     cleanupOldDownloads,
     cleanupPartials,
+    cleanupTemp,
     cleanupTrash,
     cleanupTrashDuplicates,
     cleanupTrashPartials,
+    cleanupTrashTemp,
     listDrives,
     onQueueUpdate,
     parentOf,
@@ -17,6 +19,8 @@
     type DuplicateGroup,
     type Drive,
     type PartialCopy,
+    type TempFile,
+    type TempPlace,
   } from "$lib/api/fs";
   import { formatDate, formatSize } from "$lib/format";
   import {
@@ -35,7 +39,7 @@
     onopen,
   }: {
     /** Which list to open on. */
-    start?: "large" | "downloads" | "duplicates" | "partials";
+    start?: "large" | "downloads" | "duplicates" | "partials" | "temp";
     /** Show this folder in the browser. */
     onopen: (path: string) => void;
   } = $props();
@@ -48,11 +52,21 @@
 
   /** The two plain lists, kept while the person looks at another one, so what was picked
    * in them counts toward the move. */
-  let lists = $state.raw<{ large: BigFile[]; downloads: BigFile[]; partials: PartialCopy[] }>({
+  let lists = $state.raw<{
+    large: BigFile[];
+    downloads: BigFile[];
+    partials: PartialCopy[];
+    temp: TempFile[];
+  }>({
     large: [],
     downloads: [],
     partials: [],
+    temp: [],
   });
+  /** Where temp files and caches are looked for: the whole rule, shown so it can be checked. */
+  let tempPlaces = $state.raw<TempPlace[]>([]);
+  /** False if a place was too big to look through whole. */
+  let tempComplete = $state(true);
   let drives = $state.raw<Drive[]>([]);
   let moving = $state(false);
   /** Nothing is picked until the person picks it: cleanup only suggests (ADR 0003). */
@@ -64,7 +78,7 @@
   // `start` only picks the list the view opens on; after that the person switches it.
   // What is looked for: big files nobody touches, or installers and archives in Downloads.
   // svelte-ignore state_referenced_locally
-  let mode = $state<"large" | "downloads" | "duplicates" | "partials">(start);
+  let mode = $state<"large" | "downloads" | "duplicates" | "partials" | "temp">(start);
   const files = $derived(mode === "duplicates" ? [] : lists[mode]);
   /** The Recycle Bin jobs started from here; the lists refresh when they have all ended. */
   let trashJobs = $state<number[]>([]);
@@ -79,6 +93,7 @@
     downloads: true,
     duplicates: start === "duplicates",
     partials: start === "partials",
+    temp: start === "temp",
   });
   /** What each list was last loaded for, so switching back doesn't search again. */
   const loadedFor: Record<string, string> = {};
@@ -107,7 +122,7 @@
   );
 
   type Category = {
-    id: "large" | "downloads" | "duplicates" | "partials";
+    id: "large" | "downloads" | "duplicates" | "partials" | "temp";
     label: string;
     count: number;
     bytes: number;
@@ -143,6 +158,7 @@
     const large = included.large ? take(lists.large) : [];
     const downloads = included.downloads ? take(lists.downloads) : [];
     const partials = included.partials ? take(lists.partials) : [];
+    const temp = included.temp ? take(lists.temp) : [];
     const singles = [...large, ...downloads];
     const dupGroups = included.duplicates ? dupRemoval.filter((g) => g.remove.length) : [];
     const dupFiles = dupGroups.flatMap((g) => g.files.filter((f) => g.remove.includes(f.path)));
@@ -152,8 +168,9 @@
       { id: "downloads", label: "Old downloads", count: downloads.length, bytes: sum(downloads) },
       { id: "duplicates", label: "Duplicates", count: dupFiles.length, bytes: sum(dupFiles) },
       { id: "partials", label: "Unfinished copies", count: partials.length, bytes: sum(partials) },
+      { id: "temp", label: "Temp files & caches", count: temp.length, bytes: sum(temp) },
     ];
-    const all = [...singles, ...dupFiles, ...partials];
+    const all = [...singles, ...dupFiles, ...partials, ...temp];
     // Per drive, so the space it gives back can be shown against what it has free.
     const byDrive: Record<string, number> = {};
     for (const f of all) {
@@ -163,6 +180,7 @@
     return {
       singles,
       partials,
+      temp,
       dupGroups,
       categories,
       count: all.length,
@@ -192,7 +210,9 @@
           ? [settings.cleanupDownloadsDays]
           : list === "partials"
             ? [settings.cleanupPartialDays]
-            : [settings.cleanupDupMinMb],
+            : list === "temp"
+              ? []
+              : [settings.cleanupDupMinMb],
     );
 
   async function load() {
@@ -226,6 +246,25 @@
         loadedFor.duplicates = key;
         return;
       }
+      if (target === "temp") {
+        // A short fixed list of places, read directly: no scan is needed.
+        const found = await cleanupTemp(LIMIT);
+        if (id !== loadId) return;
+        lists = { ...lists, temp: found.files };
+        tempPlaces = found.places;
+        tempComplete = found.complete;
+        scannedAny = true;
+        loadedFor.temp = key;
+        for (const path of Object.keys(picked)) {
+          if (
+            ![...lists.large, ...lists.downloads, ...lists.partials, ...lists.temp].some(
+              (f) => f.path === path,
+            )
+          )
+            delete picked[path];
+        }
+        return;
+      }
       const [found, roots] = await Promise.all([
         target === "large"
           ? cleanupLargeOld(settings.cleanupMinMb * 1024 * 1024, settings.cleanupAgeDays, LIMIT)
@@ -241,7 +280,11 @@
       loadedFor[target] = key;
       // Only what is still listed in one of the lists can stay picked.
       for (const path of Object.keys(picked)) {
-        if (![...lists.large, ...lists.downloads, ...lists.partials].some((f) => f.path === path))
+        if (
+          ![...lists.large, ...lists.downloads, ...lists.partials, ...lists.temp].some(
+            (f) => f.path === path,
+          )
+        )
           delete picked[path];
       }
     } catch (e) {
@@ -269,7 +312,7 @@
 
   /** Everything is out of date once files have moved: forget the lists and look again. */
   async function refreshAll() {
-    lists = { large: [], downloads: [], partials: [] };
+    lists = { large: [], downloads: [], partials: [], temp: [] };
     groups = [];
     for (const key of Object.keys(keep)) delete keep[key];
     for (const key of Object.keys(skipped)) delete skipped[key];
@@ -284,7 +327,7 @@
     if (busy || !plan.count) return;
     // What the button promised, taken before anything is sent; the inputs are locked while
     // it runs.
-    const { singles, partials, dupGroups, heldBack, keptPaths } = plan;
+    const { singles, partials, temp, dupGroups, heldBack, keptPaths } = plan;
     moving = true;
     error = "";
     const jobs: number[] = [];
@@ -305,6 +348,12 @@
         leftAlone += done.leftAlone;
         if (done.job !== null) jobs.push(done.job);
         for (const f of partials) delete picked[f.path];
+      }
+      if (temp.length) {
+        const done = await cleanupTrashTemp(temp);
+        leftAlone += done.leftAlone;
+        if (done.job !== null) jobs.push(done.job);
+        for (const f of temp) delete picked[f.path];
       }
       if (dupGroups.length) {
         const done = await cleanupTrashDuplicates(dupGroups);
@@ -385,6 +434,16 @@
     >
       Unfinished copies
     </button>
+    <button
+      class:chosen={mode === "temp"}
+      aria-pressed={mode === "temp"}
+      onclick={() => {
+        mode = "temp";
+        included.temp = true;
+      }}
+    >
+      Temp files &amp; caches
+    </button>
   </div>
 
   <div class="filters">
@@ -412,6 +471,8 @@
           {/each}
         </select>
       </label>
+    {:else if mode === "temp"}
+      <span class="fixed">Only the places listed below are looked in.</span>
     {:else if mode === "downloads"}
       <label>
         Installers and archives not changed for
@@ -548,7 +609,10 @@
         </p>
       {:else if !files.length}
         <p class="empty" role="status">
-          {#if mode === "partials"}
+          {#if mode === "temp"}
+            No temp file or cache in the places below has been left alone long enough. A file whose
+            age can't be told is never listed.
+          {:else if mode === "partials"}
             No unfinished copy has been left alone for {ageLabel(settings.cleanupPartialDays)},
             among the scanned folders and files of 1 MB or more.
           {:else if mode === "downloads"}
@@ -562,7 +626,14 @@
           {/if}
         </p>
       {:else}
-        {#if mode === "partials"}
+        {#if mode === "temp"}
+          <p class="note">
+            These are files programs can make again. A program that is running may be using one, so
+            close the programs first; it is better to wait than to guess. Files go to the Recycle
+            Bin like anything else.
+            {#if !tempComplete}A place was too big to look through whole, so there may be more.{/if}
+          </p>
+        {:else if mode === "partials"}
           <p class="note">
             A copy leaves one of these behind when it is stopped before it finishes. Check each one
             before you move it: if Folio told you a copy could not be renamed and is complete at a
@@ -597,6 +668,7 @@
                   <span class="where">{parentOf(f.path) ?? ""}</span>
                 </span>
                 {#if "isDir" in f && f.isDir}<span class="muted">folder</span>{/if}
+                {#if "place" in f}<span class="muted">{f.place}</span>{/if}
                 <span class="muted">{formatDate(f.modified * 1000)}</span>
                 <span class="size">{formatSize(f.size)}</span>
               </label>
@@ -611,6 +683,22 @@
             </li>
           {/each}
         </ul>
+      {/if}
+
+      {#if mode === "temp"}
+        <div class="places">
+          <h4>Where it looks</h4>
+          <ul>
+            {#each tempPlaces as p (p.path)}
+              <li>
+                <strong>{p.label}</strong>, files left alone for {ageLabel(p.minAgeDays)}
+                <span class="where">{p.path}</span>
+              </li>
+            {:else}
+              <li>Nowhere on this computer has a place on the list.</li>
+            {/each}
+          </ul>
+        </div>
       {/if}
     </div>
 
@@ -730,6 +818,38 @@
     margin: var(--space-xl) 0;
     color: var(--text-secondary);
     text-align: center;
+  }
+
+  .fixed {
+    color: var(--text-secondary);
+    font-size: var(--font-size-caption);
+  }
+
+  .places {
+    margin: var(--space-md) 0 0;
+    padding: var(--space-md);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    font-size: var(--font-size-caption);
+  }
+
+  .places h4 {
+    margin: 0 0 var(--space-xs);
+    font-size: var(--font-size-body);
+  }
+
+  .places ul {
+    display: grid;
+    gap: var(--space-xs);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .places .where {
+    display: block;
+    color: var(--text-tertiary);
+    overflow-wrap: anywhere;
   }
 
   .error {

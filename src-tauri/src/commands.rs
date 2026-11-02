@@ -7,6 +7,7 @@
 )]
 
 use crate::cleanup;
+use crate::cleanup_temp;
 use crate::fs::{self, Entry};
 use crate::journal::{self, Journal, Step};
 use crate::ops;
@@ -1455,6 +1456,76 @@ pub fn cleanup_trash_partials(
         job: Some(job),
         left_alone,
     }
+}
+
+/// The folders the list of temp places hangs from: the home folder and `Local AppData` as the
+/// system names them, never from environment variables a program may have changed.
+fn temp_env(app: &tauri::AppHandle) -> CmdResult<cleanup_temp::Env> {
+    let home = app.path().home_dir().map_err(|e| e.to_string())?;
+    Ok(cleanup_temp::Env::current(
+        home,
+        app.path().local_data_dir().ok(),
+    ))
+}
+
+/// Files in the short list of places that programs keep throw-away files in (temporary
+/// folders, browser and program caches) that have been left alone for that place's minimum
+/// time, with the places looked in. Only suggestions.
+#[tauri::command(async)]
+pub fn cleanup_temp(app: tauri::AppHandle, limit: u32) -> CmdResult<cleanup_temp::Listing> {
+    Ok(cleanup_temp::temp_files(
+        &temp_env(&app)?,
+        journal::unix_now(),
+        limit as usize,
+    ))
+}
+
+/// Moves files from a temp-files list to the Recycle Bin: only those that are, right now,
+/// still in a place on the list, still exactly as listed and still left alone for long
+/// enough. Anything else is left alone, whatever the list says. Which of them fit in the
+/// drive's bin is decided when the job runs.
+#[tauri::command(async)]
+pub fn cleanup_trash_temp(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    queue: tauri::State<'_, Arc<Queue>>,
+    items: Vec<cleanup_temp::TempFile>,
+) -> CmdResult<CleanupTrash> {
+    let env = temp_env(&app)?;
+    // What comes back has its links resolved, and that is what is moved.
+    let ok = cleanup_temp::still_listed(&items, &env, journal::unix_now());
+    let left_alone = items.len() - ok.len();
+    if ok.is_empty() {
+        return Ok(CleanupTrash {
+            job: None,
+            left_alone,
+        });
+    }
+    let targets: Vec<PathBuf> = ok.iter().map(|f| PathBuf::from(&f.path)).collect();
+    let pick: TrashFilter = Box::new(move |targets| {
+        // Looked at again now, when the job runs: a program may have used a file meanwhile,
+        // and the room in the bin is whatever is left.
+        let listed: Vec<cleanup_temp::TempFile> = ok
+            .into_iter()
+            .filter(|f| targets.iter().any(|t| t.to_string_lossy() == f.path))
+            .collect();
+        let wanted: Vec<BigFile> = cleanup_temp::still_listed(&listed, &env, journal::unix_now())
+            .iter()
+            .map(BigFile::from)
+            .collect();
+        let fits = cleanup::within_bin(wanted.iter().collect(), crate::platform::recycle_limit);
+        let no_room = wanted.len() - fits.len();
+        Picked {
+            paths: fits.iter().map(|f| PathBuf::from(&f.path)).collect(),
+            no_room,
+            last_look: None,
+        }
+    });
+    let job = submit_trash(&app, &window, &queue, targets, Some(pick));
+    Ok(CleanupTrash {
+        job: Some(job),
+        left_alone,
+    })
 }
 
 /// A drive with its capacity and free space.

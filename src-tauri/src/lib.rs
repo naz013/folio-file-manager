@@ -3,6 +3,7 @@ mod civil;
 mod cleanup;
 #[cfg(test)]
 mod cleanup_corpus;
+mod cleanup_temp;
 mod commands;
 mod crash;
 mod fs;
@@ -291,6 +292,8 @@ pub fn run() {
             commands::cleanup_trash,
             commands::cleanup_partials,
             commands::cleanup_trash_partials,
+            commands::cleanup_temp,
+            commands::cleanup_trash_temp,
             commands::cleanup_duplicates,
             commands::cleanup_duplicates_cancel,
             commands::cleanup_trash_duplicates,
