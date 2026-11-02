@@ -1,0 +1,139 @@
+/* Landing page styles. Colors, spacing and type come from tokens.css, copied from the app at build. */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-window);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-title);
+  line-height: 1.6;
+}
+
+.wrap {
+  max-width: 880px;
+  margin: 0 auto;
+  padding-inline: var(--space-2xl);
+}
+
+.top,
+.foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-block: var(--space-2xl);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  color: var(--text-primary);
+  font-weight: var(--font-weight-semibold);
+  text-decoration: none;
+}
+
+.link {
+  color: var(--text-secondary);
+}
+
+.link:hover {
+  color: var(--accent-default);
+}
+
+.hero {
+  padding-block: calc(var(--space-3xl) * 2) var(--space-3xl);
+}
+
+h1 {
+  margin: 0 0 var(--space-lg);
+  font-size: clamp(32px, 6vw, 48px);
+  font-weight: var(--font-weight-bold);
+  line-height: 1.15;
+}
+
+.lead {
+  max-width: 560px;
+  margin: 0 0 var(--space-3xl);
+  color: var(--text-secondary);
+  font-size: var(--font-size-heading);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-lg);
+}
+
+.button {
+  padding: var(--space-md) var(--space-2xl);
+  border-radius: var(--radius-lg);
+  background: var(--accent-default);
+  color: var(--text-on-accent);
+  font-weight: var(--font-weight-semibold);
+  text-decoration: none;
+  box-shadow: var(--shadow-raised);
+}
+
+.button:hover {
+  background: var(--accent-hover);
+}
+
+.button:focus-visible,
+.brand:focus-visible,
+.link:focus-visible {
+  outline: 2px solid var(--accent-default);
+  outline-offset: 3px;
+}
+
+.note {
+  color: var(--text-tertiary);
+  font-size: var(--font-size-body);
+}
+
+.features {
+  padding-block: var(--space-3xl) calc(var(--space-3xl) * 2);
+}
+
+h2 {
+  margin: 0 0 var(--space-2xl);
+  font-size: var(--font-size-display);
+  line-height: 1.2;
+}
+
+.features ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--space-lg);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.features li {
+  padding: var(--space-xl);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xl);
+  background: var(--bg-subtle);
+}
+
+h3 {
+  margin: 0 0 var(--space-xs);
+  font-size: var(--font-size-title);
+  font-weight: var(--font-weight-semibold);
+}
+
+.features p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+}
+
+.foot {
+  border-top: 1px solid var(--border-default);
+  color: var(--text-tertiary);
+  font-size: var(--font-size-body);
+}

@@ -1,0 +1,35 @@
+name: Pages
+
+# Deploys site/ (the landing page) to GitHub Pages. Needs Pages enabled in the repo
+# settings with Source set to "GitHub Actions".
+on:
+  push:
+    branches: [main]
+    paths: ["site/**", "src/lib/styles/tokens.css", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Share the app's design tokens
+        run: cp src/lib/styles/tokens.css site/tokens.css
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4
