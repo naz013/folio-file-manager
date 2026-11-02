@@ -9,6 +9,7 @@
     openPath,
     type CrashState,
   } from "$lib/api/fs";
+  import { shortcutGroups } from "$lib/shortcuts";
   import { SPRING_DELAYS_MS, settings, updateSettings } from "$lib/settings.svelte";
   import { themes, type Theme } from "$lib/theme";
   import { checkForUpdate, updates } from "$lib/updates.svelte";
@@ -105,6 +106,16 @@
     updateSettings({ startLocation: path });
   }
 
+  /** "main": the settings; "shortcuts": the list of keyboard shortcuts. */
+  let screen = $state<"main" | "shortcuts">("main");
+
+  async function show(next: "main" | "shortcuts") {
+    screen = next;
+    await tick();
+    dialog.scrollTop = 0;
+    dialog.focus();
+  }
+
   function onkeydown(e: KeyboardEvent) {
     // Nothing behind the dialog may act on keys while it is open.
     e.stopPropagation();
@@ -128,7 +139,8 @@
     }
     if (e.key === "Escape") {
       e.preventDefault();
-      onclose();
+      if (screen === "shortcuts") show("main");
+      else onclose();
     }
   }
 
@@ -147,226 +159,252 @@
     {onkeydown}
   >
     <header>
-      <h2 id="settings-title">Settings</h2>
+      {#if screen === "shortcuts"}
+        <span class="heading">
+          <button class="back" onclick={() => show("main")}>← Settings</button>
+          <h2 id="settings-title">Keyboard shortcuts</h2>
+        </span>
+      {:else}
+        <h2 id="settings-title">Settings</h2>
+      {/if}
       <button class="done" onclick={onclose}>Done</button>
     </header>
 
-    <section>
-      <h3>General</h3>
+    {#if screen === "shortcuts"}
+      {#each shortcutGroups as group (group.title)}
+        <section>
+          <h3>{group.title}</h3>
+          {#each group.items as item (item.keys + item.does)}
+            <div class="row shortcut">
+              <span>{item.does}</span>
+              <kbd>{item.keys}</kbd>
+            </div>
+          {/each}
+        </section>
+      {/each}
+    {:else}
+      <section>
+        <h3>General</h3>
 
-      <div class="row">
-        <label for="start">Start location</label>
-        <div class="field">
+        <div class="row">
+          <label for="start">Start location</label>
+          <div class="field">
+            <select
+              id="start"
+              value={showCustom ? "custom" : settings.startLocation}
+              onchange={(e) => {
+                const value = e.currentTarget.value;
+                if (value === "custom") pickCustom();
+                else {
+                  pickingCustom = false;
+                  customError = "";
+                  updateSettings({ startLocation: value });
+                }
+              }}
+            >
+              {#each places as [value, name] (value)}
+                <option {value}>{name}</option>
+              {/each}
+              <option value="custom">Other folder…</option>
+            </select>
+            {#if showCustom}
+              <input
+                bind:this={customInput}
+                aria-label="Start folder path"
+                aria-invalid={!!customError}
+                placeholder="Path of the folder"
+                spellcheck="false"
+                bind:value={custom}
+                onblur={commitCustom}
+                onkeydown={(e) => e.key === "Enter" && commitCustom()}
+              />
+              {#if customError}<span class="error" role="alert">{customError}</span>{/if}
+            {/if}
+          </div>
+        </div>
+
+        <div class="row">
+          <span id="hidden-label">Show hidden files</span>
+          <input
+            type="checkbox"
+            class="switch"
+            role="switch"
+            aria-labelledby="hidden-label"
+            checked={settings.showHidden}
+            onchange={(e) => updateSettings({ showHidden: e.currentTarget.checked })}
+          />
+        </div>
+
+        <div class="row">
+          <span id="frame-label">Use the system window buttons</span>
+          <input
+            type="checkbox"
+            class="switch"
+            role="switch"
+            aria-labelledby="frame-label"
+            checked={settings.nativeFrame}
+            onchange={(e) => updateSettings({ nativeFrame: e.currentTarget.checked })}
+          />
+        </div>
+
+        <div class="row">
+          <span id="view-label">Default view</span>
+          <div class="segments" role="group" aria-labelledby="view-label">
+            {#each ["grid", "list"] as const as mode (mode)}
+              <button
+                class:active={settings.defaultView === mode}
+                aria-pressed={settings.defaultView === mode}
+                onclick={() => updateSettings({ defaultView: mode })}
+              >
+                {mode === "grid" ? "Grid" : "List"}
+              </button>
+            {/each}
+          </div>
+        </div>
+
+        <div class="row">
+          <span id="theme-label">Theme</span>
+          <div class="segments" role="group" aria-labelledby="theme-label">
+            {#each themes as t (t)}
+              <button
+                class:active={theme === t}
+                aria-pressed={theme === t}
+                onclick={() => ontheme(t)}
+              >
+                {label[t]}
+              </button>
+            {/each}
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h3>Dragging</h3>
+
+        <div class="row">
+          <label for="spring">Open folders and tabs while dragging after</label>
           <select
-            id="start"
-            value={showCustom ? "custom" : settings.startLocation}
+            id="spring"
+            value={settings.springDelayMs === null ? "off" : String(settings.springDelayMs)}
             onchange={(e) => {
-              const value = e.currentTarget.value;
-              if (value === "custom") pickCustom();
-              else {
-                pickingCustom = false;
-                customError = "";
-                updateSettings({ startLocation: value });
-              }
+              const v = e.currentTarget.value;
+              updateSettings({ springDelayMs: v === "off" ? null : Number(v) });
             }}
           >
-            {#each places as [value, name] (value)}
-              <option {value}>{name}</option>
+            <option value="off">Never</option>
+            {#each SPRING_DELAYS_MS as ms (ms)}
+              <option value={String(ms)}>{ms / 1000} s</option>
             {/each}
-            <option value="custom">Other folder…</option>
           </select>
-          {#if showCustom}
-            <input
-              bind:this={customInput}
-              aria-label="Start folder path"
-              aria-invalid={!!customError}
-              placeholder="Path of the folder"
-              spellcheck="false"
-              bind:value={custom}
-              onblur={commitCustom}
-              onkeydown={(e) => e.key === "Enter" && commitCustom()}
-            />
-            {#if customError}<span class="error" role="alert">{customError}</span>{/if}
-          {/if}
         </div>
-      </div>
 
-      <div class="row">
-        <span id="hidden-label">Show hidden files</span>
-        <input
-          type="checkbox"
-          class="switch"
-          role="switch"
-          aria-labelledby="hidden-label"
-          checked={settings.showHidden}
-          onchange={(e) => updateSettings({ showHidden: e.currentTarget.checked })}
-        />
-      </div>
-
-      <div class="row">
-        <span id="frame-label">Use the system window buttons</span>
-        <input
-          type="checkbox"
-          class="switch"
-          role="switch"
-          aria-labelledby="frame-label"
-          checked={settings.nativeFrame}
-          onchange={(e) => updateSettings({ nativeFrame: e.currentTarget.checked })}
-        />
-      </div>
-
-      <div class="row">
-        <span id="view-label">Default view</span>
-        <div class="segments" role="group" aria-labelledby="view-label">
-          {#each ["grid", "list"] as const as mode (mode)}
-            <button
-              class:active={settings.defaultView === mode}
-              aria-pressed={settings.defaultView === mode}
-              onclick={() => updateSettings({ defaultView: mode })}
-            >
-              {mode === "grid" ? "Grid" : "List"}
-            </button>
-          {/each}
-        </div>
-      </div>
-
-      <div class="row">
-        <span id="theme-label">Theme</span>
-        <div class="segments" role="group" aria-labelledby="theme-label">
-          {#each themes as t (t)}
-            <button
-              class:active={theme === t}
-              aria-pressed={theme === t}
-              onclick={() => ontheme(t)}
-            >
-              {label[t]}
-            </button>
-          {/each}
-        </div>
-      </div>
-    </section>
-
-    <section>
-      <h3>Dragging</h3>
-
-      <div class="row">
-        <label for="spring">Open folders and tabs while dragging after</label>
-        <select
-          id="spring"
-          value={settings.springDelayMs === null ? "off" : String(settings.springDelayMs)}
-          onchange={(e) => {
-            const v = e.currentTarget.value;
-            updateSettings({ springDelayMs: v === "off" ? null : Number(v) });
-          }}
-        >
-          <option value="off">Never</option>
-          {#each SPRING_DELAYS_MS as ms (ms)}
-            <option value={String(ms)}>{ms / 1000} s</option>
-          {/each}
-        </select>
-      </div>
-
-      <div class="row">
-        <span id="return-label">Return to the start folder after dropping</span>
-        <input
-          type="checkbox"
-          class="switch"
-          role="switch"
-          aria-labelledby="return-label"
-          checked={settings.returnAfterDrop}
-          onchange={(e) => updateSettings({ returnAfterDrop: e.currentTarget.checked })}
-        />
-      </div>
-    </section>
-
-    <section>
-      <h3>Updates</h3>
-
-      <div class="row">
-        <span id="update-label">Check for updates automatically</span>
-        <input
-          type="checkbox"
-          class="switch"
-          role="switch"
-          aria-labelledby="update-label"
-          checked={settings.updateCheck}
-          onchange={(e) => updateSettings({ updateCheck: e.currentTarget.checked })}
-        />
-      </div>
-      <p class="note">
-        Once a day Folio asks its release page whether a new version exists. Nothing else is sent.
-        An update is only installed when you say so, and never while files are being copied or
-        moved.
-      </p>
-
-      <div class="row">
-        <span>Folio {version}{updateStatus ? ` · ${updateStatus}` : ""}</span>
-        <button
-          onclick={() => checkForUpdate(true)}
-          disabled={updates.phase === "checking" || updates.phase === "downloading"}
-        >
-          Check now
-        </button>
-      </div>
-    </section>
-
-    <section>
-      <h3>Help</h3>
-
-      <div class="row">
-        <span>Welcome tour</span>
-        <button
-          onclick={() => {
-            updateSettings({ onboarded: false });
-            onclose();
-          }}
-        >
-          Show again
-        </button>
-      </div>
-    </section>
-
-    <section>
-      <h3>Privacy</h3>
-
-      <div class="row">
-        <span id="crash-label">Keep crash reports on this computer</span>
-        <input
-          type="checkbox"
-          class="switch"
-          role="switch"
-          aria-labelledby="crash-label"
-          checked={crash?.consent === true}
-          onchange={async (e) => {
-            const box = e.currentTarget;
-            try {
-              crash = await crashSet(box.checked);
-            } catch {
-              box.checked = crash?.consent === true;
-            }
-          }}
-        />
-      </div>
-      <p class="note">Nothing is sent anywhere. Reports stay in a folder you can open.</p>
-
-      {#if crash?.consent}
         <div class="row">
-          <span>{crashFree}</span>
-          <span class="buttons">
-            <button onclick={() => crash && openPath(crash.dir)} disabled={!crash?.reports}>
-              Show {crash?.reports ?? 0}
-              {crash?.reports === 1 ? "report" : "reports"}
-            </button>
-            <button
-              onclick={async () => (crash = await crashClear().catch(() => crash))}
-              disabled={!crash?.reports && !crash?.crashed}
-            >
-              Delete
-            </button>
-          </span>
+          <span id="return-label">Return to the start folder after dropping</span>
+          <input
+            type="checkbox"
+            class="switch"
+            role="switch"
+            aria-labelledby="return-label"
+            checked={settings.returnAfterDrop}
+            onchange={(e) => updateSettings({ returnAfterDrop: e.currentTarget.checked })}
+          />
         </div>
-      {/if}
-    </section>
+      </section>
+
+      <section>
+        <h3>Updates</h3>
+
+        <div class="row">
+          <span id="update-label">Check for updates automatically</span>
+          <input
+            type="checkbox"
+            class="switch"
+            role="switch"
+            aria-labelledby="update-label"
+            checked={settings.updateCheck}
+            onchange={(e) => updateSettings({ updateCheck: e.currentTarget.checked })}
+          />
+        </div>
+        <p class="note">
+          Once a day Folio asks its release page whether a new version exists. Nothing else is sent.
+          An update is only installed when you say so, and never while files are being copied or
+          moved.
+        </p>
+
+        <div class="row">
+          <span>Folio {version}{updateStatus ? ` · ${updateStatus}` : ""}</span>
+          <button
+            onclick={() => checkForUpdate(true)}
+            disabled={updates.phase === "checking" || updates.phase === "downloading"}
+          >
+            Check now
+          </button>
+        </div>
+      </section>
+
+      <section>
+        <h3>Help</h3>
+
+        <div class="row">
+          <span>Keyboard shortcuts</span>
+          <button onclick={() => show("shortcuts")}>View</button>
+        </div>
+
+        <div class="row">
+          <span>Welcome tour</span>
+          <button
+            onclick={() => {
+              updateSettings({ onboarded: false });
+              onclose();
+            }}
+          >
+            Show again
+          </button>
+        </div>
+      </section>
+
+      <section>
+        <h3>Privacy</h3>
+
+        <div class="row">
+          <span id="crash-label">Keep crash reports on this computer</span>
+          <input
+            type="checkbox"
+            class="switch"
+            role="switch"
+            aria-labelledby="crash-label"
+            checked={crash?.consent === true}
+            onchange={async (e) => {
+              const box = e.currentTarget;
+              try {
+                crash = await crashSet(box.checked);
+              } catch {
+                box.checked = crash?.consent === true;
+              }
+            }}
+          />
+        </div>
+        <p class="note">Nothing is sent anywhere. Reports stay in a folder you can open.</p>
+
+        {#if crash?.consent}
+          <div class="row">
+            <span>{crashFree}</span>
+            <span class="buttons">
+              <button onclick={() => crash && openPath(crash.dir)} disabled={!crash?.reports}>
+                Show {crash?.reports ?? 0}
+                {crash?.reports === 1 ? "report" : "reports"}
+              </button>
+              <button
+                onclick={async () => (crash = await crashClear().catch(() => crash))}
+                disabled={!crash?.reports && !crash?.crashed}
+              >
+                Delete
+              </button>
+            </span>
+          </div>
+        {/if}
+      </section>
+    {/if}
   </div>
 </div>
 
@@ -411,6 +449,28 @@
     font-weight: var(--font-weight-semibold);
     letter-spacing: 0.4px;
     text-transform: uppercase;
+  }
+
+  .heading {
+    display: grid;
+    gap: var(--space-2xs);
+    justify-items: start;
+  }
+
+  .back {
+    color: var(--accent-default);
+    font-size: var(--font-size-caption);
+  }
+
+  .shortcut kbd {
+    flex-shrink: 0;
+    padding: var(--space-2xs) var(--space-sm);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    background: var(--bg-control);
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: var(--font-size-caption);
   }
 
   .done {
