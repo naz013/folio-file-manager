@@ -245,6 +245,8 @@ pub fn run() {
             commands::tag_create,
             commands::tag_delete,
             commands::tag_toggle,
+            commands::tags_export,
+            commands::tags_import,
             commands::tag_files,
             commands::clipboard_mirror,
             commands::clipboard_take,

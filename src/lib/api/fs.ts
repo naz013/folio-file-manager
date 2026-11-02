@@ -428,6 +428,26 @@ export const zipCompress = (paths: string[], name?: string) =>
 /** Unpacks a zip into a new folder next to it, named after it. */
 export const zipExtract = (path: string) => invoke<number>("zip_extract", { path });
 
+/** What `tagsExport` wrote. */
+export interface TagsExported {
+  path: string;
+  tags: number;
+  files: number;
+  /** Tagged items left out because they are no longer where they were tagged. */
+  leftOut: number;
+}
+/** What `tagsImport` did. */
+export interface TagsRestored {
+  tagsCreated: number;
+  filesTagged: number;
+  missing: number;
+}
+/** Writes all tags and what carries them to a new "Folio tags.json" in `dir` (Documents if none). */
+export const tagsExport = (dir?: string) =>
+  invoke<TagsExported>("tags_export", { dir: dir ?? null });
+/** Adds the tags of a tags file to the ones here; nothing is taken away. */
+export const tagsImport = (path: string) => invoke<TagsRestored>("tags_import", { path });
+
 /** How far a picture is made smaller (`ops::image_edit::Preset`). */
 export type ImagePreset = "high" | "balanced" | "small" | "smallest";
 /** One edit of a picture (`ops::image_edit::Edit`). Crop is in pixels of the picture as shown. */

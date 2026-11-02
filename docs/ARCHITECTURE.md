@@ -70,6 +70,8 @@ SQLite index keyed by a stable file identity (NTFS file ID + volume serial on Wi
 inode + device on Unix), with path as a fallback for re-linking.
 See [ADR 0002](decisions/0002-tag-storage.md).
 
+Export and import (`tags.rs`, `Backup`): a file identity means nothing on another computer, so a tags file names files by path (plus the tag names and colours, and the home folder, so paths below it follow to the new computer's home). Reading one in only adds: missing tags are created, and each file found at its place gets its tags; nothing is removed, so it can be read twice or into an index with tags of its own. Files not found are counted.
+
 ### Disk scanning
 
 - Parallel walk (`jwalk`) in a background task, results cached in SQLite per volume.

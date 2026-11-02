@@ -6,9 +6,9 @@
 use crate::fs::{self as listing, Entry};
 use crate::ops;
 use rusqlite::{Connection, params};
-use serde::Serialize;
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -47,6 +47,131 @@ pub struct Toggled {
 
 pub struct Tags {
     conn: Mutex<Connection>,
+}
+
+/// What a tags file says its format is.
+const BACKUP_FORMAT: &str = "folio-tags";
+const BACKUP_VERSION: u32 = 1;
+
+/// The tags and what carries them, written to a file to keep or to take to another computer.
+/// A file is named by its path, not its identity: the identity only means something on the
+/// drive it came from.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Backup {
+    pub format: String,
+    pub version: u32,
+    /// The home folder when the file was written. Paths below it are moved to the new
+    /// computer's home folder when the file is read in.
+    #[serde(default)]
+    pub home: Option<String>,
+    pub tags: Vec<BackupTag>,
+    pub files: Vec<BackupFile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupTag {
+    pub name: String,
+    #[serde(default)]
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupFile {
+    pub path: String,
+    /// Names of the tags it carries.
+    pub tags: Vec<String>,
+}
+
+/// What reading a tags file in did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Restored {
+    /// Tags that were not there and were added.
+    pub tags_created: usize,
+    /// Files that now carry the tags the file gives them.
+    pub files_tagged: usize,
+    /// Files that are not at their place on this computer.
+    pub missing: usize,
+}
+
+const NOT_A_BACKUP: &str = "This is not a Folio tags file";
+const NEWER_BACKUP: &str = "This tags file was made by a newer Folio. Update Folio to read it";
+/// More tags or files than this is not a person's tags file.
+const MAX_BACKUP_TAGS: usize = 10_000;
+const MAX_BACKUP_FILES: usize = 1_000_000;
+
+impl Backup {
+    /// Reads a tags file. What kind of file it is and which version made it are checked
+    /// before the rest is read, so a newer file whose shape changed is still called newer.
+    pub fn parse(bytes: &[u8]) -> Result<Self, String> {
+        #[derive(Deserialize)]
+        struct Header {
+            format: String,
+            version: u32,
+        }
+        let header: Header = serde_json::from_slice(bytes).map_err(|_| NOT_A_BACKUP.to_owned())?;
+        if header.format != BACKUP_FORMAT {
+            return Err(NOT_A_BACKUP.into());
+        }
+        if header.version > BACKUP_VERSION {
+            return Err(NEWER_BACKUP.into());
+        }
+        serde_json::from_slice(bytes).map_err(|_| NOT_A_BACKUP.to_owned())
+    }
+}
+
+/// A tag's name trimmed, and its colour, if both are fit for a tag.
+fn check_tag<'a>(
+    name: &'a str,
+    color: Option<&'a str>,
+) -> Result<(&'a str, Option<&'a str>), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("A tag needs a name".into());
+    }
+    if name.chars().count() > MAX_NAME {
+        return Err(format!("A tag name can have at most {MAX_NAME} characters"));
+    }
+    if let Some(c) = color
+        && !COLORS.iter().any(|(_, known)| *known == c)
+    {
+        return Err(format!("\"{c}\" is not one of the tag colours"));
+    }
+    Ok((name, color))
+}
+
+/// `path` with the exporting computer's home folder `from` swapped for this one's `to`, if
+/// it is below it. Letter case is ignored in the match, as on Windows and macOS.
+fn rehome(path: &str, from: Option<&str>, to: Option<&Path>) -> Option<PathBuf> {
+    let from = from?.trim_end_matches(['\\', '/']);
+    let to = to?;
+    let head = path.get(..from.len())?;
+    let rest = path.get(from.len()..)?;
+    // Windows and macOS see `Ann` and `ann` as one folder; elsewhere they are two.
+    let same = if cfg!(any(windows, target_os = "macos")) {
+        head.to_lowercase() == from.to_lowercase()
+    } else {
+        head == from
+    };
+    if from.is_empty() || !same {
+        return None;
+    }
+    if !(rest.is_empty() || rest.starts_with(['\\', '/'])) {
+        return None;
+    }
+    let rest = rest.trim_start_matches(['\\', '/']);
+    // A path written on Windows and read on another system: its separators are changed.
+    let rest = if from.contains('\\') && !cfg!(windows) {
+        rest.replace('\\', "/")
+    } else {
+        rest.to_owned()
+    };
+    Some(if rest.is_empty() {
+        to.to_path_buf()
+    } else {
+        to.join(rest)
+    })
 }
 
 /// `path` as text that two spellings of one path share: how folders and files are matched.
@@ -131,18 +256,7 @@ impl Tags {
 
     /// Adds a named tag, optionally with one of the seven colours.
     pub fn create(&self, name: &str, color: Option<&str>) -> Result<Tag, String> {
-        let name = name.trim();
-        if name.is_empty() {
-            return Err("A tag needs a name".into());
-        }
-        if name.chars().count() > MAX_NAME {
-            return Err(format!("A tag name can have at most {MAX_NAME} characters"));
-        }
-        if let Some(c) = color
-            && !COLORS.iter().any(|(_, known)| *known == c)
-        {
-            return Err(format!("\"{c}\" is not one of the tag colours"));
-        }
+        let (name, color) = check_tag(name, color)?;
         let conn = self.conn();
         let made = conn.execute(
             "INSERT INTO tags (name, color) VALUES (?1, ?2)",
@@ -306,6 +420,162 @@ impl Tags {
         found
     }
 
+    /// Every tag, and every tagged item that is still where it was tagged, for a file.
+    #[cfg(test)]
+    pub fn backup(&self, home: Option<&Path>) -> Result<Backup, String> {
+        self.backup_counted(home).map(|(backup, _)| backup)
+    }
+
+    /// Like [`backup`](Self::backup), and how many tagged items were left out because they
+    /// are no longer where they were tagged (moved outside Folio, or on a drive that isn't
+    /// connected): their paths can't be trusted to name the same file.
+    pub fn backup_counted(&self, home: Option<&Path>) -> Result<(Backup, usize), String> {
+        let rows: Vec<(String, String)> = {
+            let conn = self.conn();
+            let mut stmt = conn
+                .prepare("SELECT identity, path FROM files")
+                .map_err(|e| e.to_string())?;
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .map_err(|e| e.to_string())?
+                .collect::<Result<_, _>>()
+                .map_err(|e| e.to_string())?
+        };
+        let names: HashMap<i64, String> = self.list().into_iter().map(|t| (t.id, t.name)).collect();
+        let mut files = Vec::new();
+        let mut left_out = 0;
+        for (identity, path) in rows {
+            if ops::identity(Path::new(&path)).as_deref() != Some(identity.as_str()) {
+                left_out += 1;
+                continue;
+            }
+            let tags: Vec<String> = self
+                .tag_ids(&identity)
+                .into_iter()
+                .filter_map(|id| names.get(&id).cloned())
+                .collect();
+            if !tags.is_empty() {
+                files.push(BackupFile { path, tags });
+            }
+        }
+        files.sort_by_cached_key(|f| f.path.to_lowercase());
+        let backup = Backup {
+            format: BACKUP_FORMAT.to_owned(),
+            version: BACKUP_VERSION,
+            home: home.map(|h| h.to_string_lossy().into_owned()),
+            tags: self
+                .list()
+                .into_iter()
+                .map(|t| BackupTag {
+                    name: t.name,
+                    color: t.color,
+                })
+                .collect(),
+            files,
+        };
+        Ok((backup, left_out))
+    }
+
+    /// Adds what `backup` holds to this index: the tags that are missing, and the tags on
+    /// each file that is at its place here (after the old home folder is swapped for `home`).
+    /// Nothing is taken away, so reading a file in twice, or into an index that has its own
+    /// tags, only adds. It all happens or none of it does.
+    pub fn restore(&self, backup: &Backup, home: Option<&Path>) -> Result<Restored, String> {
+        if backup.format != BACKUP_FORMAT {
+            return Err(NOT_A_BACKUP.into());
+        }
+        if backup.version > BACKUP_VERSION {
+            return Err(NEWER_BACKUP.into());
+        }
+        if backup.tags.len() > MAX_BACKUP_TAGS || backup.files.len() > MAX_BACKUP_FILES {
+            return Err(NOT_A_BACKUP.into());
+        }
+        // Where each file is looked for is settled before the index is locked: it touches
+        // the disk, and a dead network path must not hold up every other tag command.
+        let mut found: Vec<(String, PathBuf, &[String])> = Vec::new();
+        let mut missing = 0;
+        for file in &backup.files {
+            let here = rehome(&file.path, backup.home.as_deref(), home);
+            let hit = here
+                .into_iter()
+                .chain(std::iter::once(PathBuf::from(&file.path)))
+                // A file names an absolute place; anything else would mean somewhere under
+                // wherever this program happens to be running.
+                .filter(|p| p.is_absolute() && !p.components().any(|c| c == Component::ParentDir))
+                .find_map(|p| ops::identity(&p).map(|id| (id, p)));
+            match hit {
+                Some((identity, path)) => found.push((identity, path, &file.tags)),
+                None => missing += 1,
+            }
+        }
+        let mut conn = self.conn();
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let mut ids: HashMap<String, i64> = {
+            let mut stmt = tx
+                .prepare("SELECT id, name FROM tags")
+                .map_err(|e| e.to_string())?;
+            stmt.query_map([], |r| {
+                Ok((r.get::<_, String>(1)?.to_lowercase(), r.get(0)?))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<_, _>>()
+            .map_err(|e| e.to_string())?
+        };
+        let mut done = Restored {
+            missing,
+            ..Restored::default()
+        };
+        for tag in &backup.tags {
+            let lower = tag.name.trim().to_lowercase();
+            if lower.is_empty() || ids.contains_key(&lower) {
+                continue;
+            }
+            // A colour this version doesn't know still gives a tag, without the colour. A
+            // name that can't be a tag here is left out.
+            let color = tag.color.as_deref();
+            let Ok((name, color)) =
+                check_tag(&tag.name, color).or_else(|_| check_tag(&tag.name, None))
+            else {
+                continue;
+            };
+            tx.execute(
+                "INSERT INTO tags (name, color) VALUES (?1, ?2)",
+                params![name, color],
+            )
+            .map_err(|e| e.to_string())?;
+            ids.insert(lower, tx.last_insert_rowid());
+            done.tags_created += 1;
+        }
+        for (identity, path, names) in found {
+            let wanted: BTreeSet<i64> = names
+                .iter()
+                .filter_map(|n| ids.get(&n.trim().to_lowercase()).copied())
+                .collect();
+            if wanted.is_empty() {
+                continue;
+            }
+            let dir = path.parent().map(key).unwrap_or_default();
+            tx.execute(
+                "INSERT INTO files (identity, path, norm, dir) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(identity) DO UPDATE SET path = ?2, norm = ?3, dir = ?4",
+                params![identity, path.to_string_lossy(), key(&path), dir],
+            )
+            .map_err(|e| e.to_string())?;
+            let mut added = 0;
+            for tag in wanted {
+                added += tx
+                    .execute(
+                        "INSERT OR IGNORE INTO file_tags (identity, tag_id) VALUES (?1, ?2)",
+                        params![identity, tag],
+                    )
+                    .map_err(|e| e.to_string())?;
+            }
+            // A file that already had all of them is not news.
+            done.files_tagged += usize::from(added > 0);
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(done)
+    }
+
     fn tag_ids(&self, identity: &str) -> Vec<i64> {
         let conn = self.conn();
         let Ok(mut stmt) =
@@ -434,6 +704,255 @@ mod tests {
         assert!(t.delete(3).is_err(), "colour tags stay");
         t.delete(work.id).unwrap();
         assert_eq!(t.list().len(), 7);
+    }
+
+    /// The tags of the items directly in `dir`, as (name, tag names): ids differ between indexes.
+    fn named(t: &Tags, dir: &Path) -> Vec<(String, Vec<String>)> {
+        let names: HashMap<i64, String> = t.list().into_iter().map(|x| (x.id, x.name)).collect();
+        t.in_dir(dir)
+            .into_iter()
+            .map(|(file, ids)| {
+                let mut tags: Vec<String> = ids.iter().map(|i| names[i].clone()).collect();
+                // Ids follow the order tags were made in, which differs between indexes.
+                tags.sort();
+                (file, tags)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn tags_survive_a_trip_through_a_file_into_a_fresh_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = file(&dir.path().join("a.txt"));
+        let b = file(&dir.path().join("b.txt"));
+        file(&dir.path().join("untagged.txt"));
+        let from = index();
+        let work = from.create("Work", Some("blue")).unwrap();
+        let later = from.create("Read later", None).unwrap();
+        from.toggle(&[a.clone(), b.clone()], work.id).unwrap();
+        from.toggle(std::slice::from_ref(&a), later.id).unwrap();
+        from.toggle(std::slice::from_ref(&a), 1).unwrap();
+
+        let text = serde_json::to_string_pretty(&from.backup(None).unwrap()).unwrap();
+        let backup: Backup = serde_json::from_str(&text).unwrap();
+        let to = index();
+        let done = to.restore(&backup, None).unwrap();
+
+        assert_eq!(
+            done,
+            Restored {
+                tags_created: 2,
+                files_tagged: 2,
+                missing: 0
+            }
+        );
+        assert_eq!(named(&to, dir.path()), named(&from, dir.path()));
+        let work_there = to.list().into_iter().find(|t| t.name == "Work").unwrap();
+        assert_eq!(work_there.color.as_deref(), Some("blue"));
+    }
+
+    #[test]
+    fn files_are_found_below_the_new_home_folder() {
+        let root = tempfile::tempdir().unwrap();
+        let old_home = root.path().join("old");
+        let new_home = root.path().join("new");
+        let old = file(&old_home.join("docs/a.txt"));
+        file(&new_home.join("docs/a.txt"));
+        let from = index();
+        from.toggle(&[old], 3).unwrap();
+        let backup = from.backup(Some(&old_home)).unwrap();
+
+        let to = index();
+        let done = to.restore(&backup, Some(&new_home)).unwrap();
+        assert_eq!(done.files_tagged, 1);
+        assert_eq!(
+            named(&to, &new_home.join("docs")),
+            [("a.txt".to_owned(), vec!["Yellow".to_owned()])]
+        );
+        // The old place is not what was tagged.
+        assert_eq!(named(&to, &old_home.join("docs")), []);
+    }
+
+    #[test]
+    fn what_is_not_there_is_counted_and_nothing_is_taken_away() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = file(&dir.path().join("a.txt"));
+        let from = index();
+        from.toggle(std::slice::from_ref(&a), 2).unwrap();
+        let mut backup = from.backup(None).unwrap();
+        backup.files.push(BackupFile {
+            path: dir.path().join("gone.txt").to_string_lossy().into_owned(),
+            tags: vec!["Red".into()],
+        });
+
+        let to = index();
+        let own = file(&dir.path().join("own.txt"));
+        to.toggle(&[own], 1).unwrap();
+        let done = to.restore(&backup, None).unwrap();
+        assert_eq!((done.files_tagged, done.missing), (1, 1));
+        assert_eq!(
+            named(&to, dir.path()),
+            [
+                ("a.txt".to_owned(), vec!["Orange".to_owned()]),
+                ("own.txt".to_owned(), vec!["Red".to_owned()])
+            ]
+        );
+        // Again: nothing changes.
+        let again = to.restore(&backup, None).unwrap();
+        assert_eq!(again.tags_created, 0);
+        assert_eq!(named(&to, dir.path()).len(), 2);
+    }
+
+    #[test]
+    fn a_file_that_is_not_a_tags_file_or_is_from_a_newer_version_is_refused() {
+        let t = index();
+        let mut backup = t.backup(None).unwrap();
+        backup.format = "something-else".into();
+        assert!(
+            t.restore(&backup, None)
+                .unwrap_err()
+                .contains("not a Folio")
+        );
+        backup.format = BACKUP_FORMAT.into();
+        backup.version = BACKUP_VERSION + 1;
+        assert!(t.restore(&backup, None).unwrap_err().contains("newer"));
+    }
+
+    #[test]
+    fn a_backup_leaves_out_files_that_were_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = file(&dir.path().join("a.txt"));
+        let t = index();
+        t.toggle(std::slice::from_ref(&a), 1).unwrap();
+        fs::remove_file(&a).unwrap();
+        // A different file now has the name, so the tag does not belong to it.
+        file(&a);
+        let (backup, left_out) = t.backup_counted(None).unwrap();
+        assert!(backup.files.is_empty());
+        assert_eq!(left_out, 1);
+    }
+
+    #[test]
+    fn a_colour_this_version_does_not_know_still_gives_a_tag() {
+        let t = index();
+        let mut backup = t.backup(None).unwrap();
+        backup.tags.push(BackupTag {
+            name: "Future".into(),
+            color: Some("teal".into()),
+        });
+        assert_eq!(t.restore(&backup, None).unwrap().tags_created, 1);
+        let made = t.list().into_iter().find(|x| x.name == "Future").unwrap();
+        assert_eq!(made.color, None);
+    }
+
+    #[test]
+    fn the_old_home_folder_is_swapped_only_on_a_folder_boundary() {
+        let to = Path::new("/home/new");
+        let home = Some("C:\\Users\\Ann");
+        let swap = |p: &str| rehome(p, home, Some(to));
+        assert_eq!(swap("C:\\Users\\Ann"), Some(to.to_path_buf()));
+        assert!(swap("c:\\users\\ann\\docs\\a.txt").is_some());
+        assert_eq!(swap("C:\\Users\\Anna\\a.txt"), None);
+        assert_eq!(swap("D:\\other\\a.txt"), None);
+        assert_eq!(rehome("C:\\Users\\Ann\\a.txt", None, Some(to)), None);
+        #[cfg(not(windows))]
+        assert_eq!(
+            swap("C:\\Users\\Ann\\docs\\a.txt"),
+            Some(to.join("docs/a.txt"))
+        );
+    }
+
+    #[test]
+    fn a_relative_or_climbing_path_in_a_file_is_never_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        file(&dir.path().join("a.txt"));
+        let t = index();
+        let mut backup = t.backup(None).unwrap();
+        for path in [
+            "a.txt".to_owned(),
+            "../a.txt".to_owned(),
+            dir.path()
+                .join("..")
+                .join(dir.path().file_name().unwrap())
+                .join("a.txt")
+                .to_string_lossy()
+                .into_owned(),
+        ] {
+            backup.files.push(BackupFile {
+                path,
+                tags: vec!["Red".into()],
+            });
+        }
+        let done = t.restore(&backup, None).unwrap();
+        assert_eq!((done.files_tagged, done.missing), (0, 3));
+    }
+
+    #[test]
+    fn a_file_with_far_too_many_entries_is_refused() {
+        let t = index();
+        let mut backup = t.backup(None).unwrap();
+        backup.tags = (0..=MAX_BACKUP_TAGS)
+            .map(|i| BackupTag {
+                name: format!("t{i}"),
+                color: None,
+            })
+            .collect();
+        assert!(
+            t.restore(&backup, None)
+                .unwrap_err()
+                .contains("not a Folio")
+        );
+        assert_eq!(t.list().len(), 7, "nothing was added");
+    }
+
+    #[test]
+    fn names_that_cannot_be_tags_are_left_out_and_the_rest_still_arrive() {
+        let t = index();
+        let mut backup = t.backup(None).unwrap();
+        backup.tags.push(BackupTag {
+            name: "x".repeat(MAX_NAME + 1),
+            color: None,
+        });
+        backup.tags.push(BackupTag {
+            name: "   ".into(),
+            color: None,
+        });
+        backup.tags.push(BackupTag {
+            name: "Fine".into(),
+            color: None,
+        });
+        assert_eq!(t.restore(&backup, None).unwrap().tags_created, 1);
+    }
+
+    #[test]
+    fn a_second_reading_reports_no_news() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = file(&dir.path().join("a.txt"));
+        let from = index();
+        from.toggle(std::slice::from_ref(&a), 1).unwrap();
+        let backup = from.backup(None).unwrap();
+        let to = index();
+        assert_eq!(to.restore(&backup, None).unwrap().files_tagged, 1);
+        assert_eq!(to.restore(&backup, None).unwrap().files_tagged, 0);
+    }
+
+    #[test]
+    fn a_tags_file_is_told_from_other_files_and_newer_ones_by_their_header() {
+        assert!(
+            Backup::parse(b"not json")
+                .unwrap_err()
+                .contains("not a Folio")
+        );
+        assert!(
+            Backup::parse(br#"{"format":"other","version":1}"#)
+                .unwrap_err()
+                .contains("not a Folio")
+        );
+        // A newer file whose shape differs is still recognised as newer.
+        let newer = br#"{"format":"folio-tags","version":9,"tags":{"changed":true}}"#;
+        assert!(Backup::parse(newer).unwrap_err().contains("newer"));
+        let ok = br#"{"format":"folio-tags","version":1,"tags":[],"files":[]}"#;
+        assert!(Backup::parse(ok).is_ok());
     }
 
     #[test]

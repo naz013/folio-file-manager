@@ -69,6 +69,8 @@
     releasePreview,
     type Job,
     type MadeFile,
+    tagsExport,
+    tagsImport,
     zipCompress,
     zipExtract,
     type Moved,
@@ -639,6 +641,33 @@
     selectOnly(at);
     if (at >= 0) fileView?.scrollToIndex(at);
     fileView?.focusList();
+  }
+
+  const isTagsFile = (e: Entry) => !e.isDir && e.name.toLowerCase().endsWith(".json");
+
+  /** Adds the tags in a tags file to the ones here. */
+  async function importTags(file: Entry) {
+    const done = await run(() => tagsImport(file.path));
+    if (!done) return;
+    await loadTagDefs();
+    await refresh();
+    const missing = done.missing ? `, ${plural(done.missing, "file")} not found here` : "";
+    notify(
+      `Tags added: ${plural(done.filesTagged, "file")} tagged, ${plural(done.tagsCreated, "new tag")}${missing}`,
+      done.missing > 0,
+    );
+  }
+
+  /** Saves all tags to a tags file in the open folder. */
+  async function exportTags() {
+    if (noFolder) return;
+    const done = await run(() => tagsExport(path));
+    if (!done) return;
+    notify(
+      `Saved ${done.path.split(/[\\/]/).pop()}: ${plural(done.tags, "tag")}, ${plural(done.files, "tagged file")}${done.leftOut ? `. ${plural(done.leftOut, "tagged file")} could not be found and ${done.leftOut === 1 ? "was" : "were"} left out` : ""}`,
+      done.leftOut > 0,
+    );
+    await refresh([done.path]);
   }
 
   const isZip = (e: Entry) => !e.isDir && e.name.toLowerCase().endsWith(".zip");
@@ -1672,6 +1701,13 @@
       ),
       ...action("Compress to ZIP", "", compressSelection, any && !noFolder),
       ...action("Extract ZIP", "", extractSelection, selected().some(isZip)),
+      ...action("Export tags to this folder", "", exportTags, !noFolder),
+      ...action(
+        "Import tags from the selected file",
+        "",
+        () => importTags(selected()[0]),
+        selected().length === 1 && isTagsFile(selected()[0]),
+      ),
       ...action("Clear recent folders", undefined, clearRecent),
       ...action("Grid view", undefined, () => setView("grid"), view !== "grid"),
       ...action("List view", undefined, () => setView("list"), view !== "list"),
@@ -1841,6 +1877,7 @@
       { label: "Tags…", run: () => (tagsOpen = true) },
       ...(noFolder ? [] : [{ label: "Compress to ZIP", run: compressSelection }]),
       ...(picked.some(isZip) ? [{ label: "Extract", run: extractSelection }] : []),
+      ...(one && isTagsFile(one) ? [{ label: "Import tags", run: () => importTags(one) }] : []),
       ...(picked.some(isPdf)
         ? [{ label: "PDF tools…", run: () => openPdfTools(one ?? undefined) }]
         : []),

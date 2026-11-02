@@ -7,6 +7,7 @@
     crashState,
     listDir,
     openPath,
+    tagsExport,
     type CrashState,
   } from "$lib/api/fs";
   import { shortcutGroups } from "$lib/shortcuts";
@@ -27,6 +28,27 @@
     dialog.focus();
     if (isCustom) custom = settings.startLocation;
   });
+
+  /** What the last tags export did, in words. */
+  let tagsNote = $state(
+    "Saves a Folio tags.json file in Documents. It lists the paths of your tagged files, so keep it private. On the other computer, open it in Folio and choose Import tags from its right-click menu.",
+  );
+
+  let exporting = $state(false);
+
+  async function exportTags() {
+    if (exporting) return;
+    exporting = true;
+    try {
+      const done = await tagsExport();
+      const left = done.leftOut ? ` ${done.leftOut} could not be found and were left out.` : "";
+      tagsNote = `Saved ${done.path}: ${done.tags} tags, ${done.files} tagged files.${left}`;
+    } catch (e) {
+      tagsNote = String(e);
+    } finally {
+      exporting = false;
+    }
+  }
 
   let version = $state("");
   onMount(() => {
@@ -313,6 +335,16 @@
             Check now
           </button>
         </div>
+      </section>
+
+      <section>
+        <h3>Tags</h3>
+
+        <div class="row">
+          <span>Back up tags, or take them to another computer</span>
+          <button disabled={exporting} onclick={exportTags}>Export</button>
+        </div>
+        <p class="note" role="status">{tagsNote}</p>
       </section>
 
       <section>

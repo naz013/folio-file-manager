@@ -854,6 +854,60 @@ pub fn tag_files(tags: tauri::State<'_, Tags>, tag: i64) -> Vec<(String, Entry, 
         .collect()
 }
 
+/// What a finished tags export tells the window.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TagsExported {
+    path: String,
+    tags: usize,
+    files: usize,
+    /// Tagged items left out because they are no longer where they were tagged.
+    left_out: usize,
+}
+
+/// A tags file bigger than this is not one: a person's tags are a few megabytes at most.
+const MAX_TAGS_FILE: u64 = 64 << 20;
+
+/// Writes every tag and every tagged item to a new "Folio tags.json" in `dir` (the Documents
+/// folder if none is given), under the next free name if there is one already.
+#[tauri::command(async)]
+pub fn tags_export(
+    app: tauri::AppHandle,
+    tags: tauri::State<'_, Tags>,
+    dir: Option<String>,
+) -> CmdResult<TagsExported> {
+    let dir = match dir {
+        Some(dir) => PathBuf::from(dir),
+        None => app.path().document_dir().map_err(|e| e.to_string())?,
+    };
+    let (backup, left_out) = tags.backup_counted(app.path().home_dir().ok().as_deref())?;
+    let bytes = serde_json::to_vec_pretty(&backup).map_err(|e| e.to_string())?;
+    let path = ops::made::write_new(&dir, "Folio tags.json", &bytes).map_err(|e| e.to_string())?;
+    Ok(TagsExported {
+        path: path.to_string_lossy().into_owned(),
+        tags: backup.tags.len(),
+        files: backup.files.len(),
+        left_out,
+    })
+}
+
+/// Adds what a tags file holds to the tags here. Nothing is taken away.
+#[tauri::command(async)]
+pub fn tags_import(
+    app: tauri::AppHandle,
+    tags: tauri::State<'_, Tags>,
+    path: String,
+) -> CmdResult<crate::tags::Restored> {
+    let path = PathBuf::from(path);
+    let len = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
+    if len > MAX_TAGS_FILE {
+        return Err("This is not a Folio tags file".into());
+    }
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    let backup = crate::tags::Backup::parse(&bytes)?;
+    tags.restore(&backup, app.path().home_dir().ok().as_deref())
+}
+
 /// The tagged items directly in `dir`: (name, tag ids).
 #[tauri::command(async)]
 pub fn tags_in_dir(tags: tauri::State<'_, Tags>, dir: String) -> Vec<(String, Vec<i64>)> {
