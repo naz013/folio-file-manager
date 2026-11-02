@@ -17,6 +17,8 @@
     image:
       '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/>',
     folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+    hardDrive:
+      '<rect x="3" y="13" width="18" height="7" rx="2"/><path d="M5.5 13l2-8h9l2 8M7 16.5h.01M11 16.5h4"/>',
     sidebar: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>',
     panelRight: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',

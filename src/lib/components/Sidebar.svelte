@@ -1,10 +1,14 @@
 <script lang="ts">
   import Icon, { type IconName } from "./Icon.svelte";
-  import { joinPath, type Tag } from "$lib/api/fs";
+  import { joinPath, listDrives, type Drive, type Tag } from "$lib/api/fs";
+  import { formatSize } from "$lib/format";
   import { tagColor } from "$lib/tags";
   import { settings } from "$lib/settings.svelte";
 
   const baseName = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
+  const trimEnd = (p: string) => p.replace(/[\\/]+$/, "").toLowerCase();
+  /** A drive this full or more shows its bar as a warning. */
+  const NEARLY_FULL = 0.9;
 
   let {
     home,
@@ -56,6 +60,21 @@
     { label: "Downloads", icon: "download", sub: "Downloads" },
     { label: "Pictures", icon: "image", sub: "Pictures" },
   ];
+
+  let drives = $state.raw<Drive[]>([]);
+
+  const refreshDrives = () => {
+    listDrives()
+      .then((d) => (drives = d))
+      .catch(() => {});
+  };
+
+  // Free space changes while the app is open, so look again when the window is back in front.
+  $effect(() => {
+    refreshDrives();
+    window.addEventListener("focus", refreshDrives);
+    return () => window.removeEventListener("focus", refreshDrives);
+  });
 </script>
 
 <aside class="sidebar" aria-label="Places and tags">
@@ -110,6 +129,38 @@
         </button>
       {/each}
     </div>
+
+    {#if drives.length}
+      <div class="label" id="drives-label">Drives</div>
+      <div role="group" aria-labelledby="drives-label">
+        {#each drives as drive (drive.path)}
+          {@const used = drive.total > 0 ? (drive.total - drive.free) / drive.total : 0}
+          {@const letter = drive.path.slice(0, 2)}
+          <button
+            class="item drive"
+            class:selected={trimEnd(drive.path) === trimEnd(current)}
+            aria-current={trimEnd(drive.path) === trimEnd(current) ? "page" : undefined}
+            class:drop={dropTarget === drive.path}
+            class:springing={springPath === drive.path}
+            style:--spring-ms="{springMs}ms"
+            data-drop-path={drive.path}
+            title="{letter} · {formatSize(drive.free)} free of {formatSize(drive.total)}"
+            onclick={() => onnavigate(drive.path)}
+            onmousedown={(e) => e.button === 1 && e.preventDefault()}
+            onauxclick={(e) => e.button === 1 && onopentab(drive.path)}
+          >
+            <span class="icon"><Icon name="hardDrive" /></span>
+            <span class="drive-info">
+              <span class="drive-name">{letter}</span>
+              <span class="usage" class:full={used >= NEARLY_FULL}>
+                <span class="fill" style:width="{Math.round(used * 100)}%"></span>
+              </span>
+              <span class="free">{formatSize(drive.free)} free</span>
+            </span>
+          </button>
+        {/each}
+      </div>
+    {/if}
 
     <div class="label" id="tags-label">Tags</div>
     <div role="group" aria-labelledby="tags-label">
@@ -254,6 +305,47 @@
   .item.drop {
     outline: 2px solid var(--accent-default);
     outline-offset: -2px;
+  }
+
+  .drive {
+    height: auto;
+    padding-block: var(--space-sm);
+  }
+
+  .drive-info {
+    flex: 1;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: baseline;
+    gap: var(--space-xs) var(--space-sm);
+  }
+
+  .usage {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    height: 4px;
+    border-radius: var(--radius-full);
+    background: var(--bg-control);
+    overflow: hidden;
+  }
+
+  .fill {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--accent-default);
+  }
+
+  .usage.full .fill {
+    background: var(--status-warning);
+  }
+
+  .item .free {
+    grid-column: 2;
+    grid-row: 1;
+    font-size: var(--font-size-caption);
+    color: var(--text-tertiary);
   }
 
   .tag {
