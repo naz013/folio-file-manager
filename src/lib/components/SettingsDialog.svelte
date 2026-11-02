@@ -204,6 +204,18 @@
       </div>
 
       <div class="row">
+        <span id="frame-label">Use the system window buttons</span>
+        <input
+          type="checkbox"
+          class="switch"
+          role="switch"
+          aria-labelledby="frame-label"
+          checked={settings.nativeFrame}
+          onchange={(e) => updateSettings({ nativeFrame: e.currentTarget.checked })}
+        />
+      </div>
+
+      <div class="row">
         <span id="view-label">Default view</span>
         <div class="segments" role="group" aria-labelledby="view-label">
           {#each ["grid", "list"] as const as mode (mode)}

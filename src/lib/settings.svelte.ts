@@ -40,6 +40,8 @@ export interface Settings {
   cleanupDupMinMb: number;
   /** Unfinished copies untouched for this many days are suggested. */
   cleanupPartialDays: number;
+  /** Use the system's own title bar and window buttons instead of drawing them. */
+  nativeFrame: boolean;
   /** The first-run tour was shown (finished or skipped). */
   onboarded: boolean;
   /** Look for a new version in the background, once a day. */
@@ -63,6 +65,7 @@ export const DEFAULTS: Settings = {
   cleanupDownloadsDays: 90,
   cleanupDupMinMb: 10,
   cleanupPartialDays: 7,
+  nativeFrame: false,
   onboarded: false,
   updateCheck: true,
   updateLastCheck: 0,
@@ -115,6 +118,7 @@ function read(): Settings {
     cleanupPartialDays: (PARTIAL_AGES_DAYS as readonly unknown[]).includes(saved.cleanupPartialDays)
       ? (saved.cleanupPartialDays as number)
       : DEFAULTS.cleanupPartialDays,
+    nativeFrame: saved.nativeFrame === true,
     onboarded: saved.onboarded === true,
     updateCheck: saved.updateCheck !== false,
     updateLastCheck:

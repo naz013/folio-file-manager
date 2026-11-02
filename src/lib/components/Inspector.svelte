@@ -64,6 +64,7 @@
     tags,
     have,
     ontoggle,
+    clearControls = false,
   }: {
     /** The folder shown, or null in a tag view. */
     folder: string | null;
@@ -75,6 +76,8 @@
     /** For each tag id: whether all, some or none of the selected items have it. */
     have: Record<number, "all" | "some" | "none">;
     ontoggle: (id: number) => void;
+    /** Window buttons are drawn over the top of this panel: start below them. */
+    clearControls?: boolean;
   } = $props();
 
   const total = (items: Entry[]) => items.reduce((sum, e) => sum + (e.isDir ? 0 : e.size), 0);
@@ -95,7 +98,8 @@
   const folders = (items: Entry[]) => items.filter((e) => e.isDir).length;
 </script>
 
-<aside class="inspector" aria-label="Inspector">
+<aside class="inspector" class:clear={clearControls} aria-label="Inspector">
+  {#if clearControls}<div class="grab" data-tauri-drag-region></div>{/if}
   {#if picked.length === 1}
     {@const item = picked[0]}
     <div class="preview">
@@ -197,6 +201,17 @@
     overflow-y: auto;
     border-left: 1px solid var(--border-default);
     background: var(--bg-sidebar);
+  }
+
+  .inspector.clear {
+    padding-top: 0;
+  }
+
+  /* The strip under the window buttons: still drags the window. */
+  .grab {
+    flex-shrink: 0;
+    height: var(--size-titlebar);
+    margin: 0 calc(var(--space-lg) * -1);
   }
 
   .preview {

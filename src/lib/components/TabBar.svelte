@@ -1,6 +1,4 @@
 <script lang="ts">
-  import { onMount } from "svelte";
-  import { getCurrentWindow } from "@tauri-apps/api/window";
   import Icon from "./Icon.svelte";
   import FolderIcon from "./FolderIcon.svelte";
 
@@ -14,6 +12,7 @@
     springMs,
     onmove,
     ondetach,
+    reserve = false,
   }: {
     tabs: { id: number; title: string }[];
     active: number;
@@ -26,15 +25,14 @@
     onmove: (from: number, to: number) => void;
     /** Called when a tab is dropped outside the strip; (x, y) is the logical screen position. */
     ondetach: (index: number, x: number, y: number) => void;
+    /** Leave room at the right for window buttons drawn over this bar. */
+    reserve?: boolean;
   } = $props();
 
   /** Pixels the pointer must move before a press becomes a drag. */
   const DRAG_THRESHOLD = 5;
   /** How far outside the strip (vertically) a dragged tab tears off into a new window. */
   const DETACH_DISTANCE = 40;
-
-  const appWindow = getCurrentWindow();
-  let maximized = $state(false);
 
   let strip: HTMLDivElement;
   let drag = $state<{
@@ -136,24 +134,9 @@
     el?.scrollIntoView({ block: "nearest", inline: "nearest" });
     if (strip?.contains(document.activeElement)) el?.focus();
   });
-
-  onMount(() => {
-    let frame = 0;
-    const sync = () => appWindow.isMaximized().then((m) => (maximized = m));
-    sync();
-    // A resize fires many events; ask for the maximized state at most once per frame.
-    const unlisten = appWindow.onResized(() => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(sync);
-    });
-    return () => {
-      cancelAnimationFrame(frame);
-      unlisten.then((u) => u());
-    };
-  });
 </script>
 
-<div class="tabbar" data-tauri-drag-region>
+<div class="tabbar" class:reserve data-tauri-drag-region>
   <div
     class="strip"
     bind:this={strip}
@@ -209,19 +192,6 @@
     <Icon name="plus" />
   </button>
   <div class="spacer" data-tauri-drag-region></div>
-  <button class="control" aria-label="Minimize" onclick={() => appWindow.minimize()}>
-    <Icon name="minimize" size={15} stroke={1.5} />
-  </button>
-  <button
-    class="control"
-    aria-label={maximized ? "Restore" : "Maximize"}
-    onclick={() => appWindow.toggleMaximize()}
-  >
-    <Icon name={maximized ? "restore" : "maximize"} size={13} stroke={1.5} />
-  </button>
-  <button class="control close-window" aria-label="Close window" onclick={() => appWindow.close()}>
-    <Icon name="x" size={15} stroke={1.5} />
-  </button>
 </div>
 
 <style>
@@ -234,6 +204,11 @@
     padding-left: 8px;
     background: var(--bg-sidebar);
     overflow: hidden;
+  }
+
+  /* Three 46px window buttons. */
+  .tabbar.reserve {
+    padding-right: 138px;
   }
 
   .strip {
@@ -332,24 +307,5 @@
     flex: 1;
     align-self: stretch;
     min-width: 46px;
-  }
-
-  .control {
-    display: grid;
-    place-items: center;
-    width: 46px;
-    height: var(--size-titlebar);
-    flex-shrink: 0;
-    color: var(--text-secondary);
-  }
-
-  .control:hover {
-    background: var(--bg-hover);
-    color: var(--text-primary);
-  }
-
-  .close-window:hover {
-    background: var(--bg-danger);
-    color: var(--text-on-danger);
   }
 </style>

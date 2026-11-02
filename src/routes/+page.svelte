@@ -84,6 +84,7 @@
   import { tagColor } from "$lib/tags";
   import OpsPill from "$lib/components/OpsPill.svelte";
   import Sidebar from "$lib/components/Sidebar.svelte";
+  import WindowControls from "$lib/components/WindowControls.svelte";
   import TabBar from "$lib/components/TabBar.svelte";
   import Toolbar, { type View } from "$lib/components/Toolbar.svelte";
   import { createSpring } from "$lib/spring";
@@ -482,6 +483,11 @@
 
   /** Closing goes through the onCloseRequested handler in onMount, which saves first. */
   const closeWindow = () => getCurrentWindow().close();
+
+  // Windows open without a title bar; the setting gives the system's back.
+  $effect(() => {
+    void getCurrentWindow().setDecorations(settings.nativeFrame);
+  });
 
   // Save the tab list shortly after it settles.
   $effect(() => {
@@ -2005,6 +2011,7 @@
       {springMs}
       onmove={moveTab}
       ondetach={detachTab}
+      reserve={!settings.nativeFrame && !settings.showInspector}
     />
     <Toolbar
       bind:this={toolbar}
@@ -2083,8 +2090,11 @@
       tags={tagDefs}
       have={tagState}
       ontoggle={toggleTag}
+      clearControls={!settings.nativeFrame}
     />
   {/if}
+
+  {#if !settings.nativeFrame}<WindowControls />{/if}
 
   <ShelfPanel
     items={shelf}
@@ -2239,6 +2249,7 @@
 
 <style>
   .app {
+    position: relative;
     display: flex;
     height: 100vh;
   }
