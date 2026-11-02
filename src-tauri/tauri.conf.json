@@ -30,7 +30,7 @@
     "updater": {
       "pubkey": "REPLACE WITH THE PUBLIC KEY FROM `npm run tauri signer generate` (see docs/RELEASING.md)",
       "endpoints": [
-        "https://github.com/naz013/file-manager-light/releases/latest/download/latest.json"
+        "https://github.com/naz013/folio-file-manager/releases/latest/download/latest.json"
       ],
       "windows": { "installMode": "passive" }
     }

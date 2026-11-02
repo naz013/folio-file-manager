@@ -11,7 +11,7 @@ the project status, commits and the PR. Specialists only report back.
 
 ```
 gh issue view $ARGUMENTS --json number,title,body,labels,milestone,state
-gh api repos/naz013/file-manager-light/issues/$ARGUMENTS/dependencies/blocked_by --jq '.[] | {number,state}'
+gh api repos/naz013/folio-file-manager/issues/$ARGUMENTS/dependencies/blocked_by --jq '.[] | {number,state}'
 ```
 
 - If any blocker is open, stop and say which.
