@@ -41,6 +41,12 @@ unless it is EV.
 
 The workflow also fails if the installer is 15 MB or more.
 
+## Test builds
+
+Every push to `main` also builds an unsigned installer and `folio.exe` in the **CI** workflow
+(job `build-windows`, after the checks pass). Download them from the run page, under Artifacts;
+they are kept for 14 days. They are for trying a commit, not for users: no signing, no update files.
+
 ## Making a release
 
 1. Set the new version in `package.json`, `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`.
