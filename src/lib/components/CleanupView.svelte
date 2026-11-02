@@ -32,12 +32,10 @@
 
   let {
     start = "large",
-    onclose,
     onopen,
   }: {
     /** Which list to open on. */
     start?: "large" | "downloads" | "duplicates" | "partials";
-    onclose: () => void;
     /** Show this folder in the browser. */
     onopen: (path: string) => void;
   } = $props();
@@ -47,7 +45,6 @@
   const LIMIT = 200;
 
   let dialog: HTMLElement;
-  const opener = document.activeElement as HTMLElement | null;
 
   /** The two plain lists, kept while the person looks at another one, so what was picked
    * in them counts toward the move. */
@@ -348,51 +345,11 @@
     return () => {
       cleanupDuplicatesCancel().catch(() => {});
       unlisten.then((u) => u());
-      opener?.focus?.();
     };
   });
-
-  function onkeydown(e: KeyboardEvent) {
-    // Nothing behind the view may act on keys while it is open.
-    e.stopPropagation();
-    if (e.key === "Escape") {
-      e.preventDefault();
-      onclose();
-    }
-    if (e.key === "Tab") {
-      // Keep focus inside the view.
-      const items = [...dialog.querySelectorAll<HTMLElement>("button, select, input")].filter(
-        (el) => !el.hasAttribute("disabled"),
-      );
-      const first = items[0];
-      const last = items[items.length - 1];
-      const at = document.activeElement;
-      if (e.shiftKey && (at === first || at === dialog)) {
-        e.preventDefault();
-        last?.focus();
-      } else if (!e.shiftKey && at === last) {
-        e.preventDefault();
-        first?.focus();
-      }
-    }
-  }
 </script>
 
-<div
-  bind:this={dialog}
-  class="cleanup"
-  role="dialog"
-  aria-modal="true"
-  aria-labelledby="cleanup-title"
-  tabindex="-1"
-  {onkeydown}
->
-  <header>
-    <h2 id="cleanup-title">Cleanup</h2>
-    <span class="grow"></span>
-    <button onclick={onclose} aria-label="Close cleanup">✕</button>
-  </header>
-
+<section bind:this={dialog} class="cleanup" aria-label="Cleanup" tabindex="-1">
   <div class="modes" role="group" aria-label="What to look for">
     <button
       class:chosen={mode === "large"}
@@ -707,13 +664,12 @@
       </button>
     </aside>
   </div>
-</div>
+</section>
 
 <style>
   .cleanup {
-    position: fixed;
-    inset: 0;
-    z-index: 50;
+    flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     gap: var(--space-md);
@@ -722,21 +678,10 @@
     outline: none;
   }
 
-  header,
   .filters {
     display: flex;
     align-items: center;
     gap: var(--space-md);
-  }
-
-  h2 {
-    margin: 0;
-    font-size: var(--font-size-heading);
-    font-weight: var(--font-weight-semibold);
-  }
-
-  .grow {
-    flex: 1;
   }
 
   .modes {

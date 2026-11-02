@@ -68,6 +68,11 @@
     type MadeFile,
     type Moved,
     BIN_PATH,
+    CLEANUP_PATH,
+    SETTINGS_PATH,
+    STORAGE_PATH,
+    placeOf,
+    placeTitle,
   } from "$lib/api/fs";
   import { formatSize } from "$lib/format";
   import { editableImage, previewKind } from "$lib/preview";
@@ -97,7 +102,7 @@
     unpinFolder,
     updateSettings,
   } from "$lib/settings.svelte";
-  import SettingsDialog from "$lib/components/SettingsDialog.svelte";
+  import SettingsView from "$lib/components/SettingsView.svelte";
   import OnboardingTour from "$lib/components/OnboardingTour.svelte";
   import ImageToolsDialog from "$lib/components/ImageToolsDialog.svelte";
   import PdfToolsDialog from "$lib/components/PdfToolsDialog.svelte";
@@ -115,10 +120,15 @@
   let path = $state("");
   // Raw (not deeply proxied): listings are replaced wholesale, and proxying 50k objects is slow.
   let entries = $state.raw<Entry[]>([]);
-  let settingsOpen = $state(false);
-  let storageOpen = $state(false);
-  let cleanupOpen = $state(false);
   let cleanupStart = $state<"large" | "downloads" | "duplicates" | "partials">("large");
+  /** Bumped each time a cleanup list is asked for, so one already open starts over on it. */
+  let cleanupRun = $state(0);
+
+  function openCleanup(start: typeof cleanupStart) {
+    cleanupStart = start;
+    cleanupRun++;
+    showScreen(CLEANUP_PATH);
+  }
   /** A size scan is running (it is shared by every window). */
   let scanning = $state(false);
 
@@ -196,8 +206,7 @@
 
   const asView = (v: string | undefined): View | null => (v === "grid" || v === "list" ? v : null);
 
-  const folderName = (p: string) =>
-    p === BIN_PATH ? "Recycle Bin" : (pathSegments(p).at(-1)?.name ?? p);
+  const folderName = (p: string) => placeTitle(p) ?? pathSegments(p).at(-1)?.name ?? p;
   let tabPaths = $derived(tabs.map((t) => t.path));
   let tabViews = $derived(tabs.map((t) => t.view ?? ""));
   let tabCollapsed = $derived(tabs.map((t) => t.collapsed.join(",")));
@@ -234,10 +243,13 @@
   let tagFilter = $state<number[]>([]);
   /** The tag whose items the list shows, from every folder, instead of a folder. */
   let tagView = $state<Tag | null>(null);
-  /** The tab shows the Recycle Bin instead of a folder. */
-  const inBin = $derived(path === BIN_PATH);
+  /** The screen the tab shows instead of a folder: the Recycle Bin, Storage, Cleanup or Settings. */
+  const place = $derived(placeOf(path));
+  const inBin = $derived(place === "bin");
   /** There is no folder to create in, paste into or open a terminal in. */
-  const noFolder = $derived(!!tagView || inBin);
+  const noFolder = $derived(!!tagView || place !== null);
+  /** The last real folder a tab showed, for Storage to open on. */
+  let lastFolder = $state("");
   /** The list's order, set from the column headers. */
   let sort = $state<SortState>({ key: "name", desc: false });
   /** Sizes of the folders shown, from the scan cache; empty where nothing was scanned. */
@@ -297,7 +309,7 @@
 
   /** Reloads the current folder, keeping the selection for paths that still exist. */
   async function refresh(select?: string[]) {
-    if (inBin) return;
+    if (place) return;
     const gen = navGen;
     let list: Entry[];
     let tags: Record<string, number[]>;
@@ -326,7 +338,7 @@
   /** Shows `target` in the active tab. Resolves to false on error, null if a newer navigation took over. */
   async function load(target: string, quiet = false): Promise<boolean | null> {
     const gen = ++navGen;
-    if (target === BIN_PATH) {
+    if (placeOf(target)) {
       entries = [];
       path = target;
       tagView = null;
@@ -357,6 +369,7 @@
     tagFilter = [];
     tagMap = tags;
     recordRecent(target);
+    lastFolder = target;
     if (tabs[active]) {
       tabs[active].path = target;
       shownTabId = tabs[active].id;
@@ -467,6 +480,13 @@
   function openTab(target: string, background = false) {
     tabs.splice(active + 1, 0, newTab(target));
     if (!background) activate(active + 1);
+  }
+
+  /** Storage, Cleanup or Settings: in a tab of its own, or the one that already shows it. */
+  function showScreen(target: string) {
+    const open = tabs.findIndex((t) => t.path === target);
+    if (open >= 0) activate(open);
+    else openTab(target);
   }
 
   async function closeTab(index: number) {
@@ -1522,24 +1542,20 @@
         () => chooseTheme("system"),
         theme !== "system",
       ),
-      ...action("Settings", "Ctrl+,", () => (settingsOpen = true)),
+      ...action("Settings", "Ctrl+,", () => showScreen(SETTINGS_PATH)),
       ...action("Recycle Bin", "", () => navigate(BIN_PATH)),
-      ...action("Storage breakdown", "", () => (storageOpen = true)),
+      ...action("Storage breakdown", "", () => showScreen(STORAGE_PATH)),
       ...action("Clean up large and old files", "", () => {
-        cleanupStart = "large";
-        cleanupOpen = true;
+        openCleanup("large");
       }),
       ...action("Clean up unfinished copies", "", () => {
-        cleanupStart = "partials";
-        cleanupOpen = true;
+        openCleanup("partials");
       }),
       ...action("Find duplicate files", "", () => {
-        cleanupStart = "duplicates";
-        cleanupOpen = true;
+        openCleanup("duplicates");
       }),
       ...action("Clean up old downloads", "", () => {
-        cleanupStart = "downloads";
-        cleanupOpen = true;
+        openCleanup("downloads");
       }),
       ...action("Scan this folder for sizes", "", startScan, !scanning && !noFolder),
       ...action("Cancel the size scan", "", () => scanCancel(), scanning),
@@ -1787,7 +1803,7 @@
   function tabShortcut(e: KeyboardEvent, ctrl: boolean): Action | null {
     if (!ctrl) return null;
     const key = e.key.toLowerCase();
-    if (key === "," && !e.shiftKey) return () => (settingsOpen = true);
+    if (key === "," && !e.shiftKey) return () => showScreen(SETTINGS_PATH);
     if (key === "i" && !e.shiftKey && !e.altKey)
       return () => updateSettings({ showInspector: !settings.showInspector });
     if (key === "k" && !e.shiftKey && !e.altKey)
@@ -1894,13 +1910,10 @@
     if (
       asking ||
       menu ||
-      settingsOpen ||
       askCrash ||
       tourOpen ||
       pdfTools ||
       imageTools ||
-      storageOpen ||
-      cleanupOpen ||
       tagsOpen ||
       bulkOpen ||
       paletteOpen
@@ -1917,7 +1930,12 @@
     const target = e.target as HTMLElement;
     // File shortcuts don't apply while renaming or typing, or on a keyboard-focused tab
     // (it handles its own keys).
-    const fileKeys = !renaming && target.tagName !== "INPUT" && !target.closest?.("[role=tablist]");
+    // On Storage, Cleanup and Settings only Alt+arrows, for history, still reach the list.
+    const fileKeys =
+      !renaming &&
+      (!place || inBin || (e.altKey && e.key.startsWith("Arrow"))) &&
+      target.tagName !== "INPUT" &&
+      !target.closest?.("[role=tablist]");
     const action = tabShortcut(e, ctrl) ?? (fileKeys ? fileShortcut(e, ctrl) : null);
     if (!action) return;
     e.preventDefault();
@@ -2079,9 +2097,9 @@
       {dropTarget}
       {springPath}
       {springMs}
-      onsettings={() => (settingsOpen = true)}
+      onsettings={() => showScreen(SETTINGS_PATH)}
       tagLabel={tagView?.name ?? null}
-      {inBin}
+      placeTitle={placeTitle(path)}
       inspectorOpen={settings.showInspector}
       oninspector={() => updateSettings({ showInspector: !settings.showInspector })}
     />
@@ -2093,8 +2111,22 @@
         onclear={() => (tagFilter = [])}
       />
     {/if}
-    {#if inBin}
+    {#if place === "bin"}
       <BinView onrestored={() => refresh()} />
+    {:else if place === "storage"}
+      <StorageView start={lastFolder || startPath(home)} onopen={(p) => navigate(p)} />
+    {:else if place === "cleanup"}
+      {#key cleanupRun}
+        <CleanupView start={cleanupStart} onopen={(p) => navigate(p)} />
+      {/key}
+    {:else if place === "settings"}
+      <SettingsView
+        {theme}
+        ontheme={(t) => {
+          theme = t;
+          setTheme(t);
+        }}
+      />
     {:else}
       <FileView
         bind:this={fileView}
@@ -2126,9 +2158,9 @@
     {/if}
     <footer class="status" role="status">
       <span
-        >{plural(visible.length, "item")}{selection.size
-          ? ` · ${selection.size} selected`
-          : ""}</span
+        >{#if !place}{plural(visible.length, "item")}{selection.size
+            ? ` · ${selection.size} selected`
+            : ""}{/if}</span
       >
       <OpsPill
         {jobs}
@@ -2140,7 +2172,7 @@
     </footer>
   </main>
 
-  {#if settings.showInspector}
+  {#if settings.showInspector && (!place || inBin)}
     <Inspector
       folder={noFolder ? null : path}
       entries={visible}
@@ -2190,28 +2222,6 @@
   {#if bulkOpen}
     <BulkRenameDialog items={selected()} onapply={renameBatch} onclose={() => (bulkOpen = false)} />
   {/if}
-  {#if cleanupOpen}
-    <CleanupView
-      start={cleanupStart}
-      onclose={() => (cleanupOpen = false)}
-      onopen={(p) => {
-        cleanupOpen = false;
-        navigate(p);
-      }}
-    />
-  {/if}
-
-  {#if storageOpen}
-    <StorageView
-      start={path}
-      onclose={() => (storageOpen = false)}
-      onopen={(p) => {
-        storageOpen = false;
-        navigate(p);
-      }}
-    />
-  {/if}
-
   <UpdateBanner />
 
   {#if tourOpen}
@@ -2240,17 +2250,6 @@
         askCrash = false;
         crashSet(on).catch(() => {});
       }}
-    />
-  {/if}
-
-  {#if settingsOpen}
-    <SettingsDialog
-      {theme}
-      ontheme={(t) => {
-        theme = t;
-        setTheme(t);
-      }}
-      onclose={() => (settingsOpen = false)}
     />
   {/if}
 

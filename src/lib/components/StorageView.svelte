@@ -19,12 +19,10 @@
 
   let {
     start,
-    onclose,
     onopen,
   }: {
-    /** The folder the browser shows; its drive is picked first. */
+    /** The folder the browser last showed; its drive is picked first. */
     start: string;
-    onclose: () => void;
     /** Show this folder in the browser. */
     onopen: (path: string) => void;
   } = $props();
@@ -41,7 +39,6 @@
   ];
 
   let dialog: HTMLElement;
-  const opener = document.activeElement as HTMLElement | null;
 
   let drives = $state<Drive[]>([]);
   /** The drive (or scanned folder) the breakdown is for. */
@@ -193,47 +190,12 @@
     return () => {
       unlistenProgress.then((u) => u());
       unlistenDone.then((u) => u());
-      opener?.focus?.();
     };
   });
-
-  function onkeydown(e: KeyboardEvent) {
-    // Nothing behind the view may act on keys while it is open.
-    e.stopPropagation();
-    if (e.key === "Escape") {
-      e.preventDefault();
-      onclose();
-    }
-    if (e.key === "Tab") {
-      // Keep focus inside the view.
-      const items = [...dialog.querySelectorAll<HTMLElement>("button, select")].filter(
-        (el) => !el.hasAttribute("disabled"),
-      );
-      const first = items[0];
-      const last = items[items.length - 1];
-      const at = document.activeElement;
-      if (e.shiftKey && (at === first || at === dialog)) {
-        e.preventDefault();
-        last?.focus();
-      } else if (!e.shiftKey && at === last) {
-        e.preventDefault();
-        first?.focus();
-      }
-    }
-  }
 </script>
 
-<div
-  bind:this={dialog}
-  class="storage"
-  role="dialog"
-  aria-modal="true"
-  aria-labelledby="storage-title"
-  tabindex="-1"
-  {onkeydown}
->
+<section bind:this={dialog} class="storage" aria-label="Storage" tabindex="-1">
   <header>
-    <h2 id="storage-title">Storage</h2>
     <select
       aria-label="Drive"
       value={root}
@@ -258,7 +220,6 @@
         {isScanned ? "Rescan" : "Scan this drive"}
       </button>
     {/if}
-    <button onclick={onclose} aria-label="Close the storage view">✕</button>
   </header>
 
   {#if error}
@@ -343,13 +304,12 @@
       </section>
     </div>
   {/if}
-</div>
+</section>
 
 <style>
   .storage {
-    position: fixed;
-    inset: 0;
-    z-index: 50;
+    flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     gap: var(--space-md);
@@ -363,12 +323,6 @@
     display: flex;
     align-items: center;
     gap: var(--space-sm);
-  }
-
-  h2 {
-    margin: 0;
-    font-size: var(--font-size-heading);
-    font-weight: var(--font-weight-semibold);
   }
 
   .grow {

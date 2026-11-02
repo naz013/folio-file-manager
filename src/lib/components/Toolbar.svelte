@@ -19,7 +19,7 @@
     onnavigate,
     onsettings,
     tagLabel,
-    inBin = false,
+    placeTitle = null,
     inspectorOpen,
     oninspector,
   }: {
@@ -39,8 +39,8 @@
     onsettings: () => void;
     /** Set while the list shows the items of a tag instead of a folder. */
     tagLabel: string | null;
-    /** The tab shows the Recycle Bin. */
-    inBin?: boolean;
+    /** The name of the screen the tab shows instead of a folder, if it does. */
+    placeTitle?: string | null;
     inspectorOpen: boolean;
     oninspector: () => void;
   } = $props();
@@ -233,9 +233,9 @@
     <Icon name="chevronRight" />
   </button>
 
-  {#if inBin}
+  {#if placeTitle}
     <div class="tagview">
-      <strong>Recycle Bin</strong>
+      <strong>{placeTitle}</strong>
     </div>
   {:else if tagLabel}
     <div class="tagview">

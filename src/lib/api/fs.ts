@@ -83,8 +83,25 @@ export interface BinSize {
   size: number | null;
   entries: number | null;
 }
-/** The Recycle Bin as a place a tab can show, in the spot of a folder path. */
+/** The screens a tab can show in the spot of a folder path. */
 export const BIN_PATH = "folio:recycle-bin";
+export const STORAGE_PATH = "folio:storage";
+export const CLEANUP_PATH = "folio:cleanup";
+export const SETTINGS_PATH = "folio:settings";
+
+export type Place = "bin" | "storage" | "cleanup" | "settings";
+
+const PLACES: Record<string, { place: Place; title: string }> = {
+  [BIN_PATH]: { place: "bin", title: "Recycle Bin" },
+  [STORAGE_PATH]: { place: "storage", title: "Storage" },
+  [CLEANUP_PATH]: { place: "cleanup", title: "Cleanup" },
+  [SETTINGS_PATH]: { place: "settings", title: "Settings" },
+};
+
+/** The screen a tab's path stands for, or null for a real folder. */
+export const placeOf = (path: string): Place | null => PLACES[path]?.place ?? null;
+/** What a tab showing a screen is called, or null for a real folder. */
+export const placeTitle = (path: string): string | null => PLACES[path]?.title ?? null;
 
 export const binList = () => invoke<BinItem[]>("bin_list");
 export const binSizes = () => invoke<BinSize[]>("bin_sizes");

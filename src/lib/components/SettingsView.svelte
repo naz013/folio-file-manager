@@ -17,20 +17,15 @@
   let {
     theme,
     ontheme,
-    onclose,
   }: {
     theme: Theme;
     ontheme: (theme: Theme) => void;
-    onclose: () => void;
   } = $props();
 
   let dialog: HTMLElement;
-  /** Where focus was, so closing the dialog gives it back. */
-  const opener = document.activeElement as HTMLElement | null;
   onMount(() => {
     dialog.focus();
     if (isCustom) custom = settings.startLocation;
-    return () => opener?.focus?.();
   });
 
   let version = $state("");
@@ -116,48 +111,27 @@
     dialog.focus();
   }
 
+  /** Escape leaves the shortcuts list for the settings; the tab's own keys stay global. */
   function onkeydown(e: KeyboardEvent) {
-    // Nothing behind the dialog may act on keys while it is open.
-    e.stopPropagation();
-    if (e.key === "Tab") {
-      // Keep focus inside the dialog.
-      const items = [
-        ...dialog.querySelectorAll<HTMLElement>(
-          "button, select, input, [tabindex]:not([tabindex='-1'])",
-        ),
-      ].filter((el) => !el.hasAttribute("disabled"));
-      const first = items[0];
-      const last = items[items.length - 1];
-      const at = document.activeElement;
-      if (e.shiftKey && (at === first || at === dialog)) {
-        e.preventDefault();
-        last?.focus();
-      } else if (!e.shiftKey && at === last) {
-        e.preventDefault();
-        first?.focus();
-      }
-    }
-    if (e.key === "Escape") {
+    if (e.key === "Escape" && screen === "shortcuts") {
       e.preventDefault();
-      if (screen === "shortcuts") show("main");
-      else onclose();
+      show("main");
     }
   }
 
   const label: Record<Theme, string> = { system: "System", light: "Light", dark: "Dark" };
 </script>
 
-<div class="backdrop" role="presentation" onpointerdown={onclose}>
-  <div
-    bind:this={dialog}
-    class="dialog"
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby="settings-title"
-    tabindex="-1"
-    onpointerdown={(e) => e.stopPropagation()}
-    {onkeydown}
-  >
+<!-- Only answers Escape inside the shortcuts list. -->
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<section
+  bind:this={dialog}
+  class="settings"
+  aria-labelledby="settings-title"
+  tabindex="-1"
+  {onkeydown}
+>
+  <div class="page">
     <header>
       {#if screen === "shortcuts"}
         <span class="heading">
@@ -167,7 +141,6 @@
       {:else}
         <h2 id="settings-title">Settings</h2>
       {/if}
-      <button class="done" onclick={onclose}>Done</button>
     </header>
 
     {#if screen === "shortcuts"}
@@ -352,14 +325,7 @@
 
         <div class="row">
           <span>Welcome tour</span>
-          <button
-            onclick={() => {
-              updateSettings({ onboarded: false });
-              onclose();
-            }}
-          >
-            Show again
-          </button>
+          <button onclick={() => updateSettings({ onboarded: false })}> Show again </button>
         </div>
       </section>
 
@@ -406,28 +372,22 @@
       </section>
     {/if}
   </div>
-</div>
+</section>
 
 <style>
-  .backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 55;
-    display: grid;
-    place-items: center;
-    background: var(--scrim);
+  .settings {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    background: var(--bg-window);
+    outline: none;
   }
 
-  .dialog {
-    width: min(520px, calc(100vw - 2 * var(--space-xl)));
-    max-height: calc(100vh - 2 * var(--space-xl));
-    padding: var(--space-xl);
-    overflow-y: auto;
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-xl);
-    background: var(--bg-window);
-    box-shadow: var(--shadow-popover);
-    outline: none;
+  .page {
+    width: min(560px, 100%);
+    margin: 0 auto;
+    padding: var(--space-xl) var(--space-lg) var(--space-3xl);
+    box-sizing: border-box;
   }
 
   header {
@@ -471,14 +431,6 @@
     color: var(--text-secondary);
     font: inherit;
     font-size: var(--font-size-caption);
-  }
-
-  .done {
-    padding: var(--space-xs) var(--space-md);
-    border-radius: var(--radius-md);
-    background: var(--accent-default);
-    color: var(--text-on-accent);
-    font-weight: var(--font-weight-medium);
   }
 
   .row {
