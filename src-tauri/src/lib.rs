@@ -1,4 +1,5 @@
 mod bin;
+mod civil;
 mod cleanup;
 #[cfg(test)]
 mod cleanup_corpus;
@@ -307,6 +308,8 @@ pub fn run() {
             commands::image_estimate,
             commands::pdf_merge,
             commands::pdf_compress,
+            commands::zip_compress,
+            commands::zip_extract,
             commands::update_gate,
             commands::update_restart,
         ])

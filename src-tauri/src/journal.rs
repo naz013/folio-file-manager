@@ -69,12 +69,19 @@ pub enum Step {
         #[serde(default)]
         seal: Option<Seal>,
     },
-    /// A file with content made by a tool (a merged or compressed PDF). Undo trashes it, if
-    /// it is still exactly as made. It can't be made again by redo.
+    /// A file or folder made by a tool (a merged or compressed PDF, a zip or the folder it
+    /// was unpacked into). Undo trashes it, if it is still exactly as made (for a folder
+    /// of over `SEAL_LIMIT` entries nothing can be promised, so undo is refused). It can't
+    /// be made again by redo.
     Made {
         path: PathBuf,
         #[serde(default)]
         seal: Option<Seal>,
+        /// What it was made from, when it is a stand-in for it (a zip of folders, the folder
+        /// a zip was unpacked into). Undo is refused once none of it is left: the result
+        /// would be the only copy.
+        #[serde(default)]
+        from: Vec<PathBuf>,
     },
     /// `id` identifies the item in the Recycle Bin / Trash; `None` where it can't be
     /// found again (macOS, or a bin that wouldn't list it).
@@ -106,8 +113,13 @@ impl Step {
     }
 
     pub fn made(path: PathBuf) -> Self {
+        Self::made_from(path, Vec::new())
+    }
+
+    /// A file or folder made from `from`, which undo checks is still there.
+    pub fn made_from(path: PathBuf, from: Vec<PathBuf>) -> Self {
         let seal = seal(&path);
-        Self::Made { path, seal }
+        Self::Made { path, seal, from }
     }
 
     pub fn copied(from: PathBuf, to: PathBuf) -> Self {
@@ -648,9 +660,20 @@ fn undo_step(step: &Step) -> io::Result<()> {
             }
             ops::trash(std::slice::from_ref(to)).map_err(|e| trash_error(&e))
         }
-        Step::Made { path, seal: sealed } => {
+        Step::Made {
+            path,
+            seal: sealed,
+            from,
+        } => {
             if !exists(path) {
                 return Err(gone(path));
+            }
+            // Without what it was made from, it is the only copy.
+            if !from.is_empty() && !from.iter().any(|p| exists(p)) {
+                return Err(changed(format!(
+                    "What \"{}\" was made from is gone, so Folio won't remove the only copy",
+                    name_of(path)
+                )));
             }
             // Without a seal there is no telling whether the file was edited since.
             if sealed.is_none() || seal(path) != *sealed {
@@ -1368,6 +1391,36 @@ mod tests {
         std::fs::write(&made, "%PDF content, edited later").unwrap();
         assert!(j.undo().is_err());
         assert!(made.exists());
+    }
+
+    #[test]
+    fn a_made_file_is_not_undone_once_what_it_was_made_from_is_gone() {
+        let t = tmp();
+        let (a, b) = (t.path().join("a"), t.path().join("b"));
+        std::fs::write(&b, "x").unwrap();
+        let source = t.path().join("docs");
+        std::fs::create_dir(&source).unwrap();
+        let made = t.path().join("docs.zip");
+        std::fs::write(&made, "zip content").unwrap();
+        let j = journal();
+        done(&j, "older", &[rename_step(&a, &b)]);
+        done(
+            &j,
+            "Compress",
+            &[Step::made_from(made.clone(), vec![source.clone()])],
+        );
+        // The folder was deleted outside Folio: the zip is all that is left of it.
+        std::fs::remove_dir(&source).unwrap();
+        let error = j.undo().unwrap_err();
+        assert!(error.contains("only copy"), "{error}");
+        assert!(made.exists());
+    }
+
+    #[test]
+    fn an_entry_saved_before_made_steps_knew_their_sources_still_loads() {
+        let old = r#"{"step":"made","path":"C:/x/Merged.pdf"}"#;
+        let step: Step = serde_json::from_str(old).unwrap();
+        assert!(matches!(step, Step::Made { from, .. } if from.is_empty()));
     }
 
     #[test]

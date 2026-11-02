@@ -38,6 +38,20 @@ pub fn bin_room(letter: char) -> Option<u64> {
     left
 }
 
+/// Bytes the current user may still write on the volume holding `path`.
+pub fn free_for(path: &std::path::Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut free = 0u64;
+    // SAFETY: `wide` is NUL-terminated and outlives the call; the out-pointer refers to a live local.
+    unsafe { GetDiskFreeSpaceExW(PCWSTR(wide.as_ptr()), Some(&raw mut free), None, None) }.ok()?;
+    Some(free)
+}
+
 fn bin_room_of(root: &[u16]) -> Option<u64> {
     // SAFETY: `root` is NUL-terminated and outlives the call.
     let kind = unsafe { GetDriveTypeW(PCWSTR(root.as_ptr())) };

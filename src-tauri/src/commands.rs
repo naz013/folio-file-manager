@@ -1454,6 +1454,9 @@ struct MadeFile {
     /// Something to tell the user about, if the job did not go as it should.
     #[serde(skip_serializing_if = "Option::is_none")]
     note: Option<String>,
+    /// What to say when it went well, in place of the usual "Saved <name>".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
 }
 
 /// Runs `make` in the background and writes what it returns as `dir/name` (or the next free
@@ -1508,6 +1511,7 @@ fn submit_pdf(
             // Merging needs two files, so one file is a compression.
             compressed: sources.len() == 1,
             note: None,
+            message: None,
             path: output.to_string_lossy().into_owned(),
         })
         .unwrap_or_default())
@@ -1705,6 +1709,7 @@ pub fn image_edit(
                  can't bring it back. Restore it from the Recycle Bin."
                     .to_owned()
             }),
+            message: None,
         })
         .unwrap_or_default())
     });
@@ -1766,6 +1771,151 @@ pub fn pdf_compress(
         name,
         move || ops::pdf::compress(&input, preset),
     )
+}
+
+/// The name of an archive made from `sources`: the item's own name, or the folder's for
+/// several.
+fn archive_name(sources: &[PathBuf]) -> String {
+    let stem = |p: &std::path::Path| {
+        let name = p.file_name().map(|n| n.to_string_lossy().into_owned());
+        // A file loses its extension; a folder keeps what looks like one.
+        match (name, p.is_dir()) {
+            (Some(n), true) => Some(n),
+            (Some(n), false) => Some(
+                n.rsplit_once('.')
+                    .filter(|(s, _)| !s.is_empty())
+                    .map_or(n.clone(), |(s, _)| s.to_owned()),
+            ),
+            _ => None,
+        }
+    };
+    let base = match sources {
+        [one] => stem(one),
+        _ => sources.first().and_then(|p| p.parent()).and_then(stem),
+    };
+    format!("{}.zip", base.unwrap_or_else(|| "Archive".into()))
+}
+
+/// Packs `paths` (from one folder) into a new zip next to them, called `name` or named after
+/// them. Links are left out. Undo moves the archive to the Recycle Bin. Returns the job id.
+#[tauri::command(async)]
+pub fn zip_compress(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    queue: tauri::State<'_, Arc<Queue>>,
+    paths: Vec<String>,
+    name: Option<String>,
+) -> CmdResult<u64> {
+    let sources = self::paths(paths);
+    let dir = sources
+        .first()
+        .and_then(|p| p.parent())
+        .ok_or("Nothing to compress")?
+        .to_path_buf();
+    if sources.iter().any(|p| p.parent() != Some(dir.as_path())) {
+        return Err("Compress items from one folder at a time".into());
+    }
+    let name = name.unwrap_or_else(|| archive_name(&sources));
+    ops::validate_name(&name).map_err(|e| e.to_string())?;
+    if !name.to_lowercase().ends_with(".zip") || cleanup::is_partial_name(&name) {
+        return Err(format!("\"{name}\" must end in .zip"));
+    }
+    let lane = ops::volume_key(&dir);
+    let label = describe("Compress", &sources);
+    let title = label.clone();
+    let handle = app.clone();
+    let work: queue::Work = Box::new(move |_progress| {
+        let journal = handle.state::<Journal>();
+        let pending = begin(&journal, &label)?;
+        let result = ops::archive::compress(&sources, &dir, &name);
+        let steps: Vec<Step> = result
+            .as_ref()
+            .map(|p| Step::made_from(p.path.clone(), sources.clone()))
+            .into_iter()
+            .collect();
+        journal.finish(pending, &steps);
+        let packed = result.map_err(|e| e.to_string())?;
+        let before = ops::total_bytes(&sources);
+        let after = std::fs::metadata(&packed.path).map_or(0, |m| m.len());
+        let note = (packed.skipped > 0).then(|| {
+            format!(
+                "Compressed, but left out {} item{}: links, and names that are not text, can't go in an archive.",
+                packed.skipped,
+                if packed.skipped == 1 { "" } else { "s" }
+            )
+        });
+        Ok(serde_json::to_value(MadeFile {
+            before,
+            after,
+            compressed: true,
+            note,
+            message: None,
+            path: packed.path.to_string_lossy().into_owned(),
+        })
+        .unwrap_or_default())
+    });
+    Ok(queue.submit(&app, window.label(), Kind::Edit, title, &lane, work))
+}
+
+/// Unpacks the zip at `path` into a new folder next to it, named after it. Entries that are
+/// links or point outside the folder are left out. Undo moves the folder to the Recycle Bin.
+/// Returns the job id.
+#[tauri::command(async)]
+pub fn zip_extract(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    queue: tauri::State<'_, Arc<Queue>>,
+    path: String,
+) -> CmdResult<u64> {
+    let archive = PathBuf::from(path);
+    let dir = archive
+        .parent()
+        .ok_or("No folder to unpack into")?
+        .to_path_buf();
+    let lane = ops::volume_key(&dir);
+    let label = describe("Extract", std::slice::from_ref(&archive));
+    let title = label.clone();
+    let handle = app.clone();
+    let work: queue::Work = Box::new(move |_progress| {
+        let journal = handle.state::<Journal>();
+        let pending = begin(&journal, &label)?;
+        let result = ops::archive::extract(&archive);
+        let steps: Vec<Step> = result
+            .as_ref()
+            .map(|u| Step::made_from(u.path.clone(), vec![archive.clone()]))
+            .into_iter()
+            .collect();
+        journal.finish(pending, &steps);
+        let unpacked = result.map_err(|e| e.to_string())?;
+        let name = unpacked
+            .path
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        let note = (unpacked.skipped > 0).then(|| {
+            format!(
+                "Extracted to \"{name}\", but left out {} entr{} that were links or pointed outside the folder.",
+                unpacked.skipped,
+                if unpacked.skipped == 1 { "y" } else { "ies" }
+            )
+        });
+        Ok(serde_json::to_value(MadeFile {
+            before: std::fs::metadata(&archive).map_or(0, |m| m.len()),
+            after: ops::total_bytes(std::slice::from_ref(&unpacked.path)),
+            compressed: false,
+            note,
+            message: Some(format!(
+                "Extracted {} to \"{name}\"",
+                if unpacked.files == 1 {
+                    "1 file".to_owned()
+                } else {
+                    format!("{} files", unpacked.files)
+                }
+            )),
+            path: unpacked.path.to_string_lossy().into_owned(),
+        })
+        .unwrap_or_default())
+    });
+    Ok(queue.submit(&app, window.label(), Kind::Edit, title, &lane, work))
 }
 
 /// Whether an update may be installed now. Installing can end the app (the Windows installer

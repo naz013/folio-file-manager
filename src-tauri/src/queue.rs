@@ -30,7 +30,8 @@ pub enum Kind {
     Copy,
     Move,
     Trash,
-    /// A file made by a tool: a PDF merged or made smaller, a picture edited.
+    /// A file or folder made by a tool: a PDF merged or made smaller, a picture edited, a
+    /// zip made or unpacked.
     Edit,
 }
 

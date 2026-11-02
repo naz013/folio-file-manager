@@ -412,6 +412,8 @@ export interface MadeFile {
   compressed: boolean;
   /** Something the user should read, when the job did not go as it should. */
   note?: string;
+  /** What to say when it went well, in place of "Saved <name>". */
+  message?: string;
 }
 /** Joins the PDFs in the order given into a new file called `name` next to the first. */
 export const pdfMerge = (paths: string[], name: string) =>
@@ -419,6 +421,12 @@ export const pdfMerge = (paths: string[], name: string) =>
 /** Saves a smaller copy of a PDF as `name` next to it. */
 export const pdfCompress = (path: string, preset: PdfPreset, name: string) =>
   invoke<number>("pdf_compress", { path, preset, name });
+
+/** Packs items from one folder into a new zip next to them, named `name` or after them. */
+export const zipCompress = (paths: string[], name?: string) =>
+  invoke<number>("zip_compress", { paths, name: name ?? null });
+/** Unpacks a zip into a new folder next to it, named after it. */
+export const zipExtract = (path: string) => invoke<number>("zip_extract", { path });
 
 /** How far a picture is made smaller (`ops::image_edit::Preset`). */
 export type ImagePreset = "high" | "balanced" | "small" | "smallest";

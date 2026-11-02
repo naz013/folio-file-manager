@@ -49,6 +49,7 @@ Only `commands/` and `fs/` exist today; the other modules arrive with their mile
 ### Operations engine
 
 - All mutating operations go through a single queue in Rust (`ops/`), never directly from the UI.
+- Zip (`ops/archive.rs`) packs files and folders into a new `.zip` and unpacks one into a new folder named after it. Both stream through a temporary `.folio-partial` name and rename when complete, report bytes and files to the queue, stop on cancel, never follow or store links, and never write outside the target folder (entry names that climb out are skipped and counted). Deflate and deflate64. Stamps are the local wall-clock time, as zip keeps them. An unpack is refused up front if it won't fit in the free space, and files inherit the archive's Mark-of-the-Web on Windows. A failed unpack removes only the files and folders it made. Cloud-only files are refused, not downloaded. Undo trashes what was made, if it is unchanged and what it was made from still exists (refused for a folder of over 200,000 entries).
 - Each operation writes an **undo journal** entry to SQLite before it executes.
 - Deletes use the OS trash (`trash` crate). Permanent delete requires an explicit
   Shift+Delete-style confirmation. See [ADR 0003](decisions/0003-trash-first.md).

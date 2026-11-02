@@ -69,6 +69,8 @@
     releasePreview,
     type Job,
     type MadeFile,
+    zipCompress,
+    zipExtract,
     type Moved,
     BIN_PATH,
     CLEANUP_PATH,
@@ -639,6 +641,19 @@
     fileView?.focusList();
   }
 
+  const isZip = (e: Entry) => !e.isDir && e.name.toLowerCase().endsWith(".zip");
+
+  /** Packs the selection into a zip next to it, in the background. */
+  async function compressSelection() {
+    const picked = selected();
+    if (picked.length && !noFolder) await run(() => zipCompress(picked.map((e) => e.path)));
+  }
+
+  /** Unpacks each selected zip into a folder of its own, in the background. */
+  async function extractSelection() {
+    for (const zip of selected().filter(isZip)) await run(() => zipExtract(zip.path));
+  }
+
   function open(entry: Entry) {
     if (entry.isDir) navigate(entry.path);
     else openPath(entry.path).catch((e) => notify(String(e), true));
@@ -901,9 +916,10 @@
       }
       const smaller = made.before - made.after;
       notify(
-        made.compressed && smaller > 0
-          ? `Saved ${name}: ${formatSize(smaller)} smaller (${Math.round((smaller / made.before) * 100)}%)`
-          : `Saved ${name}`,
+        made.message ??
+          (made.compressed && smaller > 0
+            ? `Saved ${name}: ${formatSize(smaller)} smaller (${Math.round((smaller / made.before) * 100)}%)`
+            : `Saved ${name}`),
       );
       dismissJob(job.id);
       refresh(parentOf(made.path) === path ? [made.path] : []);
@@ -1654,6 +1670,8 @@
           i !== active,
         ),
       ),
+      ...action("Compress to ZIP", "", compressSelection, any && !noFolder),
+      ...action("Extract ZIP", "", extractSelection, selected().some(isZip)),
       ...action("Clear recent folders", undefined, clearRecent),
       ...action("Grid view", undefined, () => setView("grid"), view !== "grid"),
       ...action("List view", undefined, () => setView("list"), view !== "list"),
@@ -1821,6 +1839,8 @@
         ? [{ label: "Rename…", hint: "F2", run: () => (bulkOpen = true) }]
         : []),
       { label: "Tags…", run: () => (tagsOpen = true) },
+      ...(noFolder ? [] : [{ label: "Compress to ZIP", run: compressSelection }]),
+      ...(picked.some(isZip) ? [{ label: "Extract", run: extractSelection }] : []),
       ...(picked.some(isPdf)
         ? [{ label: "PDF tools…", run: () => openPdfTools(one ?? undefined) }]
         : []),

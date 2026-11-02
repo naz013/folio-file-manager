@@ -11,6 +11,16 @@ use super::PARTIAL;
 
 /// Writes `bytes` to a new temporary file in `dir` named after `name`, and returns it.
 pub fn stage(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<PathBuf> {
+    stage_with(dir, name, |file| file.write_all(bytes))
+}
+
+/// Like [`stage`], for content too big to hold in memory: `write` puts it in the new file.
+/// The temporary file is removed if `write` or the final sync fails.
+pub fn stage_with(
+    dir: &Path,
+    name: &str,
+    write: impl FnOnce(&mut fs::File) -> io::Result<()>,
+) -> io::Result<PathBuf> {
     let (temp, mut file) = (0..100)
         .find_map(|n| {
             let temp = dir.join(format!("{name}.{}-{n}{PARTIAL}", std::process::id()));
@@ -25,7 +35,7 @@ pub fn stage(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<PathBuf> {
             }
         })
         .unwrap_or_else(|| Err(io::Error::from(ErrorKind::AlreadyExists)))?;
-    if let Err(e) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+    if let Err(e) = write(&mut file).and_then(|()| file.sync_all()) {
         drop(file);
         let _ = fs::remove_file(&temp);
         return Err(e);

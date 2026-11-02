@@ -5,6 +5,7 @@ use std::path::Path;
 
 #[cfg(windows)]
 mod clipboard;
+pub mod clock;
 #[cfg(windows)]
 mod drives;
 #[cfg(windows)]
@@ -22,6 +23,34 @@ pub fn show_context_menu(
 ) -> Result<(), String> {
     let hwnd = ::windows::Win32::Foundation::HWND(hwnd as *mut std::ffi::c_void);
     win_menu::show(hwnd, paths, extended).map_err(|e| e.to_string())
+}
+
+/// Bytes a program may still write on the volume holding `path`; `None` where that can't be
+/// told.
+pub fn free_space(path: &Path) -> Option<u64> {
+    #[cfg(windows)]
+    {
+        drives::free_for(path)
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+        // SAFETY: `statvfs` is plain data that the call fills in; `c_path` is NUL-terminated
+        // and outlives the call.
+        let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::statvfs(c_path.as_ptr(), &raw mut stat) } != 0 {
+            return None;
+        }
+        u64::try_from(stat.f_bavail)
+            .ok()?
+            .checked_mul(u64::try_from(stat.f_frsize).ok()?)
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = path;
+        None
+    }
 }
 
 /// Opens a terminal whose working folder is `dir`: Windows Terminal if it is installed,
