@@ -200,6 +200,16 @@ export const SCAN_CATEGORIES = [
 export const scanRunning = () => invoke<boolean>("scan_running");
 /** The size of a scanned folder: [bytes, files], or null if it hasn't been scanned. */
 export const scanSize = (dir: string) => invoke<[number, number] | null>("scan_size", { dir });
+/** What a folder holds, counted fresh from the disk. */
+export interface Measured {
+  bytes: number;
+  files: number;
+  folders: number;
+}
+/** Counts a folder in the background; null if `measureCancel(id)` stopped it first. */
+export const measureDir = (id: number, dir: string) =>
+  invoke<Measured | null>("measure_dir", { id, dir });
+export const measureCancel = (id: number) => invoke<void>("measure_cancel", { id });
 export const scanRoots = () => invoke<ScanRoot[]>("scan_roots");
 export const onScanProgress = (cb: (p: ScanProgress) => void): Promise<UnlistenFn> =>
   listen<ScanProgress>("scan-progress", (e) => cb(e.payload));

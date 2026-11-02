@@ -150,6 +150,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(watch::DirWatcher::default())
         .manage(preview::Current::default())
+        .manage(commands::Measuring::default())
         .setup(|app| {
             #[cfg(desktop)]
             app.handle()
@@ -290,6 +291,8 @@ pub fn run() {
             commands::cleanup_trash_duplicates,
             commands::scan_running,
             commands::scan_size,
+            commands::measure_dir,
+            commands::measure_cancel,
             commands::scan_roots,
             commands::scan_categories,
             commands::list_drives,

@@ -48,10 +48,14 @@
   }
 
   const colorOf = (kind: string) => KINDS.find((k) => k.name === kind)?.color ?? "--tag-gray";
+
+  /** Ids for the folder counts, so a newer selection can stop the ones under way. */
+  let nextJob = 0;
 </script>
 
 <script lang="ts">
-  import type { Entry, Tag } from "$lib/api/fs";
+  import { untrack } from "svelte";
+  import { measureCancel, measureDir, type Entry, type Measured, type Tag } from "$lib/api/fs";
   import { formatDate, formatSize } from "$lib/format";
   import { tagColor } from "$lib/tags";
   import FolderIcon from "./FolderIcon.svelte";
@@ -81,6 +85,57 @@
   } = $props();
 
   const total = (items: Entry[]) => items.reduce((sum, e) => sum + (e.isDir ? 0 : e.size), 0);
+
+  /** What each selected folder holds, as last counted. A folder's size is not in the listing:
+   *  it is counted from the disk in the background each time it is selected, and the last
+   *  answer stays up until the new one arrives. */
+  const measured = $state<Record<string, Measured>>({});
+  /** The folders counted since the selection last changed. */
+  let fresh = $state<string[]>([]);
+  const selectedFolders = $derived(
+    picked
+      .filter((e) => e.isDir)
+      .map((e) => e.path)
+      .join("\u0000"),
+  );
+
+  $effect(() => {
+    const paths = selectedFolders ? selectedFolders.split("\u0000") : [];
+    untrack(() => (fresh = []));
+    let current = true;
+    let active = 0;
+    // One folder at a time, so a big selection doesn't read the whole disk at once.
+    (async () => {
+      for (const path of paths) {
+        if (!current) return;
+        active = ++nextJob;
+        const m = await measureDir(active, path).catch(() => null);
+        if (!current) return;
+        if (m) {
+          measured[path] = m;
+          fresh = [...fresh, path];
+        }
+      }
+    })();
+    return () => {
+      current = false;
+      if (active) measureCancel(active).catch(() => {});
+    };
+  });
+
+  const pickedFolders = $derived(picked.filter((e) => e.isDir).map((e) => e.path));
+  const counting = (paths: string[]) => paths.some((p) => !fresh.includes(p));
+  /** The size of the selection: files as listed, folders as counted. Null until every folder
+   *  has been counted at least once. */
+  const selectionBytes = (items: Entry[]) => {
+    let sum = 0;
+    for (const e of items) {
+      if (!e.isDir) sum += e.size;
+      else if (measured[e.path]) sum += measured[e.path].bytes;
+      else return null;
+    }
+    return sum;
+  };
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
   /** Where the space goes: bytes by kind of file, largest first. */
@@ -94,6 +149,8 @@
     return Object.entries(by).sort((a, b) => b[1] - a[1]);
   });
   let breakdownTotal = $derived(breakdown.reduce((sum, [, bytes]) => sum + bytes, 0));
+
+  const pickedBytes = $derived(selectionBytes(picked));
 
   const folders = (items: Entry[]) => items.filter((e) => e.isDir).length;
 </script>
@@ -113,8 +170,15 @@
     <dl>
       <dt>Kind</dt>
       <dd>{item.isDir ? "Folder" : kindOf(item.name)}</dd>
-      {#if !item.isDir}<dt>Size</dt>
-        <dd>{formatSize(item.size)}</dd>{/if}
+      <dt>Size</dt>
+      {#if !item.isDir}
+        <dd>{formatSize(item.size)}</dd>
+      {:else}
+        {@const m = measured[item.path]}
+        <dd class:busy={counting([item.path])} aria-busy={counting([item.path])}>
+          {#if m}{formatSize(m.bytes)} · {plural(m.files, "file")}{:else}Calculating…{/if}
+        </dd>
+      {/if}
       <dt>Modified</dt>
       <dd>{formatDate(item.modified)}</dd>
       <dt>Where</dt>
@@ -128,7 +192,9 @@
       <dt>Folders</dt>
       <dd>{folders(picked)}</dd>
       <dt>Total size</dt>
-      <dd>{formatSize(total(picked))}</dd>
+      <dd class:busy={counting(pickedFolders)} aria-busy={counting(pickedFolders)}>
+        {pickedBytes === null ? "Calculating…" : formatSize(pickedBytes)}
+      </dd>
     </dl>
   {:else}
     <div class="preview"><FolderIcon size={96} /></div>
@@ -191,6 +257,10 @@
 </aside>
 
 <style>
+  .busy {
+    opacity: 0.6;
+  }
+
   .inspector {
     display: flex;
     flex-direction: column;

@@ -224,6 +224,14 @@ pub struct Sized {
     pub files: u64,
 }
 
+/// What one folder holds, counted fresh from the disk.
+#[derive(Serialize, Debug, PartialEq, Eq)]
+pub struct Measured {
+    pub bytes: u64,
+    pub files: u64,
+    pub folders: u64,
+}
+
 /// A file from the big-file list.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct BigFile {
@@ -995,6 +1003,41 @@ fn add_above(
     }
 }
 
+/// Counts what is in `root` and below it, straight from the disk and without the cache, for
+/// a folder the user is looking at. Links are not followed and what can't be read is
+/// skipped. `None` if `cancel` was set before it finished.
+pub fn measure(root: &Path, cancel: &AtomicBool) -> Option<Measured> {
+    let mut out = Measured {
+        bytes: 0,
+        files: 0,
+        folders: 0,
+    };
+    let walker = WalkDirGeneric::<((), Option<u64>)>::new(root)
+        .skip_hidden(false)
+        .follow_links(false)
+        .process_read_dir(|_, _, (), children| {
+            for child in children.iter_mut().flatten() {
+                if child.file_type().is_file() {
+                    child.client_state = child.metadata().ok().map(|m| m.len());
+                }
+            }
+        });
+    for entry in walker {
+        if cancel.load(Ordering::Relaxed) {
+            return None;
+        }
+        let Ok(entry) = entry else { continue };
+        if entry.file_type().is_dir() {
+            // The root itself is not one of the folders it holds.
+            out.folders += u64::from(entry.depth > 0);
+        } else if entry.file_type().is_file() {
+            out.files += 1;
+            out.bytes += entry.client_state.unwrap_or(0);
+        }
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1259,5 +1302,20 @@ mod tests {
             t.elapsed(),
             top.len()
         );
+    }
+
+    #[test]
+    fn measure_counts_everything_below_the_folder() {
+        let dir = sample();
+        let got = measure(dir.path(), &AtomicBool::new(false)).unwrap();
+        assert_eq!(got.files, 5);
+        assert_eq!(got.folders, 3);
+        assert_eq!(got.bytes, 10 + 100 + 1_000 + BIG_MIN + 5);
+    }
+
+    #[test]
+    fn measure_stops_when_cancelled() {
+        let dir = sample();
+        assert_eq!(measure(dir.path(), &AtomicBool::new(true)), None);
     }
 }

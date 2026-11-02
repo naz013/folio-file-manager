@@ -11,7 +11,7 @@ use crate::fs::{self, Entry};
 use crate::journal::{self, Journal, Step};
 use crate::ops;
 use crate::queue::{self, Kind, Queue};
-use crate::scan::{BigFile, RootInfo, Scanner, Sized};
+use crate::scan::{self, BigFile, Measured, RootInfo, Scanner, Sized};
 use crate::session::{Session, WindowTabs};
 use crate::shelf::{Shelf, ShelfItem};
 use crate::tags::{Tag, Tags};
@@ -19,6 +19,7 @@ use crate::watch::DirWatcher;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager;
 
 type CmdResult<T> = Result<T, String>;
@@ -985,6 +986,37 @@ pub fn scan_running(scanner: tauri::State<'_, Scanner>) -> bool {
 #[tauri::command(async)]
 pub fn scan_size(scanner: tauri::State<'_, Scanner>, dir: String) -> Option<(u64, u64)> {
     scanner.size_of(&PathBuf::from(dir))
+}
+
+/// The folder measurements under way, by the id the window gave each, so a newer selection
+/// can stop them.
+#[derive(Default)]
+pub struct Measuring(std::sync::Mutex<std::collections::HashMap<u64, Arc<AtomicBool>>>);
+
+impl Measuring {
+    fn jobs(&self) -> std::sync::MutexGuard<'_, std::collections::HashMap<u64, Arc<AtomicBool>>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// Counts a folder fresh from the disk, in the background: (bytes, files, folders), or
+/// nothing if `measure_cancel` stopped it first.
+#[tauri::command(async)]
+pub fn measure_dir(jobs: tauri::State<'_, Measuring>, id: u64, dir: String) -> Option<Measured> {
+    let cancel = Arc::new(AtomicBool::new(false));
+    jobs.jobs().insert(id, Arc::clone(&cancel));
+    let out = scan::measure(&PathBuf::from(dir), &cancel);
+    jobs.jobs().remove(&id);
+    out
+}
+
+#[tauri::command]
+pub fn measure_cancel(jobs: tauri::State<'_, Measuring>, id: u64) {
+    if let Some(cancel) = jobs.jobs().get(&id) {
+        cancel.store(true, Ordering::Relaxed);
+    }
 }
 
 #[tauri::command(async)]
