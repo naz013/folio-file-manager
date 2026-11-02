@@ -93,6 +93,13 @@ pub fn list_drives() -> Vec<DriveInfo> {
 /// "Don't move files to the Recycle Bin"), where a delete is for good. This is read from
 /// the user's own setting for the drive, less what is already in the bin. Elsewhere the
 /// Trash has no limit.
+#[cfg_attr(
+    not(windows),
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "the Windows version has no limit to give"
+    )
+)]
 pub fn recycle_limit(path: &Path) -> Option<u64> {
     #[cfg(windows)]
     {
