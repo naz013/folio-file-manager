@@ -27,6 +27,7 @@
   const MODES: { id: RenameMode; label: string }[] = [
     { id: "replace", label: "Find & replace" },
     { id: "number", label: "Number" },
+    { id: "date", label: "Date" },
     { id: "case", label: "Case" },
     { id: "affix", label: "Prefix & suffix" },
   ];
@@ -44,7 +45,7 @@
   let failure = $state("");
 
   const plan = $derived(
-    items.map((e, i) => ({ path: e.path, newName: newName(e.name, e.isDir, i, rule) })),
+    items.map((e, i) => ({ path: e.path, newName: newName(e.name, e.isDir, i, rule, e.modified) })),
   );
   const rows = $derived(items.map((e, i) => ({ old: e.name, now: plan[i].newName })));
   const changed = $derived(rows.filter((r) => r.old !== r.now).length);
@@ -165,6 +166,23 @@
           <label>Start at <input type="number" min="0" bind:value={rule.start} /></label>
           <label>Digits <input type="number" min="1" max="9" bind:value={rule.digits} /></label>
         </div>
+      {:else if rule.mode === "date"}
+        <label>
+          Name pattern
+          <input bind:value={rule.datePattern} spellcheck="false" />
+        </label>
+        <p class="hint">
+          <code>{"{name}"}</code> is the old name, <code>{"{date}"}</code> the modified date.
+        </p>
+        <label>
+          Date format
+          <input bind:value={rule.dateFormat} spellcheck="false" />
+        </label>
+        <p class="hint">
+          <code>YYYY</code> <code>MM</code> <code>DD</code> <code>HH</code> <code>mm</code>
+          <code>ss</code>, in local time. Any other letter of these kinds is read as a part too.
+          Characters a name can't hold are refused in the preview.
+        </p>
       {:else if rule.mode === "case"}
         <label>
           Change to

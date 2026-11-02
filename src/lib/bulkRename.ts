@@ -3,7 +3,7 @@
  * valid or taken is decided by the Rust core (`check_renames`), which also does the renaming.
  */
 
-export type RenameMode = "replace" | "number" | "case" | "affix";
+export type RenameMode = "replace" | "number" | "date" | "case" | "affix";
 
 export interface RenameRule {
   mode: RenameMode;
@@ -17,6 +17,10 @@ export interface RenameRule {
   start: number;
   /** Zero-pad the number to this many digits. */
   digits: number;
+  /** Pattern for "date": `{name}` is the old name, `{date}` the modified date. */
+  datePattern: string;
+  /** Layout of `{date}`: YYYY, MM, DD, HH, mm and ss stand for the parts of the local time. */
+  dateFormat: string;
   textCase: "lower" | "upper" | "title" | "sentence";
   prefix: string;
   suffix: string;
@@ -31,6 +35,8 @@ export const DEFAULT_RULE: RenameRule = {
   pattern: "{name} {n}",
   start: 1,
   digits: 1,
+  datePattern: "{name} {date}",
+  dateFormat: "YYYY-MM-DD",
   textCase: "lower",
   prefix: "",
   suffix: "",
@@ -53,6 +59,26 @@ export function ruleError(rule: RenameRule): string | null {
   } catch (e) {
     return String(e instanceof Error ? e.message : e);
   }
+}
+
+/** `pattern` with each placeholder replaced in one pass, so a value is never searched again. */
+function fill(pattern: string, values: Record<string, string>): string {
+  return pattern.replace(/\{(?:name|n|date)\}/g, (token) => values[token] ?? token);
+}
+
+/** `modified` (ms since the epoch) laid out as `format`, in local time. */
+export function formatStamp(modified: number, format: string): string {
+  const d = new Date(modified);
+  const two = (n: number) => String(n).padStart(2, "0");
+  const parts: Record<string, string> = {
+    YYYY: String(d.getFullYear()).padStart(4, "0"),
+    MM: two(d.getMonth() + 1),
+    DD: two(d.getDate()),
+    HH: two(d.getHours()),
+    mm: two(d.getMinutes()),
+    ss: two(d.getSeconds()),
+  };
+  return format.replace(/YYYY|MM|DD|HH|mm|ss/g, (token) => parts[token]);
 }
 
 function titleCase(s: string): string {
@@ -78,8 +104,14 @@ function changeCase(s: string, to: RenameRule["textCase"]): string {
   }
 }
 
-/** The new name of the item at `index` (0-based) in the batch. The extension is kept. */
-export function newName(name: string, isDir: boolean, index: number, rule: RenameRule): string {
+/** The new name of the item at `index` (0-based) in the batch. The extension is kept. `modified` is the item's modified time in ms. */
+export function newName(
+  name: string,
+  isDir: boolean,
+  index: number,
+  rule: RenameRule,
+  modified: number | null = null,
+): string {
   const [stem, ext] = splitName(name, isDir);
   let out = stem;
   switch (rule.mode) {
@@ -94,9 +126,17 @@ export function newName(name: string, isDir: boolean, index: number, rule: Renam
     case "number": {
       const start = Math.max(0, Math.trunc(rule.start) || 0);
       const n = String(start + index).padStart(Math.max(1, Math.trunc(rule.digits) || 1), "0");
-      out = rule.pattern.replaceAll("{name}", stem).replaceAll("{n}", n);
+      out = fill(rule.pattern, { "{name}": stem, "{n}": n });
       break;
     }
+    case "date":
+      // An item with no known date keeps its name rather than getting a made-up one.
+      if (modified === null) break;
+      out = fill(rule.datePattern, {
+        "{name}": stem,
+        "{date}": formatStamp(modified, rule.dateFormat),
+      });
+      break;
     case "case":
       out = changeCase(stem, rule.textCase);
       break;
