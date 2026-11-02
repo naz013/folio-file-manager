@@ -165,7 +165,7 @@ pub fn copy_into_with(sources: &[PathBuf], dest_dir: &Path, copied: &mut Copied)
                 skipped: &mut copied.skipped,
                 not_repointed: &mut copied.not_repointed,
             };
-            copy_tree(src, dest_dir, &file_name(src)?, &mut walk)
+            copy_tree(src, dest_dir, &file_name(src)?, sources, &mut walk)
         });
         match copy {
             Ok(Some(target)) => {
@@ -232,7 +232,7 @@ pub fn move_into_with(sources: &[PathBuf], dest_dir: &Path, moved: &mut Moved) -
         if let Err(e) = progress::checkpoint() {
             return Err(batch_error(e, "moved", &moved.paths));
         }
-        if let Err(e) = move_one(src, dest_dir, moved) {
+        if let Err(e) = move_one(src, dest_dir, sources, moved) {
             let e = match moved.left_behind.len() {
                 0 => e,
                 n => io::Error::new(
@@ -293,10 +293,13 @@ pub fn identity(path: &Path) -> Option<String> {
 
 /// After the folder `old` was moved to `new` by an undo or redo, points the links inside
 /// it that led into `old` at the same places under `new`, as a move does (see
-/// [`repoint_renamed_tree`]). Does nothing for a file.
+/// [`repoint_renamed_tree`] and [`repoint_moved_link`]). Does nothing for a file.
 pub fn repoint_after_move(old: &Path, new: &Path) {
-    if fs::symlink_metadata(new).is_ok_and(|m| m.is_dir()) {
-        repoint_renamed_tree(&[old.to_path_buf()], new, &mut Vec::new());
+    let kind = fs::symlink_metadata(new).map(|m| m.file_type());
+    if kind.as_ref().is_ok_and(fs::FileType::is_dir) {
+        repoint_renamed_tree(&[old.to_path_buf()], new, &[], &mut Vec::new());
+    } else if kind.as_ref().is_ok_and(fs::FileType::is_symlink) {
+        repoint_moved_link(old, new, &mut Vec::new());
     }
 }
 
@@ -315,13 +318,29 @@ pub fn move_exact(src: &Path, dst: &Path) -> io::Result<()> {
     })
 }
 
-fn move_one(src: &Path, dest_dir: &Path, moved: &mut Moved) -> io::Result<()> {
+/// Whether `a` and `b` are the same folder, however each is spelled or linked to.
+fn same_folder(a: &Path, b: &Path) -> bool {
+    a == b
+        || noclobber::same_file(a, b).unwrap_or(false)
+        || matches!((fs::canonicalize(a), fs::canonicalize(b)), (Ok(x), Ok(y)) if x == y)
+}
+
+/// Whether `a` and `b` sit in the same folder: a copy or rename between them leaves the
+/// folders above the item as they were.
+fn same_parent(a: &Path, b: &Path) -> bool {
+    a.parent()
+        .zip(b.parent())
+        .is_some_and(|(x, y)| same_folder(x, y))
+}
+
+fn move_one(
+    src: &Path,
+    dest_dir: &Path,
+    siblings: &[PathBuf],
+    moved: &mut Moved,
+) -> io::Result<()> {
     // Already there, however the destination is spelled or linked to.
-    let already_there = src.parent().is_some_and(|p| {
-        p == dest_dir
-            || noclobber::same_file(p, dest_dir).unwrap_or(false)
-            || matches!((fs::canonicalize(p), fs::canonicalize(dest_dir)), (Ok(a), Ok(b)) if a == b)
-    });
+    let already_there = src.parent().is_some_and(|p| same_folder(p, dest_dir));
     if already_there {
         moved.paths.push(src.to_path_buf());
         return Ok(());
@@ -329,6 +348,7 @@ fn move_one(src: &Path, dest_dir: &Path, moved: &mut Moved) -> io::Result<()> {
     ensure_not_into_itself(src, dest_dir)?;
     let name = file_name(src)?;
     let was_folder = fs::symlink_metadata(src).is_ok_and(|m| m.is_dir());
+    let was_link = fs::symlink_metadata(src).is_ok_and(|m| m.file_type().is_symlink());
     // Links may name the folder by its real path when `src` is reached through a link;
     // that can't be resolved once it has moved.
     let mut old_names = vec![src.to_path_buf()];
@@ -338,12 +358,15 @@ fn move_one(src: &Path, dest_dir: &Path, moved: &mut Moved) -> io::Result<()> {
     let target = match noclobber::place(dest_dir, &name, |t| noclobber::rename(src, t)) {
         Ok(target) => {
             if was_folder {
-                repoint_renamed_tree(&old_names, &target, &mut moved.not_repointed);
+                repoint_renamed_tree(&old_names, &target, siblings, &mut moved.not_repointed);
+            } else if was_link {
+                repoint_moved_link(src, &target, &mut moved.not_repointed);
             }
             target
         }
         Err(e) if is_cross_device(&e) => {
-            let (target, left, dangling) = cross_volume::move_by_copy_noted(src, dest_dir, &name)?;
+            let (target, left, dangling) =
+                cross_volume::move_by_copy_noted(src, dest_dir, &name, siblings)?;
             moved.left_behind.extend(left);
             moved.not_repointed.extend(dangling);
             match target {
@@ -538,9 +561,16 @@ impl Observe for Plain<'_> {
 struct Retarget<'a> {
     inner: &'a mut dyn Observe,
     root: &'a Path,
+    /// The other items copied or moved in the same batch: a relative link between
+    /// siblings keeps working when they all land in one folder.
+    siblings: &'a [PathBuf],
     /// Links to repoint: where each was in the source, and where it points, relative to
     /// the root of the tree.
     inside: Vec<(PathBuf, PathBuf)>,
+    /// Links with a relative target that leads out of the tree: where each was in the
+    /// source, and the absolute place it names. The same text would name something else
+    /// next to the copy.
+    outside: Vec<(PathBuf, PathBuf)>,
 }
 
 impl Observe for Retarget<'_> {
@@ -557,10 +587,15 @@ impl Observe for Retarget<'_> {
     }
 
     fn link(&mut self, src: &Path, target: PathBuf) {
-        // The root itself, when it is a link, is copied as it is.
-        if src != self.root
+        if leaves_tree(self.root, src, &target) {
+            let place = named_place(src, &target);
+            if !is_sibling(self.root, self.siblings, &place) {
+                self.outside.push((src.to_path_buf(), place));
+            }
+        } else if src != self.root
             && let Some(rest) = inside_tree(self.root, &target)
         {
+            // The root itself, when it is a link, is copied as it is.
             self.inside.push((src.to_path_buf(), rest));
         }
         self.inner.link(src, target);
@@ -585,8 +620,10 @@ impl Observe for Retarget<'_> {
 
 impl Retarget<'_> {
     /// Points each link that led into the source tree at the same place in the copy at
-    /// `copy`. A link that cannot be repointed keeps its old target, which works only
-    /// until the original is gone, and is reported.
+    /// `copy`, and each relative link that led out of it at the absolute place it named
+    /// (or, if that is in the source tree, the same place in the copy). A link that
+    /// cannot be repointed keeps its old target, which works only until the original is
+    /// gone, and is reported.
     fn apply(&mut self, copy: &Path) {
         // Absolute, so a symlink's new target doesn't depend on the working directory.
         let copy = std::path::absolute(copy).unwrap_or_else(|_| copy.to_path_buf());
@@ -596,14 +633,150 @@ impl Retarget<'_> {
                 self.inner.not_repointed(from);
                 continue;
             };
-            let at = copy.join(relative);
-            if let Err(leftover) = repoint_link(&copy.join(&rest), &at) {
-                self.inner.not_repointed(at);
-                if let Some(temp) = leftover {
-                    self.inner.not_repointed(temp);
-                }
+            self.repoint(&copy.join(&rest), copy.join(relative));
+        }
+        // A copy beside the original has the same folders above it: relative links that
+        // leave the tree still name the same places.
+        let beside = same_parent(self.root, &copy);
+        // `place` is spelled from real paths, so the root is too.
+        let real_root = resolve_existing(self.root);
+        for (from, place) in std::mem::take(&mut self.outside) {
+            if beside {
+                continue;
+            }
+            let Ok(relative) = from.strip_prefix(self.root) else {
+                self.inner.not_repointed(from);
+                continue;
+            };
+            let at = if relative.as_os_str().is_empty() {
+                copy.clone()
+            } else {
+                copy.join(relative)
+            };
+            // A link that is the root itself has no tree to come back into.
+            let new_target = if relative.as_os_str().is_empty() {
+                place
+            } else {
+                inside_tree(&real_root, &place).map_or(place, |rest| copy.join(rest))
+            };
+            self.repoint(&new_target, at);
+        }
+    }
+
+    fn repoint(&mut self, new_target: &Path, at: PathBuf) {
+        if let Err(leftover) = repoint_link(new_target, &at) {
+            self.inner.not_repointed(at);
+            if let Some(temp) = leftover {
+                self.inner.not_repointed(temp);
             }
         }
+    }
+}
+
+/// Whether the link at `link`, in the tree rooted at `root`, has a relative `target` that
+/// leads out of the tree. Such a link does not move with the tree: the same text names
+/// something else from the new place. The root itself, when it is a link, always leaves.
+/// False for an absolute target, and for a relative one that stays inside the tree.
+fn leaves_tree(root: &Path, link: &Path, target: &Path) -> bool {
+    let depth = if link == root {
+        None
+    } else {
+        link.parent()
+            .and_then(|dir| dir.strip_prefix(root).ok())
+            .map(|dir| dir.components().count())
+    };
+    // How many folders below the root the target is at, after each part; below zero is out.
+    let mut level = depth.map_or(-1_i64, |d| i64::try_from(d).unwrap_or(i64::MAX));
+    let mut leaves = level < 0;
+    for part in target.components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                level -= 1;
+                leaves |= level < 0;
+            }
+            Component::Normal(_) => level = level.saturating_add(1),
+            Component::RootDir | Component::Prefix(_) => return false,
+        }
+    }
+    leaves
+}
+
+/// Whether `place` is, or is inside, another item of the batch that sits in the same folder
+/// as `root`. A relative link to it keeps its text: the siblings stay side by side.
+fn is_sibling(root: &Path, siblings: &[PathBuf], place: &Path) -> bool {
+    siblings.iter().any(|s| {
+        s != root && same_parent(s, root) && inside_tree(&resolve_existing(s), place).is_some()
+    })
+}
+
+/// The absolute place the relative `target` of the link at `link` names. Worked out from
+/// where the link is (or was: its folder may be gone, and what is left of the path is
+/// resolved). `..` is taken out by text, which is right unless a folder along the target
+/// is itself a link.
+fn named_place(link: &Path, target: &Path) -> PathBuf {
+    let dir = link
+        .parent()
+        .map_or_else(PathBuf::new, |dir| not_verbatim(resolve_existing(dir)));
+    // Rebuilt from its parts, so `/` and `\` both separate them.
+    let target: PathBuf = target.components().collect();
+    clean(&dir.join(target))
+}
+
+/// `path` without the `\\?\` prefix `canonicalize` gives a drive or network path on Windows:
+/// `..` and `/` mean nothing in a verbatim path, and a link target shouldn't be spelled so.
+#[cfg(windows)]
+fn not_verbatim(path: PathBuf) -> PathBuf {
+    let Some(text) = path.to_str() else {
+        return path;
+    };
+    if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{unc}"));
+    }
+    match text.strip_prefix(r"\\?\") {
+        Some(plain) if plain.as_bytes().get(1) == Some(&b':') => PathBuf::from(plain),
+        _ => path,
+    }
+}
+
+#[cfg(not(windows))]
+fn not_verbatim(path: PathBuf) -> PathBuf {
+    path
+}
+
+/// `path` with `.` and `..` taken out by text alone, without looking at the file system.
+fn clean(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => match out.components().next_back() {
+                Some(Component::Normal(_)) => {
+                    out.pop();
+                }
+                // Nothing is above the root.
+                Some(Component::RootDir | Component::Prefix(_)) => {}
+                _ => out.push(".."),
+            },
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// After a link was moved from `old` to `new` in another folder, points a relative target
+/// at the place it named before: the same text names something else from here. Links that
+/// can't be repointed are added to `not_repointed`.
+fn repoint_moved_link(old: &Path, new: &Path, not_repointed: &mut Vec<PathBuf>) {
+    let Ok(target) = fs::read_link(new) else {
+        return;
+    };
+    if same_parent(old, new) || !leaves_tree(new, new, &target) {
+        return;
+    }
+    if let Err(leftover) = repoint_link(&named_place(old, &target), new) {
+        not_repointed.push(new.to_path_buf());
+        not_repointed.extend(leftover);
     }
 }
 
@@ -638,8 +811,9 @@ fn repoint_link(new_target: &Path, at: &Path) -> Result<(), Option<PathBuf>> {
         return Ok(());
     }
     // Put back what was there, whatever state the swap stopped in.
-    if fs::symlink_metadata(at).is_err() {
-        let _ = copy_link(&temp, &old_target, at);
+    if fs::symlink_metadata(at).is_err() && copy_link(&temp, &old_target, at).is_err() {
+        // Neither link is in place: the temporary one is all that is left, so it stays.
+        return Err(Some(temp));
     }
     Err(cross_volume::remove_link(&temp).err().map(|_| temp))
 }
@@ -653,10 +827,18 @@ fn repoint_link(new_target: &Path, at: &Path) -> Result<(), Option<PathBuf>> {
 /// that was instant now takes as long as listing the tree. It runs on the blocking
 /// thread of the move command, and links are never followed. Folders whose contents are
 /// only in the cloud are not entered, so listing them doesn't download anything.
-fn repoint_renamed_tree(olds: &[PathBuf], new: &Path, not_repointed: &mut Vec<PathBuf>) {
+fn repoint_renamed_tree(
+    olds: &[PathBuf],
+    new: &Path,
+    siblings: &[PathBuf],
+    not_repointed: &mut Vec<PathBuf>,
+) {
     // Absolute, so a symlink's new target doesn't depend on the working directory.
     let new = std::path::absolute(new).unwrap_or_else(|_| new.to_path_buf());
     let mut folders = vec![new.clone()];
+    // Moved beside where it was, relative links that leave the tree still name the same places.
+    let old_root = olds.first();
+    let beside = old_root.is_some_and(|old| same_parent(old, &new));
     while let Some(folder) = folders.pop() {
         let Ok(entries) = fs::read_dir(&folder) else {
             continue;
@@ -672,7 +854,18 @@ fn repoint_renamed_tree(olds: &[PathBuf], new: &Path, not_repointed: &mut Vec<Pa
                 }
             } else if kind.is_symlink() {
                 // A link of a kind that can't be read has nothing to repoint.
-                let Some(rest) = fs::read_link(&at).ok().and_then(|target| {
+                let Ok(target) = fs::read_link(&at) else {
+                    continue;
+                };
+                let new_target = if leaves_tree(&new, &at, &target) {
+                    // The tree is now in another folder: the same text names something
+                    // else, so it is pointed at what it named before.
+                    old_root.filter(|_| !beside).and_then(|old| {
+                        let relative = at.strip_prefix(&new).ok()?;
+                        let place = named_place(&old.join(relative), &target);
+                        (!is_sibling(old, siblings, &place)).then_some(place)
+                    })
+                } else {
                     olds.iter()
                         .find_map(|old| inside_tree(old, &target))
                         .or_else(|| {
@@ -681,10 +874,12 @@ fn repoint_renamed_tree(olds: &[PathBuf], new: &Path, not_repointed: &mut Vec<Pa
                             let resolved = resolve_existing(&target);
                             olds.iter().find_map(|old| inside_tree(old, &resolved))
                         })
-                }) else {
+                        .map(|rest| new.join(rest))
+                };
+                let Some(new_target) = new_target else {
                     continue;
                 };
-                if let Err(leftover) = repoint_link(&new.join(rest), &at) {
+                if let Err(leftover) = repoint_link(&new_target, &at) {
                     not_repointed.push(at);
                     not_repointed.extend(leftover);
                 }
@@ -749,12 +944,15 @@ fn copy_tree(
     src: &Path,
     dest_dir: &Path,
     name: &str,
+    siblings: &[PathBuf],
     obs: &mut dyn Observe,
 ) -> io::Result<Option<PathBuf>> {
     let mut retarget = Retarget {
         inner: obs,
         root: src,
+        siblings,
         inside: Vec::new(),
+        outside: Vec::new(),
     };
     let target = build_tree(src, dest_dir, name, &mut retarget)?;
     if let Some(copy) = &target {

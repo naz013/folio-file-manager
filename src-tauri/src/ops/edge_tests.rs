@@ -1855,7 +1855,8 @@ fn a_moved_link_that_cannot_be_repointed_is_reported() {
     write(src.join("to_data.folio-retarget"), "mine");
     let dest = dir(t.path().join("dest"));
 
-    let (target, left, dangling) = cross_volume::move_by_copy_noted(&src, &dest, "src").unwrap();
+    let (target, left, dangling) =
+        cross_volume::move_by_copy_noted(&src, &dest, "src", &[]).unwrap();
 
     assert_eq!(left, Vec::<PathBuf>::new());
     assert_eq!(dangling, [target.unwrap().join("to_data")]);
@@ -2061,4 +2062,396 @@ fn a_cancelled_move_between_items_stops_and_reports_what_was_moved() {
     assert!(result.unwrap_err().to_string().starts_with("Cancelled"));
     assert_eq!(moved.paths, [dest.join("a.txt")]);
     assert!(b.exists());
+}
+
+// ---- Relative links after a copy or move (issue #74) ----
+
+/// Makes a file symlink at `at` with exactly the text `target`. False where this account
+/// may not create symlinks (Windows without Developer Mode): the test then has nothing to check.
+fn file_symlink(target: &str, at: &Path) -> bool {
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(target, at);
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_file(target, at);
+    if made.is_err() {
+        eprintln!("skipped: this account can't create symlinks, so nothing was checked");
+    }
+    made.is_ok()
+}
+
+/// `shared/f.txt` and a tree `proj/` beside it, with `proj/sub/` inside.
+fn relative_fixture(t: &Path) -> (PathBuf, PathBuf) {
+    let shared = dir(t.join("shared"));
+    write(shared.join("f.txt"), "outside");
+    let proj = dir(t.join("proj"));
+    dir(proj.join("sub"));
+    write(proj.join("real.txt"), "inside");
+    (shared, proj)
+}
+
+#[test]
+fn leaves_tree_tells_inside_from_outside_by_text() {
+    let root = Path::new("/r/proj");
+    let at = |link: &str, target: &str| leaves_tree(root, &root.join(link), Path::new(target));
+    // Stays inside, however it winds.
+    assert!(!at("l", "real.txt"));
+    assert!(!at("sub/l", "../real.txt"));
+    assert!(!at("sub/l", "./x/../../real.txt"));
+    // Goes out, directly or after going in.
+    assert!(at("l", "../shared/f.txt"));
+    assert!(at("sub/l", "../../shared/f.txt"));
+    assert!(at("sub/l", "a/../../../x"));
+    // Out and back in by the tree's own name: still out, as the copy has another name.
+    assert!(at("l", "../proj/real.txt"));
+    // An absolute target does not move with the tree or leave it by text.
+    assert!(!at("l", "/etc/hosts"));
+    // The root, when it is a link, has no tree around it.
+    assert!(leaves_tree(root, root, Path::new("x")));
+    assert!(leaves_tree(root, root, Path::new("../x")));
+}
+
+#[test]
+fn clean_takes_out_dots_by_text() {
+    assert_eq!(clean(Path::new("/a/b/../c/./d")), Path::new("/a/c/d"));
+    assert_eq!(clean(Path::new("/a/../../b")), Path::new("/b"));
+    assert_eq!(clean(Path::new("a/../../b")), Path::new("../b"));
+}
+
+#[test]
+fn a_relative_link_inside_the_copied_tree_keeps_its_relative_target() {
+    let t = tmp();
+    let (_, proj) = relative_fixture(t.path());
+    if !file_symlink("../real.txt", &proj.join("sub").join("l")) {
+        return;
+    }
+    let dest = dir(t.path().join("dest"));
+
+    let out = copy_into(&one(&proj), &dest).unwrap();
+
+    assert!(out.skipped.is_empty() && out.not_repointed.is_empty());
+    let link = dest.join("proj").join("sub").join("l");
+    assert_eq!(fs::read_link(&link).unwrap(), Path::new("../real.txt"));
+    assert_eq!(read(&link), "inside");
+}
+
+#[test]
+fn a_relative_link_leaving_the_copied_tree_is_made_absolute_and_keeps_working() {
+    let t = tmp();
+    let (shared, proj) = relative_fixture(t.path());
+    if !file_symlink("../shared/f.txt", &proj.join("l"))
+        || !file_symlink("../../shared/f.txt", &proj.join("sub").join("l"))
+    {
+        return;
+    }
+    let dest = dir(t.path().join("deeper").join("dest"));
+
+    let out = copy_into(&one(&proj), &dest).unwrap();
+
+    assert!(out.skipped.is_empty() && out.not_repointed.is_empty());
+    for link in [
+        dest.join("proj").join("l"),
+        dest.join("proj").join("sub").join("l"),
+    ] {
+        let target = fs::read_link(&link).unwrap();
+        assert!(target.is_absolute(), "{target:?}");
+        assert_eq!(read(&link), "outside");
+        assert!(
+            same_folder(target.parent().unwrap(), &shared),
+            "{target:?} names the original place"
+        );
+    }
+    // The original is still as it was.
+    assert_eq!(
+        fs::read_link(proj.join("l")).unwrap(),
+        Path::new("../shared/f.txt")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_absolute_link_is_copied_as_it_was() {
+    let t = tmp();
+    let (shared, proj) = relative_fixture(t.path());
+    let absolute = shared.join("f.txt");
+    std::os::unix::fs::symlink(&absolute, proj.join("l")).unwrap();
+    let dest = dir(t.path().join("deeper").join("dest"));
+
+    copy_into(&one(&proj), &dest).unwrap();
+
+    assert_eq!(
+        fs::read_link(dest.join("proj").join("l")).unwrap(),
+        absolute
+    );
+}
+
+#[test]
+fn a_copy_beside_the_original_keeps_its_relative_links() {
+    let t = tmp();
+    let (_, proj) = relative_fixture(t.path());
+    if !file_symlink("../shared/f.txt", &proj.join("l")) {
+        return;
+    }
+
+    copy_into(&one(&proj), t.path()).unwrap();
+
+    let link = t.path().join("proj (2)").join("l");
+    assert_eq!(
+        fs::read_link(&link).unwrap(),
+        Path::new("../shared/f.txt"),
+        "the same folders are above it, so the text still names the same file"
+    );
+    assert_eq!(read(&link), "outside");
+}
+
+#[test]
+fn a_relative_link_that_comes_back_into_the_tree_by_name_points_into_the_copy() {
+    let t = tmp();
+    let (_, proj) = relative_fixture(t.path());
+    if !file_symlink("../proj/real.txt", &proj.join("l")) {
+        return;
+    }
+    let dest = dir(t.path().join("deeper").join("dest"));
+
+    copy_into(&one(&proj), &dest).unwrap();
+
+    let link = dest.join("proj").join("l");
+    let target = fs::read_link(&link).unwrap();
+    assert!(target.starts_with(&dest), "{target:?} is in the copy");
+    assert_eq!(read(&link), "inside");
+}
+
+#[test]
+fn a_link_copied_on_its_own_to_another_folder_is_made_absolute() {
+    let t = tmp();
+    let _ = relative_fixture(t.path());
+    let from = dir(t.path().join("from"));
+    if !file_symlink("../shared/f.txt", &from.join("l")) {
+        return;
+    }
+    let dest = dir(t.path().join("a").join("b"));
+
+    copy_into(&one(&from.join("l")), &dest).unwrap();
+
+    let link = dest.join("l");
+    assert!(fs::read_link(&link).unwrap().is_absolute());
+    assert_eq!(read(&link), "outside");
+}
+
+#[test]
+fn moving_a_folder_to_another_depth_keeps_its_outside_links_working() {
+    let t = tmp();
+    let (_, proj) = relative_fixture(t.path());
+    if !file_symlink("../shared/f.txt", &proj.join("l"))
+        || !file_symlink("../real.txt", &proj.join("sub").join("inside"))
+    {
+        return;
+    }
+    let dest = dir(t.path().join("a").join("b"));
+
+    let out = move_into(&one(&proj), &dest).unwrap();
+
+    assert!(out.not_repointed.is_empty(), "{:?}", out.not_repointed);
+    let moved = dest.join("proj");
+    assert!(fs::read_link(moved.join("l")).unwrap().is_absolute());
+    assert_eq!(read(moved.join("l")), "outside");
+    // A link that stays inside keeps its text.
+    assert_eq!(
+        fs::read_link(moved.join("sub").join("inside")).unwrap(),
+        Path::new("../real.txt")
+    );
+    assert_eq!(read(moved.join("sub").join("inside")), "inside");
+}
+
+#[test]
+fn moving_a_link_on_its_own_to_another_folder_keeps_it_working() {
+    let t = tmp();
+    let _ = relative_fixture(t.path());
+    let from = dir(t.path().join("from"));
+    if !file_symlink("../shared/f.txt", &from.join("l")) {
+        return;
+    }
+    let dest = dir(t.path().join("a").join("b"));
+
+    move_into(&one(&from.join("l")), &dest).unwrap();
+
+    assert_eq!(read(dest.join("l")), "outside");
+}
+
+#[test]
+fn a_relative_link_several_levels_down_that_leaves_the_tree_keeps_working_in_the_copy() {
+    let t = tmp();
+    let (shared, proj) = relative_fixture(t.path());
+    let deep = dir(proj.join("sub").join("deeper"));
+    if !file_symlink("../../../shared/f.txt", &deep.join("l")) {
+        return;
+    }
+    let dest = dir(t.path().join("x").join("y").join("dest"));
+
+    let out = copy_into(&one(&proj), &dest).unwrap();
+
+    assert!(out.not_repointed.is_empty(), "{:?}", out.not_repointed);
+    let link = dest.join("proj").join("sub").join("deeper").join("l");
+    let target = fs::read_link(&link).unwrap();
+    assert!(target.is_absolute(), "{target:?}");
+    assert!(same_folder(target.parent().unwrap(), &shared));
+    assert_eq!(read(&link), "outside");
+}
+
+#[test]
+fn a_dangling_relative_link_leaving_the_tree_is_copied_with_its_absolute_place() {
+    let t = tmp();
+    let (shared, proj) = relative_fixture(t.path());
+    if !file_symlink("../shared/missing.txt", &proj.join("l")) {
+        return;
+    }
+    let dest = dir(t.path().join("deeper").join("dest"));
+
+    let out = copy_into(&one(&proj), &dest).unwrap();
+
+    assert!(out.not_repointed.is_empty(), "{:?}", out.not_repointed);
+    let target = fs::read_link(dest.join("proj").join("l")).unwrap();
+    assert!(target.is_absolute(), "{target:?}");
+    assert_eq!(target.file_name().unwrap(), "missing.txt");
+    assert!(same_folder(target.parent().unwrap(), &shared));
+}
+
+#[test]
+fn undoing_a_link_move_repoints_it_at_what_it_named_before() {
+    let t = tmp();
+    let _ = relative_fixture(t.path());
+    let from = dir(t.path().join("from"));
+    let at = from.join("l");
+    if !file_symlink("../shared/f.txt", &at) {
+        return;
+    }
+    let dest = dir(t.path().join("a").join("b"));
+    // What a redo does: the link is renamed across folders, then repointed.
+    move_exact(&at, &dest.join("l")).unwrap();
+    assert!(!dest.join("l").exists(), "the same text names nothing here");
+
+    repoint_after_move(&at, &dest.join("l"));
+
+    assert_eq!(read(dest.join("l")), "outside");
+}
+
+#[test]
+fn undoing_a_folder_move_repoints_its_outside_links() {
+    let t = tmp();
+    let (_, proj) = relative_fixture(t.path());
+    if !file_symlink("../shared/f.txt", &proj.join("l")) {
+        return;
+    }
+    let dest = dir(t.path().join("a").join("b"));
+    let moved = dest.join("proj");
+    move_exact(&proj, &moved).unwrap();
+
+    repoint_after_move(&proj, &moved);
+
+    assert_eq!(read(moved.join("l")), "outside");
+}
+
+#[test]
+fn moving_a_link_beside_itself_keeps_its_relative_text() {
+    let t = tmp();
+    let _ = relative_fixture(t.path());
+    let from = dir(t.path().join("from"));
+    if !file_symlink("../shared/f.txt", &from.join("l")) {
+        return;
+    }
+
+    move_into(&one(&from.join("l")), &from).unwrap();
+
+    assert_eq!(
+        fs::read_link(from.join("l")).unwrap(),
+        Path::new("../shared/f.txt")
+    );
+}
+
+#[test]
+fn a_relative_link_in_a_non_ascii_folder_leaving_the_tree_keeps_working_in_the_copy() {
+    let t = tmp();
+    let shared = dir(t.path().join("общее"));
+    write(shared.join("файл.txt"), "outside");
+    let proj = dir(t.path().join("проект"));
+    if !file_symlink("../общее/файл.txt", &proj.join("ссылка")) {
+        return;
+    }
+    let dest = dir(t.path().join("deeper").join("dest"));
+
+    copy_into(&one(&proj), &dest).unwrap();
+
+    assert_eq!(read(dest.join("проект").join("ссылка")), "outside");
+}
+
+#[test]
+fn named_place_is_clean_and_not_verbatim_for_either_slash() {
+    let t = tmp();
+    let (shared, _) = relative_fixture(t.path());
+    let link = t.path().join("proj").join("sub").join("l");
+    for target in ["../../shared/f.txt", r"..\..\shared\f.txt"] {
+        let place = named_place(&link, Path::new(target));
+        let text = place.to_string_lossy();
+        assert!(!text.contains(".."), "{text}");
+        assert!(!text.starts_with(r"\?\"), "{text}");
+        assert!(
+            same_folder(place.parent().unwrap(), &shared),
+            "{text} is in shared"
+        );
+    }
+}
+
+#[test]
+fn a_link_copied_on_its_own_never_ends_up_pointing_at_itself() {
+    let t = tmp();
+    let _ = relative_fixture(t.path());
+    let from = dir(t.path().join("from"));
+    if !file_symlink("../shared/f.txt", &from.join("l")) {
+        return;
+    }
+    let dest = dir(t.path().join("a").join("b"));
+
+    copy_into(&one(&from.join("l")), &dest).unwrap();
+
+    let target = fs::read_link(dest.join("l")).unwrap();
+    assert!(!same_folder(&target, &dest.join("l")), "{target:?}");
+    assert_eq!(read(dest.join("l")), "outside");
+}
+
+#[test]
+fn sibling_folders_moved_together_keep_their_relative_links_between_them() {
+    let t = tmp();
+    let (_, proj) = relative_fixture(t.path());
+    if !file_symlink("../shared/f.txt", &proj.join("l")) {
+        return;
+    }
+    let dest = dir(t.path().join("a").join("b"));
+    let batch = vec![proj.clone(), t.path().join("shared")];
+
+    let out = move_into(&batch, &dest).unwrap();
+
+    assert!(out.not_repointed.is_empty(), "{:?}", out.not_repointed);
+    assert_eq!(
+        fs::read_link(dest.join("proj").join("l")).unwrap(),
+        Path::new("../shared/f.txt")
+    );
+    assert_eq!(read(dest.join("proj").join("l")), "outside");
+}
+
+#[test]
+fn sibling_folders_copied_together_point_at_each_others_copies() {
+    let t = tmp();
+    let (_, proj) = relative_fixture(t.path());
+    if !file_symlink("../shared/f.txt", &proj.join("l")) {
+        return;
+    }
+    let dest = dir(t.path().join("a").join("b"));
+    let batch = vec![proj.clone(), t.path().join("shared")];
+
+    copy_into(&batch, &dest).unwrap();
+
+    let link = dest.join("proj").join("l");
+    assert_eq!(fs::read_link(&link).unwrap(), Path::new("../shared/f.txt"));
+    // Through the copy of `shared`, not the original.
+    write(dest.join("shared").join("f.txt"), "the copy");
+    assert_eq!(read(&link), "the copy");
 }

@@ -86,7 +86,7 @@ pub fn move_by_copy(
     dest_dir: &Path,
     name: &str,
 ) -> io::Result<(Option<PathBuf>, Vec<PathBuf>)> {
-    move_by_copy_noted(src, dest_dir, name).map(|(target, left, _)| (target, left))
+    move_by_copy_noted(src, dest_dir, name, &[]).map(|(target, left, _)| (target, left))
 }
 
 /// Like [`move_by_copy`], and also returns the links in the moved folder that should
@@ -95,8 +95,9 @@ pub fn move_by_copy_noted(
     src: &Path,
     dest_dir: &Path,
     name: &str,
+    siblings: &[PathBuf],
 ) -> io::Result<(Option<PathBuf>, Vec<PathBuf>, Vec<PathBuf>)> {
-    let (target, mut copied) = copy_tracked(src, dest_dir, name)?;
+    let (target, mut copied) = copy_tracked(src, dest_dir, name, siblings)?;
     let dangling = std::mem::take(&mut copied.not_repointed);
     Ok((target, remove_copied(copied), dangling))
 }
@@ -109,9 +110,10 @@ pub fn copy_tracked(
     src: &Path,
     dest_dir: &Path,
     name: &str,
+    siblings: &[PathBuf],
 ) -> io::Result<(Option<PathBuf>, CopyLog)> {
     let mut log = CopyLog::default();
-    let target = super::copy_tree(src, dest_dir, name, &mut log)?;
+    let target = super::copy_tree(src, dest_dir, name, siblings, &mut log)?;
     Ok((target, log))
 }
 
@@ -504,7 +506,7 @@ mod tests {
     /// `copy_tracked` to an exact path, which must be free.
     fn copy_tracked(src: &Path, dst: &Path) -> io::Result<CopyLog> {
         let name = dst.file_name().unwrap().to_str().unwrap();
-        let (target, copied) = super::copy_tracked(src, dst.parent().unwrap(), name)?;
+        let (target, copied) = super::copy_tracked(src, dst.parent().unwrap(), name, &[])?;
         assert_eq!(target.as_deref(), Some(dst));
         Ok(copied)
     }

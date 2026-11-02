@@ -52,6 +52,15 @@ Only `commands/` and `fs/` exist today; the other modules arrive with their mile
 - Deletes use the OS trash (`trash` crate). Permanent delete requires an explicit
   Shift+Delete-style confirmation. See [ADR 0003](decisions/0003-trash-first.md).
 - Conflicts pause the operation and emit an event; the UI answers with a resolution.
+- Links are recreated, never followed. After a copy or move, a link that led into the tree
+  points at the same place in the new tree. A relative link that stays inside the tree keeps
+  its text. A relative link that leaves the tree is rewritten to an absolute link to the place
+  it named, because the same text would name something else from the new folder; a copy or
+  rename into a folder beside the original keeps the text, as the folders above are the same.
+  So does a link to another item of the same batch (folders copied or moved together stay side
+  by side). Undoing a move does not turn a rewritten link back into its relative text.
+  A link that can't be rewritten is reported (`not_repointed`). `..` is resolved by text, which
+  is wrong only when a folder along the target is itself a link.
 
 ### Tags
 
