@@ -5,6 +5,7 @@
   import { previewKind } from "$lib/preview";
   import FileIcon from "./FileIcon.svelte";
   import FolderIcon from "./FolderIcon.svelte";
+  import PdfViewer from "./PdfViewer.svelte";
 
   let {
     entry,
@@ -36,6 +37,133 @@
 
   let shown = $state<Shown>({ kind: "loading" });
   let dialog: HTMLElement;
+
+  // ---- A picture is shown whole, then zoomed and moved by pinch, scroll and drag ----
+  const MAX_ZOOM = 16;
+  const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+  let stageW = $state(0);
+  let stageH = $state(0);
+  /** The picture's own size, known once it has loaded. */
+  let natW = $state(0);
+  let natH = $state(0);
+  /** 1 is "fit": the whole picture in the window, never enlarged past its own size. */
+  let zoom = $state(1);
+  /** Where the middle of the picture sits against the middle of the window. */
+  let panX = $state(0);
+  let panY = $state(0);
+
+  const fit = $derived(
+    natW && natH && stageW && stageH ? Math.min(stageW / natW, stageH / natH, 1) : 1,
+  );
+  const imgW = $derived(natW * fit);
+  const imgH = $derived(natH * fit);
+
+  const limit = (size: number, view: number) => Math.max(0, (size - view) / 2);
+
+  /** Zooms to `next`, keeping the point under (cx, cy), measured from the window's middle. */
+  function zoomTo(next: number, cx: number, cy: number) {
+    const z = clamp(next, 1, MAX_ZOOM);
+    const ratio = z / zoom;
+    zoom = z;
+    moveTo(cx - (cx - panX) * ratio, cy - (cy - panY) * ratio);
+  }
+
+  function moveTo(x: number, y: number) {
+    const mx = limit(imgW * zoom, stageW);
+    const my = limit(imgH * zoom, stageH);
+    panX = clamp(x, -mx, mx);
+    panY = clamp(y, -my, my);
+  }
+
+  function fromMiddle(stage: HTMLElement, x: number, y: number): [number, number] {
+    const box = stage.getBoundingClientRect();
+    return [x - (box.left + box.width / 2), y - (box.top + box.height / 2)];
+  }
+
+  /** Full size, or twice the fit for a picture that already fills the window at full size. */
+  const actualSize = () => (fit < 1 ? 1 / fit : 2);
+
+  /** Pinch on a trackpad arrives as Ctrl+wheel; two-finger scrolling as plain wheel. Touch
+   *  screens pinch with two pointers; one pointer drags. */
+  function gestures(stage: HTMLElement) {
+    // Plain bookkeeping of the pointers down, never rendered.
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity
+    const pointers = new Map<number, [number, number]>();
+    let pinch = 0;
+
+    const onwheel = (e: WheelEvent) => {
+      e.preventDefault();
+      if (e.ctrlKey) {
+        const [cx, cy] = fromMiddle(stage, e.clientX, e.clientY);
+        zoomTo(zoom * Math.exp(-e.deltaY * 0.01), cx, cy);
+      } else {
+        // Lines and pages (a mouse wheel) are scaled up to pixels.
+        const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? stageH : 1;
+        moveTo(panX - e.deltaX * k, panY - e.deltaY * k);
+      }
+    };
+
+    const spread = () => {
+      const [a, b] = [...pointers.values()];
+      return Math.hypot(a[0] - b[0], a[1] - b[1]);
+    };
+
+    const ondown = (e: PointerEvent) => {
+      pointers.set(e.pointerId, [e.clientX, e.clientY]);
+      stage.setPointerCapture(e.pointerId);
+      if (pointers.size === 2) pinch = spread();
+    };
+
+    const onmove = (e: PointerEvent) => {
+      const last = pointers.get(e.pointerId);
+      if (!last) return;
+      const now: [number, number] = [e.clientX, e.clientY];
+      pointers.set(e.pointerId, now);
+      if (pointers.size === 2) {
+        const d = spread();
+        const [a, b] = [...pointers.values()];
+        const [cx, cy] = fromMiddle(stage, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2);
+        if (pinch) zoomTo(zoom * (d / pinch), cx, cy);
+        pinch = d;
+      } else if (zoom > 1) {
+        moveTo(panX + now[0] - last[0], panY + now[1] - last[1]);
+      }
+    };
+
+    const onup = (e: PointerEvent) => {
+      pointers.delete(e.pointerId);
+      pinch = 0;
+    };
+
+    stage.addEventListener("wheel", onwheel, { passive: false });
+    stage.addEventListener("pointerdown", ondown);
+    stage.addEventListener("pointermove", onmove);
+    stage.addEventListener("pointerup", onup);
+    stage.addEventListener("pointercancel", onup);
+    return {
+      destroy() {
+        stage.removeEventListener("wheel", onwheel);
+        stage.removeEventListener("pointerdown", ondown);
+        stage.removeEventListener("pointermove", onmove);
+        stage.removeEventListener("pointerup", onup);
+        stage.removeEventListener("pointercancel", onup);
+      },
+    };
+  }
+
+  function toggleZoom(e: MouseEvent) {
+    const [cx, cy] = fromMiddle(e.currentTarget as HTMLElement, e.clientX, e.clientY);
+    zoomTo(zoom > 1 ? 1 : actualSize(), cx, cy);
+  }
+
+  // Each picture starts whole.
+  $effect(() => {
+    void shown;
+    natW = natH = 0;
+    zoom = 1;
+    panX = panY = 0;
+  });
 
   // The keys belong to this window, not to whatever was focused behind it.
   onMount(() => {
@@ -101,13 +229,35 @@
       <button class="open" onclick={onclose}>Close</button>
     </header>
 
-    <div class="stage">
+    <div
+      class="stage"
+      class:picture={shown.kind === "url" && shown.media === "image"}
+      bind:clientWidth={stageW}
+      bind:clientHeight={stageH}
+      use:gestures
+      ondblclick={shown.kind === "url" && shown.media === "image" ? toggleZoom : undefined}
+      role="presentation"
+    >
       {#if shown.kind === "loading"}
         <span class="note">Loading…</span>
       {:else if shown.kind === "url" && shown.media === "image"}
-        <img src={shown.url} alt={entry.name} draggable="false" />
+        <img
+          src={shown.url}
+          alt={entry.name}
+          draggable="false"
+          class:grab={zoom > 1}
+          style:width={natW ? `${imgW}px` : undefined}
+          style:height={natW ? `${imgH}px` : undefined}
+          style:opacity={natW ? 1 : 0}
+          style:transform="translate(-50%, -50%) translate({panX}px, {panY}px) scale({zoom})"
+          onload={(e) => {
+            const img = e.currentTarget as HTMLImageElement;
+            natW = img.naturalWidth || stageW;
+            natH = img.naturalHeight || stageH;
+          }}
+        />
       {:else if shown.kind === "url" && shown.media === "pdf"}
-        <iframe src={shown.url} title={entry.name}></iframe>
+        <PdfViewer url={shown.url} name={entry.name} />
       {:else if shown.kind === "url" && shown.media === "audio"}
         <div class="audio">
           <FileIcon name={entry.name} size={96} />
@@ -206,17 +356,30 @@
     background: var(--bg-subtle);
   }
 
-  img,
   video {
     max-width: 100%;
     max-height: 100%;
     object-fit: contain;
   }
 
-  iframe {
-    width: 100%;
-    height: 100%;
-    border: 0;
+  /* A picture is placed by the zoom and pan state; the stage clips it. */
+  .stage.picture {
+    position: relative;
+    overflow: hidden;
+    touch-action: none;
+  }
+
+  .picture img {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    max-width: none;
+    max-height: none;
+    user-select: none;
+  }
+
+  .picture img.grab {
+    cursor: grab;
   }
 
   .audio,
