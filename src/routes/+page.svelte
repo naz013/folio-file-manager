@@ -153,6 +153,8 @@
     path: string;
     /** Set once the view was changed in this tab; null follows the default. */
     view: View | null;
+    /** The sidebar sections this tab has folded away. */
+    collapsed: string[];
   }
   interface TabMemory {
     back: string[];
@@ -169,6 +171,15 @@
 
   function setView(next: View) {
     if (tabs[active]) tabs[active].view = next;
+  }
+
+  /** Folds a sidebar section away, or opens it again, in the active tab only. */
+  function toggleSection(section: string) {
+    const tab = tabs[active];
+    if (!tab) return;
+    tab.collapsed = tab.collapsed.includes(section)
+      ? tab.collapsed.filter((s) => s !== section)
+      : [...tab.collapsed, section];
   }
   let nextTabId = 0;
   // Deliberately not reactive: nothing renders from it, and proxying large selections is slow.
@@ -189,6 +200,7 @@
     p === BIN_PATH ? "Recycle Bin" : (pathSegments(p).at(-1)?.name ?? p);
   let tabPaths = $derived(tabs.map((t) => t.path));
   let tabViews = $derived(tabs.map((t) => t.view ?? ""));
+  let tabCollapsed = $derived(tabs.map((t) => t.collapsed.join(",")));
   let tabList = $derived(tabs.map((t, i) => ({ id: t.id, title: folderName(tabPaths[i]) })));
 
   const selection = new SvelteSet<string>();
@@ -395,10 +407,11 @@
 
   // ---- Tabs ----
 
-  const newTab = (p: string, view: View | null = null): Tab => ({
+  const newTab = (p: string, view: View | null = null, collapsed: string[] = []): Tab => ({
     id: nextTabId++,
     path: p,
     view,
+    collapsed,
   });
 
   /** Remembers the live page state of the active tab before another tab takes over. */
@@ -481,7 +494,16 @@
     if (tabs.length === 1) return;
     const { id, path: target } = tabs[index];
     try {
-      await openWindow([target], [tabs[index].view ?? ""], x, y);
+      await openWindow(
+        {
+          tabs: [target],
+          active: 0,
+          views: [tabs[index].view ?? ""],
+          collapsed: [tabs[index].collapsed.join(",")],
+        },
+        x,
+        y,
+      );
     } catch (e) {
       notify(String(e), true);
       return;
@@ -495,9 +517,14 @@
     if (tabs.length > 1) activate((active + delta + tabs.length) % tabs.length);
   }
 
-  function persistTabs(paths = tabPaths, index = active, views = tabViews) {
+  function persistTabs(
+    paths = tabPaths,
+    index = active,
+    views = tabViews,
+    collapsed = tabCollapsed,
+  ) {
     clearTimeout(saveTimer);
-    return saveTabs(paths, Math.max(index, 0), views).catch((e) =>
+    return saveTabs(paths, Math.max(index, 0), views, collapsed).catch((e) =>
       console.warn("saving tabs failed", e),
     );
   }
@@ -516,8 +543,9 @@
     const paths = tabPaths;
     const index = active;
     const views = tabViews;
+    const collapsed = tabCollapsed;
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => persistTabs(paths, index, views), 300);
+    saveTimer = setTimeout(() => persistTabs(paths, index, views, collapsed), 300);
   });
 
   function open(entry: Entry) {
@@ -1958,7 +1986,9 @@
       home = h;
       const saved = await windowTabs().catch(() => null);
       tabs = saved
-        ? saved.tabs.map((p, i) => newTab(p, asView(saved.views?.[i])))
+        ? saved.tabs.map((p, i) =>
+            newTab(p, asView(saved.views?.[i]), saved.collapsed?.[i]?.split(",").filter(Boolean)),
+          )
         : [newTab(startPath(h))];
       await activate(saved?.active ?? 0);
       restored = true;
@@ -1995,6 +2025,8 @@
     {dropTarget}
     {springPath}
     {springMs}
+    collapsed={tabs[active]?.collapsed ?? []}
+    ontogglesection={toggleSection}
     tags={tagDefs}
     activeTag={tagView?.id ?? null}
     ontag={openTagView}

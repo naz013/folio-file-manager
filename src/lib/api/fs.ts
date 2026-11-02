@@ -456,15 +456,17 @@ export interface WindowTabs {
   active: number;
   /** Each tab's view mode, in tab order; "" (or absent) is the default. */
   views?: string[];
+  /** Each tab's collapsed sidebar sections, comma separated, in tab order. */
+  collapsed?: string[];
 }
 
 export const windowTabs = () => invoke<WindowTabs | null>("window_tabs");
-export const saveTabs = (tabs: string[], active: number, views: string[]) =>
-  invoke<void>("save_tabs", { tabs, active, views });
+export const saveTabs = (tabs: string[], active: number, views: string[], collapsed: string[]) =>
+  invoke<void>("save_tabs", { tabs, active, views, collapsed });
 
 /** Opens a new window showing `tabs`, its top-left corner at logical screen position (x, y). */
-export const openWindow = (tabs: string[], views: string[], x: number, y: number) =>
-  invoke<void>("open_window", { tabs, views, x, y });
+export const openWindow = (tabs: WindowTabs, x: number, y: number) =>
+  invoke<void>("open_window", { tabs, x, y });
 
 export function separatorOf(path: string): string {
   return path.includes("\\") ? "\\" : "/";

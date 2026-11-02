@@ -18,6 +18,8 @@
     dropTarget,
     springPath,
     springMs,
+    collapsed,
+    ontogglesection,
     tags,
     activeTag,
     ontag,
@@ -36,6 +38,10 @@
     dropTarget: string | null;
     springPath: string | null;
     springMs: number;
+    /** The sections folded away in this tab: "favorites", "drives" or "tags". */
+    collapsed: string[];
+    /** Fold a section away, or open it again. */
+    ontogglesection: (section: string) => void;
     tags: Tag[];
     /** The tag whose items the list shows, if any. */
     activeTag: number | null;
@@ -61,6 +67,13 @@
     { label: "Pictures", icon: "image", sub: "Pictures" },
   ];
 
+  const sections = {
+    favorites: "Favorites",
+    drives: "Drives",
+    tags: "Tags",
+  } as const;
+  const folded = (section: keyof typeof sections) => collapsed.includes(section);
+
   let drives = $state.raw<Drive[]>([]);
 
   const refreshDrives = () => {
@@ -77,6 +90,19 @@
   });
 </script>
 
+{#snippet heading(section: keyof typeof sections)}
+  <button
+    class="label"
+    id="{section}-label"
+    aria-expanded={!folded(section)}
+    onclick={() => ontogglesection(section)}
+  >
+    <span class="chevron" class:folded={folded(section)}><Icon name="chevronDown" size={12} /></span
+    >
+    {sections[section]}
+  </button>
+{/snippet}
+
 <aside class="sidebar" aria-label="Places and tags">
   <!-- The window has no native title bar; the brand row is part of the drag area. -->
   <div class="brand" data-tauri-drag-region>
@@ -87,95 +113,101 @@
   <div class="places">
     <!-- Dropping a folder anywhere in here (not on a favorite) pins it. -->
     <div class="favorites" class:pin={pinHover} data-pin-drop>
-      <div class="label">Favorites</div>
-      {#each favorites as fav (fav.label)}
-        {@const path = fav.sub ? joinPath(home, fav.sub) : home}
-        <button
-          class="item"
-          class:selected={path === current}
-          aria-current={path === current ? "page" : undefined}
-          class:drop={dropTarget === path}
-          class:springing={springPath === path}
-          style:--spring-ms="{springMs}ms"
-          data-drop-path={path}
-          onclick={() => onnavigate(path)}
-          onmousedown={(e) => e.button === 1 && e.preventDefault()}
-          onauxclick={(e) => e.button === 1 && onopentab(path)}
-        >
-          <span class="icon" style:color={folderTint(path)}><Icon name={fav.icon} /></span>
-          <span>{fav.label}</span>
-        </button>
-      {/each}
-      {#each settings.pinnedFolders as pinned (pinned)}
-        <button
-          class="item"
-          class:selected={pinned === current}
-          aria-current={pinned === current ? "page" : undefined}
-          class:drop={dropTarget === pinned}
-          class:springing={springPath === pinned}
-          style:--spring-ms="{springMs}ms"
-          data-drop-path={pinned}
-          title={pinned}
-          onclick={() => onnavigate(pinned)}
-          onmousedown={(e) => e.button === 1 && e.preventDefault()}
-          onauxclick={(e) => e.button === 1 && onopentab(pinned)}
-          oncontextmenu={(e) => {
-            e.preventDefault();
-            onpinmenu(pinned, e);
-          }}
-        >
-          <span class="icon" style:color={folderTint(pinned)}><Icon name="folder" /></span>
-          <span>{baseName(pinned)}</span>
-        </button>
-      {/each}
+      {@render heading("favorites")}
+      {#if !folded("favorites")}
+        {#each favorites as fav (fav.label)}
+          {@const path = fav.sub ? joinPath(home, fav.sub) : home}
+          <button
+            class="item"
+            class:selected={path === current}
+            aria-current={path === current ? "page" : undefined}
+            class:drop={dropTarget === path}
+            class:springing={springPath === path}
+            style:--spring-ms="{springMs}ms"
+            data-drop-path={path}
+            onclick={() => onnavigate(path)}
+            onmousedown={(e) => e.button === 1 && e.preventDefault()}
+            onauxclick={(e) => e.button === 1 && onopentab(path)}
+          >
+            <span class="icon" style:color={folderTint(path)}><Icon name={fav.icon} /></span>
+            <span>{fav.label}</span>
+          </button>
+        {/each}
+        {#each settings.pinnedFolders as pinned (pinned)}
+          <button
+            class="item"
+            class:selected={pinned === current}
+            aria-current={pinned === current ? "page" : undefined}
+            class:drop={dropTarget === pinned}
+            class:springing={springPath === pinned}
+            style:--spring-ms="{springMs}ms"
+            data-drop-path={pinned}
+            title={pinned}
+            onclick={() => onnavigate(pinned)}
+            onmousedown={(e) => e.button === 1 && e.preventDefault()}
+            onauxclick={(e) => e.button === 1 && onopentab(pinned)}
+            oncontextmenu={(e) => {
+              e.preventDefault();
+              onpinmenu(pinned, e);
+            }}
+          >
+            <span class="icon" style:color={folderTint(pinned)}><Icon name="folder" /></span>
+            <span>{baseName(pinned)}</span>
+          </button>
+        {/each}
+      {/if}
     </div>
 
     {#if drives.length}
-      <div class="label" id="drives-label">Drives</div>
-      <div role="group" aria-labelledby="drives-label">
-        {#each drives as drive (drive.path)}
-          {@const used = drive.total > 0 ? (drive.total - drive.free) / drive.total : 0}
-          {@const letter = drive.path.slice(0, 2)}
-          <button
-            class="item drive"
-            class:selected={trimEnd(drive.path) === trimEnd(current)}
-            aria-current={trimEnd(drive.path) === trimEnd(current) ? "page" : undefined}
-            class:drop={dropTarget === drive.path}
-            class:springing={springPath === drive.path}
-            style:--spring-ms="{springMs}ms"
-            data-drop-path={drive.path}
-            title="{letter} · {formatSize(drive.free)} free of {formatSize(drive.total)}"
-            onclick={() => onnavigate(drive.path)}
-            onmousedown={(e) => e.button === 1 && e.preventDefault()}
-            onauxclick={(e) => e.button === 1 && onopentab(drive.path)}
-          >
-            <span class="icon"><Icon name="hardDrive" /></span>
-            <span class="drive-info">
-              <span class="drive-name">{letter}</span>
-              <span class="usage" class:full={used >= NEARLY_FULL}>
-                <span class="fill" style:width="{Math.round(used * 100)}%"></span>
+      {@render heading("drives")}
+      {#if !folded("drives")}
+        <div role="group" aria-labelledby="drives-label">
+          {#each drives as drive (drive.path)}
+            {@const used = drive.total > 0 ? (drive.total - drive.free) / drive.total : 0}
+            {@const letter = drive.path.slice(0, 2)}
+            <button
+              class="item drive"
+              class:selected={trimEnd(drive.path) === trimEnd(current)}
+              aria-current={trimEnd(drive.path) === trimEnd(current) ? "page" : undefined}
+              class:drop={dropTarget === drive.path}
+              class:springing={springPath === drive.path}
+              style:--spring-ms="{springMs}ms"
+              data-drop-path={drive.path}
+              title="{letter} · {formatSize(drive.free)} free of {formatSize(drive.total)}"
+              onclick={() => onnavigate(drive.path)}
+              onmousedown={(e) => e.button === 1 && e.preventDefault()}
+              onauxclick={(e) => e.button === 1 && onopentab(drive.path)}
+            >
+              <span class="icon"><Icon name="hardDrive" /></span>
+              <span class="drive-info">
+                <span class="drive-name">{letter}</span>
+                <span class="usage" class:full={used >= NEARLY_FULL}>
+                  <span class="fill" style:width="{Math.round(used * 100)}%"></span>
+                </span>
+                <span class="free">{formatSize(drive.free)} free</span>
               </span>
-              <span class="free">{formatSize(drive.free)} free</span>
-            </span>
+            </button>
+          {/each}
+        </div>
+      {/if}
+    {/if}
+
+    {@render heading("tags")}
+    {#if !folded("tags")}
+      <div role="group" aria-labelledby="tags-label">
+        {#each tags as tag (tag.id)}
+          <button
+            class="item tag"
+            class:selected={activeTag === tag.id}
+            aria-pressed={activeTag === tag.id}
+            onclick={() => ontag(tag)}
+          >
+            <span class="dot" style:background={tagColor(tag.color)}></span>
+            <span>{tag.name}</span>
           </button>
         {/each}
       </div>
     {/if}
-
-    <div class="label" id="tags-label">Tags</div>
-    <div role="group" aria-labelledby="tags-label">
-      {#each tags as tag (tag.id)}
-        <button
-          class="item tag"
-          class:selected={activeTag === tag.id}
-          aria-pressed={activeTag === tag.id}
-          onclick={() => ontag(tag)}
-        >
-          <span class="dot" style:background={tagColor(tag.color)}></span>
-          <span>{tag.name}</span>
-        </button>
-      {/each}
-    </div>
   </div>
 
   <!-- Apart from the places above: the bin is not a folder to pin or drop on. -->
@@ -253,11 +285,29 @@
   }
 
   .label {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs);
+    width: 100%;
     padding: 12px 10px 4px;
+    text-align: left;
     font-size: var(--font-size-caption);
     font-weight: var(--font-weight-semibold);
     letter-spacing: 0.4px;
     color: var(--text-tertiary);
+  }
+
+  .label:hover {
+    color: var(--text-secondary);
+  }
+
+  .chevron {
+    display: flex;
+    transition: rotate 120ms ease-out;
+  }
+
+  .chevron.folded {
+    rotate: -90deg;
   }
 
   .item {

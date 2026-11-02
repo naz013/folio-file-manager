@@ -84,6 +84,7 @@ pub async fn save_tabs(
     tabs: Vec<String>,
     active: usize,
     views: Vec<String>,
+    collapsed: Vec<String>,
 ) -> CmdResult<()> {
     let label = window.label().to_owned();
     blocking(move || {
@@ -93,6 +94,7 @@ pub async fn save_tabs(
                 tabs,
                 active,
                 views,
+                collapsed,
             },
         );
         Ok(())
@@ -107,8 +109,7 @@ pub async fn open_window(
     app: tauri::AppHandle,
     window: tauri::WebviewWindow,
     session: tauri::State<'_, Session>,
-    tabs: Vec<String>,
-    views: Vec<String>,
+    tabs: WindowTabs,
     x: f64,
     y: f64,
 ) -> CmdResult<()> {
@@ -129,14 +130,7 @@ pub async fn open_window(
         height: size.height,
     };
     let label = session.next_label();
-    session.open(
-        &label,
-        WindowTabs {
-            tabs,
-            active: 0,
-            views,
-        },
-    );
+    session.open(&label, WindowTabs { active: 0, ..tabs });
     crate::window::open(&app, &label, &place).map_err(|e| {
         session.close(&label);
         e.to_string()

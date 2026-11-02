@@ -20,21 +20,39 @@ pub struct WindowTabs {
     /// Each tab's view mode ("grid" or "list"), in tab order; "" or absent means the default.
     #[serde(default)]
     pub views: Vec<String>,
+    /// Each tab's collapsed sidebar sections, comma separated, in tab order; "" or absent
+    /// means none are collapsed.
+    #[serde(default)]
+    pub collapsed: Vec<String>,
 }
 
 impl WindowTabs {
     /// Drops empty paths and clamps `active`; `None` when nothing is left.
     fn sanitized(mut self) -> Option<Self> {
-        // Each tab keeps its view when the empty ones are dropped.
+        // Each tab keeps its view and its collapsed sections when the empty ones are dropped.
         let had_views = !self.views.is_empty();
+        let had_collapsed = !self.collapsed.is_empty();
         let mut views = std::mem::take(&mut self.views).into_iter();
-        let (tabs, views): (Vec<_>, Vec<_>) = std::mem::take(&mut self.tabs)
-            .into_iter()
-            .map(|t| (t, views.next().unwrap_or_default()))
-            .filter(|(t, _)| !t.is_empty())
-            .unzip();
-        self.tabs = tabs;
-        self.views = if had_views { views } else { Vec::new() };
+        let mut collapsed = std::mem::take(&mut self.collapsed).into_iter();
+        let mut kept = Vec::new();
+        for tab in std::mem::take(&mut self.tabs) {
+            let view = views.next().unwrap_or_default();
+            let fold = collapsed.next().unwrap_or_default();
+            if !tab.is_empty() {
+                kept.push((tab, view, fold));
+            }
+        }
+        self.tabs = kept.iter().map(|(t, _, _)| t.clone()).collect();
+        self.views = if had_views {
+            kept.iter().map(|(_, v, _)| v.clone()).collect()
+        } else {
+            Vec::new()
+        };
+        self.collapsed = if had_collapsed {
+            kept.into_iter().map(|(_, _, c)| c).collect()
+        } else {
+            Vec::new()
+        };
         if self.tabs.is_empty() {
             return None;
         }
@@ -327,6 +345,7 @@ mod tests {
             tabs: paths.iter().map(ToString::to_string).collect(),
             active,
             views: Vec::new(),
+            collapsed: Vec::new(),
         }
     }
 
@@ -336,14 +355,17 @@ mod tests {
             tabs: vec!["a".into(), String::new(), "c".into()],
             active: 2,
             views: vec!["list".into(), "grid".into(), "grid".into()],
+            collapsed: vec!["tags".into(), String::new(), "drives,tags".into()],
         }
         .sanitized()
         .unwrap();
         assert_eq!(kept.tabs, ["a", "c"]);
         assert_eq!(kept.views, ["list", "grid"]);
+        assert_eq!(kept.collapsed, ["tags", "drives,tags"]);
         // A session file from before views were saved still loads.
         let old: WindowTabs = serde_json::from_str(r#"{"tabs":["x"],"active":0}"#).unwrap();
         assert_eq!(old.views, Vec::<String>::new());
+        assert_eq!(old.collapsed, Vec::<String>::new());
     }
 
     fn temp_session() -> (tempfile::TempDir, PathBuf, Session) {
