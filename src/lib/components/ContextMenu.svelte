@@ -40,7 +40,8 @@
     top = y;
     await tick();
     // Keep the whole menu on screen: open up or to the left when there is no room.
-    const box = el.getBoundingClientRect();
+    // Measured without transforms: the pop-in animation has it slightly scaled down.
+    const box = { width: el.offsetWidth, height: el.offsetHeight };
     left = Math.max(0, Math.min(x, window.innerWidth - box.width));
     top = Math.max(0, y + box.height > window.innerHeight ? y - box.height : y);
     placed = true;

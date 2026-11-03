@@ -50,7 +50,7 @@
   img {
     object-fit: contain;
     opacity: 0;
-    transition: opacity 120ms ease-out;
+    transition: opacity var(--duration-fast) var(--ease-standard);
   }
 
   img.loaded {

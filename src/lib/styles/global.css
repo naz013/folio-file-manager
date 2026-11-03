@@ -106,21 +106,80 @@ button[aria-disabled="true"] {
   outline-offset: var(--focus-ring-offset);
 }
 
-/* No motion for people who turned it off in the OS. The spring ring below is not decoration:
-   it shows how long until a folder opens, so it keeps its timing. */
+/* Things that appear fade in, and pop up a little when they hold content. They only ever enter:
+   leaving is instant, so closing never waits and input is never held up. Only opacity, scale
+   and translate move, which the compositor does without touching layout. */
+@keyframes motion-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes motion-pop {
+  from {
+    opacity: 0;
+    scale: var(--motion-scale);
+    translate: 0 var(--motion-shift);
+  }
+}
+
+@keyframes motion-drop {
+  from {
+    opacity: 0;
+    scale: var(--motion-scale);
+    translate: 0 calc(-1 * var(--motion-shift));
+  }
+}
+
+.backdrop {
+  animation: motion-fade var(--duration-base) var(--ease-standard);
+}
+
+.backdrop > [role="dialog"] {
+  animation: motion-pop var(--duration-base) var(--ease-emphasized);
+}
+
+[role="menu"] {
+  animation: motion-drop var(--duration-fast) var(--ease-emphasized);
+}
+
+.motion-pop {
+  animation: motion-pop var(--duration-base) var(--ease-emphasized);
+}
+
+.motion-fade {
+  animation: motion-fade var(--duration-base) var(--ease-standard);
+}
+
+/* No motion for people who turned it off, in the OS or in Settings ("full" overrides the OS).
+   The spring ring below is not decoration: it shows how long until a folder opens, so it keeps
+   its timing. The two rules are the same; a media query cannot be combined with an attribute. */
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  :root:not([data-motion="full"]) *,
+  :root:not([data-motion="full"]) *::before,
+  :root:not([data-motion="full"]) *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
 
-  .springing::after {
+  :root:not([data-motion="full"]) .springing::after {
     animation-duration: var(--spring-ms) !important;
   }
+}
+
+:root[data-motion="reduced"] *,
+:root[data-motion="reduced"] *::before,
+:root[data-motion="reduced"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+:root[data-motion="reduced"] .springing::after {
+  animation-duration: var(--spring-ms) !important;
 }
 
 /* High contrast (Windows contrast themes): backgrounds are dropped, so what marks the focus

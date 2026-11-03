@@ -386,7 +386,7 @@
 
   .chevron {
     display: flex;
-    transition: rotate 120ms ease-out;
+    transition: rotate var(--duration-fast) var(--ease-standard);
   }
 
   .chevron.folded {

@@ -21,7 +21,10 @@
 
 <script lang="ts">
   import type { Entry } from "$lib/api/fs";
+  import { fadeIn } from "$lib/animate";
   import { formatDate, formatSize } from "$lib/format";
+  import { animatesList } from "$lib/motion";
+  import { reducedMotion } from "$lib/settings.svelte";
   import type { SortKey, SortState } from "$lib/sort";
   import { SORT_HEADERS as headers } from "$lib/sort";
   import FolderIcon from "./FolderIcon.svelte";
@@ -110,6 +113,16 @@
   let banded = false;
 
   let grid = $derived(view === "grid");
+
+  // Grid and list cross-fade when switched. Items are placed by the virtual scroller, so only
+  // the canvas fades, once; a folder too big to animate switches instantly.
+  let shownGrid: boolean | null = null;
+  $effect(() => {
+    const was = shownGrid;
+    shownGrid = grid;
+    if (was === null || was === grid) return;
+    if (canvas && animatesList(entries.length, reducedMotion())) fadeIn(canvas);
+  });
   let padX = $derived(grid ? GRID_PAD_X : LIST_PAD_X);
   let padY = $derived(grid ? GRID_PAD_Y : LIST_PAD_Y);
   let rowH = $derived(grid ? TILE_H + GAP_Y : ROW_H);
@@ -520,6 +533,7 @@
     width: 112px;
     height: 88px;
     border-radius: 10px;
+    transition: background-color var(--duration-fast) var(--ease-standard);
   }
 
   .tile.selected .thumb,
@@ -611,6 +625,7 @@
   .row {
     padding: 0 10px;
     border-radius: 7px;
+    transition: background-color var(--duration-fast) var(--ease-standard);
   }
 
   .row .name {

@@ -488,7 +488,7 @@
   img {
     display: block;
     object-fit: contain;
-    transition: transform 150ms ease-out;
+    transition: transform var(--duration-fast) var(--ease-standard);
   }
 
   .crop-box {
@@ -621,11 +621,5 @@
   .primary:disabled {
     color: var(--text-on-accent);
     opacity: 0.6;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    img {
-      transition: none;
-    }
   }
 </style>

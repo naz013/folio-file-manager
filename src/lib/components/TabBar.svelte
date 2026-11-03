@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { flip } from "svelte/animate";
+  import { fade } from "svelte/transition";
+  import { motionMs } from "$lib/animate";
   import Icon from "./Icon.svelte";
   import FolderIcon from "./FolderIcon.svelte";
 
@@ -151,6 +154,8 @@
     {#each tabs as tab, index (tab.id)}
       <div
         class="tab"
+        in:fade={{ duration: motionMs("--duration-base") }}
+        animate:flip={{ duration: drag?.moved ? 0 : motionMs("--duration-fast") }}
         class:active={index === active}
         class:detaching={drag?.index === index && drag.outside}
         class:springing={springPath === `tab:${tab.id}`}

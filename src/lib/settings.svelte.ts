@@ -5,6 +5,7 @@
  */
 
 import { movedBy, movedTo, pinKey, withPinned } from "$lib/favorites";
+import { isMotion, motionReduced, type Motion } from "$lib/motion";
 
 const KEY = "folio.settings";
 
@@ -56,6 +57,8 @@ export interface Settings {
   showHints: boolean;
   /** The version whose release notes were last offered, so they show once per version. */
   lastSeenVersion: string;
+  /** How much the interface animates; "system" follows the OS's reduced-motion choice. */
+  motion: Motion;
 }
 
 export const DEFAULTS: Settings = {
@@ -78,6 +81,7 @@ export const DEFAULTS: Settings = {
   updateSkipped: "",
   showHints: true,
   lastSeenVersion: "",
+  motion: "system",
 };
 
 /** The allowed delay closest to `ms`, so a hand-edited value still shows in the list. */
@@ -141,6 +145,7 @@ function read(): Settings {
     updateSkipped: typeof saved.updateSkipped === "string" ? saved.updateSkipped : "",
     showHints: saved.showHints !== false,
     lastSeenVersion: typeof saved.lastSeenVersion === "string" ? saved.lastSeenVersion : "",
+    motion: isMotion(saved.motion) ? saved.motion : DEFAULTS.motion,
     pinnedFolders: Array.isArray(saved.pinnedFolders)
       ? saved.pinnedFolders.filter(
           (p, i, all): p is string => typeof p === "string" && !!p && all.indexOf(p) === i,
@@ -152,8 +157,24 @@ function read(): Settings {
 /** The live settings: read them anywhere; change them with `updateSettings`. */
 export const settings: Settings = $state(read());
 
+/** Hands the motion choice to the stylesheet (`:root[data-motion]`), which has no other way to see it. */
+function applyMotion() {
+  if (typeof document === "undefined") return;
+  document.documentElement.dataset.motion = settings.motion;
+}
+
+/** Whether animation is off right now: for the few places that move things from script. */
+export function reducedMotion(): boolean {
+  const os =
+    typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  return motionReduced(settings.motion, os);
+}
+
+applyMotion();
+
 export function updateSettings(patch: Partial<Settings>) {
   Object.assign(settings, patch);
+  applyMotion();
   try {
     localStorage.setItem(KEY, JSON.stringify($state.snapshot(settings)));
   } catch {
@@ -164,7 +185,10 @@ export function updateSettings(patch: Partial<Settings>) {
 // Another window changed them: follow.
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (e) => {
-    if (e.key === KEY || e.key === null) Object.assign(settings, read());
+    if (e.key === KEY || e.key === null) {
+      Object.assign(settings, read());
+      applyMotion();
+    }
   });
 }
 

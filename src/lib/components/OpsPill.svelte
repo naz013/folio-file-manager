@@ -90,7 +90,7 @@
     </button>
 
     {#if open}
-      <div class="panel" role="dialog" aria-label="Operations">
+      <div class="panel motion-pop" role="dialog" aria-label="Operations">
         {#each jobs as job (job.id)}
           <div class="row" class:failed={job.state === "failed"}>
             <div class="main">
@@ -101,7 +101,9 @@
                 <span class="detail">{outcome(job)}</span>
               {/if}
               {#if active(job)}
-                <div class="bar"><div class="fill" style:width="{percent(job)}%"></div></div>
+                <div class="bar">
+                  <div class="fill" style:transform="scaleX({percent(job) / 100})"></div>
+                </div>
               {/if}
             </div>
             <div class="actions">
@@ -234,8 +236,11 @@
     overflow: hidden;
   }
   .fill {
+    width: 100%;
     height: 100%;
     background: var(--accent-default);
+    transform-origin: left;
+    transition: transform var(--duration-base) var(--ease-standard);
   }
 
   .actions {

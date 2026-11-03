@@ -117,6 +117,33 @@ without any CSS of its own.
   Pressed, Focus, Disabled) and Icon Button has Focus. Danger and the Focus rings are drawn with
   the values above, in a 3 × 5 grid (kind by state) on the Components board.
 
+## Motion
+
+Motion tells you what changed; it is never a wait. Tokens (`tokens.css`): `--duration-fast`
+120 ms, `--duration-base` 200 ms, `--duration-slow` 320 ms; `--ease-standard` for things that
+change in place, `--ease-emphasized` for things that arrive; `--motion-shift` (6 px) and
+`--motion-scale` (0.97) for how far an arriving thing travels. No component hard-codes a timing.
+
+| What                                    | Motion                                          |
+| --------------------------------------- | ----------------------------------------------- |
+| Dialog scrim, `.backdrop`               | fade, base                                      |
+| Dialog (`.backdrop > [role=dialog]`)    | fade + scale + rise, base, emphasized           |
+| Menus (`[role=menu]`)                   | fade + scale + drop, fast, emphasized           |
+| Toast, operations panel (`.motion-pop`) | as a dialog                                     |
+| Tab opening (`.motion-fade`)            | fade; tabs reorder and close with a glide, fast |
+| Selection, hover and switches           | colour fades, fast                              |
+| Grid and list switch                    | the list fades in once, base                    |
+| Progress bar                            | `scaleX`, base                                  |
+
+- Only `opacity`, `scale`, `translate` and `transform` animate, so nothing re-lays-out.
+- Things only animate **in**; leaving is instant. Closing and keyboard actions never wait, and an
+  animation that is interrupted just stops.
+- Items of the virtual file list do not animate as they scroll in; a folder over
+  2000 entries skips even the view-switch fade (`LIST_ANIMATION_MAX`).
+- Off under `prefers-reduced-motion`, or Settings › Motion › Off. "Always on" overrides the OS.
+  The spring-loading ring is a countdown, not decoration, and keeps its timing.
+- **Penpot:** not drawn yet; the table above is the spec until the Motion notes are added there.
+
 ## UX rules
 
 - One accent color. Tag colors are for tags only, never for UI chrome.

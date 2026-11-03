@@ -91,11 +91,14 @@
   --focus-ring-offset: 1px;
   --opacity-disabled: 0.45;
 
-  /* motion: durations and curves (#107 extends this set) */
+  /* motion: durations, curves and how far things travel (see docs/DESIGN.md › Motion) */
   --duration-fast: 120ms;
   --duration-base: 200ms;
+  --duration-slow: 320ms;
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --ease-emphasized: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --motion-shift: 6px;
+  --motion-scale: 0.97;
 
   --scrim: rgb(0 0 0 / 0.35);
   --scrim-strong: rgb(0 0 0 / 0.55);

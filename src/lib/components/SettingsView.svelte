@@ -10,6 +10,7 @@
     tagsExport,
     type CrashState,
   } from "$lib/api/fs";
+  import type { Motion } from "$lib/motion";
   import { SPRING_DELAYS_MS, settings, updateSettings } from "$lib/settings.svelte";
   import { themes, type Theme } from "$lib/theme";
   import { checkForUpdate, updateStatusText, updates } from "$lib/updates.svelte";
@@ -265,6 +266,27 @@
     </section>
 
     <section>
+      <h3>Motion</h3>
+
+      <div class="row">
+        <label for="motion">Animations</label>
+        <select
+          id="motion"
+          value={settings.motion}
+          onchange={(e) => updateSettings({ motion: e.currentTarget.value as Motion })}
+        >
+          <option value="system">Follow the system</option>
+          <option value="full">Always on</option>
+          <option value="reduced">Off</option>
+        </select>
+      </div>
+      <p class="note">
+        Menus, dialogs and tabs ease in. Off shows every change at once; the ring that counts down
+        before a dragged-over folder opens still runs.
+      </p>
+    </section>
+
+    <section>
       <h3>Hints</h3>
 
       <div class="row">
@@ -513,7 +535,7 @@
     margin: 0;
     border-radius: 10px;
     background: var(--border-strong);
-    transition: background 120ms ease-out;
+    transition: background var(--duration-fast) var(--ease-standard);
   }
 
   .switch::after {
@@ -525,7 +547,7 @@
     height: 16px;
     border-radius: 50%;
     background: var(--bg-window);
-    transition: translate 120ms ease-out;
+    transition: translate var(--duration-fast) var(--ease-standard);
   }
 
   .switch:checked {

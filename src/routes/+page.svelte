@@ -2973,7 +2973,7 @@
   {/if}
 
   {#if toast}
-    <div class="toast" class:error={toast.error} role={toast.error ? "alert" : "status"}>
+    <div class="toast motion-pop" class:error={toast.error} role={toast.error ? "alert" : "status"}>
       {toast.text}
     </div>
   {/if}
