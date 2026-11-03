@@ -22,7 +22,12 @@ const MAX_FILE: u64 = 5 << 20;
 /// allowed so a plugin can be one HTML file.
 const CSP: &str = "default-src 'none'; script-src 'self' 'unsafe-inline'; \
     style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; \
-    connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'";
+    connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; \
+    sandbox allow-scripts";
+/// A plugin with more files than this (or more entries of any kind) is not read.
+const MAX_FILES: usize = 1000;
+/// A plugin whose served files add up to more than this is not read.
+const MAX_TOTAL: u64 = 64 << 20;
 
 /// The folder plugins live in; managed state, `None` when the system has no app data folder.
 pub struct PluginsDir(pub Option<PathBuf>);
@@ -36,6 +41,9 @@ pub struct Found {
     pub manifest: Option<String>,
     /// Why there is no manifest to read.
     pub error: Option<String>,
+    /// A hash of the manifest and every file the plugin may serve, so an approval can be tied to
+    /// the code that was approved and not only to its version.
+    pub digest: Option<String>,
 }
 
 /// An id is a short name of lower-case letters, digits and hyphens, not starting or ending in one.
@@ -68,18 +76,23 @@ pub fn list(dir: &Path) -> Vec<Found> {
                         "The folder's name must be 1 to 40 letters (a-z), digits or hyphens"
                             .to_owned(),
                     ),
+                    digest: None,
                 };
             }
-            match read_manifest(&e.path().join(MANIFEST)) {
-                Ok(text) => Found {
+            let read = read_manifest(&e.path().join(MANIFEST))
+                .and_then(|text| digest(&e.path()).map(|d| (text, d)));
+            match read {
+                Ok((text, digest)) => Found {
                     id,
                     manifest: Some(text),
                     error: None,
+                    digest: Some(digest),
                 },
                 Err(why) => Found {
                     id,
                     manifest: None,
                     error: Some(why),
+                    digest: None,
                 },
             }
         })
@@ -99,6 +112,53 @@ fn read_manifest(file: &Path) -> Result<String, String> {
     std::fs::read_to_string(file).map_err(|_| format!("{MANIFEST} can't be read as text"))
 }
 
+/// A hash of the files of the plugin in `root` that could be served (links are not followed),
+/// by relative path and content. Changing, adding or removing such a file changes it.
+pub fn digest(root: &Path) -> Result<String, String> {
+    let mut files = Vec::new();
+    let mut seen = 0usize;
+    let mut total = 0u64;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let read = std::fs::read_dir(&dir).map_err(|_| "A folder can't be read".to_owned())?;
+        for entry in read.flatten() {
+            seen += 1;
+            if seen > MAX_FILES * 5 {
+                return Err("The plugin has too many files".to_owned());
+            }
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            let path = entry.path();
+            if kind.is_symlink() {
+                continue;
+            }
+            if kind.is_dir() {
+                stack.push(path);
+            } else if kind.is_file() && mime_of(&path).is_some() {
+                total += entry.metadata().map_or(0, |m| m.len());
+                if files.len() >= MAX_FILES || total > MAX_TOTAL {
+                    return Err("The plugin has too many or too large files".to_owned());
+                }
+                let rel = path.strip_prefix(root).unwrap_or(&path);
+                files.push((rel.to_string_lossy().replace('\\', "/"), path));
+            }
+        }
+    }
+    files.sort();
+    let mut hasher = blake3::Hasher::new();
+    for (rel, path) in files {
+        hasher.update(rel.as_bytes());
+        hasher.update(&[0]);
+        let file = std::fs::File::open(&path).map_err(|_| format!("{rel} can't be read"))?;
+        hasher
+            .update_reader(file)
+            .map_err(|_| format!("{rel} can't be read"))?;
+        hasher.update(&[0]);
+    }
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
 /// The file `rel` of plugin `id`, if it is a plain file inside that plugin's folder. `rel` is a
 /// forward-slash path made only of ordinary names.
 pub fn resolve(dir: &Path, id: &str, rel: &str) -> Option<PathBuf> {
@@ -113,7 +173,12 @@ pub fn resolve(dir: &Path, id: &str, rel: &str) -> Option<PathBuf> {
         }
     }
     // Resolved on disk: a link inside the folder that leads outside it ends up elsewhere.
+    // The plugin's own folder must be a real folder inside the plugins folder, not a link
+    // (or a Windows junction) to somewhere else.
     let home = dir.join(id).canonicalize().ok()?;
+    if home != dir.canonicalize().ok()?.join(id) {
+        return None;
+    }
     let target = path.canonicalize().ok()?;
     (target.starts_with(&home) && target.is_file()).then_some(target)
 }
@@ -284,6 +349,59 @@ mod tests {
     }
 
     #[test]
+    fn the_digest_follows_the_servable_files_and_nothing_else() {
+        let (dir, _) = setup();
+        let demo = dir.path().join("demo");
+        let before = digest(&demo).unwrap();
+        assert_eq!(before, digest(&demo).unwrap());
+        // A file that is never served doesn't count.
+        std::fs::write(demo.join("notes.exe"), "x").unwrap();
+        assert_eq!(before, digest(&demo).unwrap());
+        // Changed, added and removed served files do.
+        std::fs::write(demo.join("index.html"), "<p>other</p>").unwrap();
+        let changed = digest(&demo).unwrap();
+        assert_ne!(before, changed);
+        std::fs::write(demo.join("extra.js"), "2").unwrap();
+        let added = digest(&demo).unwrap();
+        assert_ne!(changed, added);
+        std::fs::remove_file(demo.join("extra.js")).unwrap();
+        assert_eq!(changed, digest(&demo).unwrap());
+        assert_eq!(
+            list(dir.path())[0].digest.as_deref(),
+            Some(changed.as_str())
+        );
+    }
+
+    /// Makes `link` lead to `target`: a symlink on Unix, a junction on Windows (needs no rights).
+    fn link_dir(target: &Path, link: &Path) -> bool {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link).is_ok()
+        }
+        #[cfg(windows)]
+        {
+            std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(link)
+                .arg(target)
+                .output()
+                .is_ok_and(|o| o.status.success())
+        }
+    }
+
+    #[test]
+    fn a_plugin_folder_that_is_a_link_serves_nothing() {
+        let (dir, _) = setup();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("index.html"), "<p>x</p>").unwrap();
+        if !link_dir(outside.path(), &dir.path().join("linked")) {
+            return;
+        }
+        assert!(resolve(dir.path(), "linked", "index.html").is_none());
+        assert!(resolve(dir.path(), "demo", "index.html").is_some());
+    }
+
+    #[test]
     fn a_served_file_has_its_type_and_the_policy_that_shuts_the_network() {
         let (_dir, plugins) = setup();
         let answer = handle(&plugins, &request("/demo/index.html"));
@@ -293,6 +411,10 @@ mod tests {
         assert_eq!(headers["content-type"], "text/html; charset=utf-8");
         let csp = headers["content-security-policy"].to_str().unwrap();
         assert!(csp.contains("connect-src 'none'") && csp.contains("default-src 'none'"));
+        assert!(
+            csp.contains("sandbox allow-scripts"),
+            "sandboxed even outside its frame"
+        );
         assert_eq!(headers["x-content-type-options"], "nosniff");
     }
 

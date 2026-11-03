@@ -59,12 +59,26 @@ const fail = (error: string): Parsed => ({ ok: false, error });
 const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
+/** Control and invisible formatting characters (zero-width, bidi overrides): never shown as is. */
+const HIDDEN = /[\p{Cc}\p{Cf}]/u;
+
 /** A short single-line text of at most `max` characters, or null. */
 function text(v: unknown, max: number): string | null {
-  return typeof v === "string" && v.trim() && v.length <= max && !/[\r\n]/.test(v)
-    ? v.trim()
-    : null;
+  return typeof v === "string" && v.trim() && v.length <= max && !HIDDEN.test(v) ? v.trim() : null;
 }
+
+/** Names a plugin may not take, so its messages can't pass for Folio's or the system's. */
+const RESERVED = /^(folio|windows|microsoft|system|admin|administrator|security|defender|explorer)/;
+const isReservedName = (name: string) =>
+  RESERVED.test(
+    name
+      .normalize("NFKC")
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]/gu, ""),
+  );
+
+/** Message text for a toast: one line, nothing hidden. */
+const oneLine = (s: string) => s.replace(/[\p{Cc}\p{Cf}\s]+/gu, " ").trim();
 
 /** File extensions written with or without a dot, in any case: `["PNG", ".jpg"]`. */
 function extensions(v: unknown): string[] | null {
@@ -102,6 +116,7 @@ export function parseManifest(id: string, source: string): Parsed {
   if (raw.id !== id) return fail(`"id" must be "${id}", the name of the folder`);
   const name = text(raw.name, 60);
   if (!name) return fail('"name" is missing or too long (60 characters at most)');
+  if (isReservedName(name)) return fail(`"name" can't start like a part of Windows or Folio`);
   const version = text(raw.version, 20);
   if (!version) return fail('"version" is missing or too long');
   const api = raw.api ?? 1;
@@ -184,6 +199,8 @@ export function parseManifest(id: string, source: string): Parsed {
 export interface Grant {
   version: string;
   permissions: Permission[];
+  /** A hash of the plugin's files when it was approved; "" for an approval made before hashes. */
+  digest: string;
 }
 
 /** Reads the saved grants, dropping anything that isn't one. */
@@ -198,15 +215,28 @@ export function cleanGrants(saved: unknown): Record<string, Grant> {
       !Array.isArray(g.permissions)
     )
       continue;
-    out[id] = { version: g.version, permissions: g.permissions.filter(isPermission) };
+    out[id] = {
+      version: g.version,
+      permissions: g.permissions.filter(isPermission),
+      digest: typeof g.digest === "string" ? g.digest : "",
+    };
   }
   return out;
 }
 
-/** A plugin is on when the person agreed to this version and everything it asks for. */
-export function isGranted(manifest: Manifest, grant: Grant | undefined): boolean {
+/**
+ * A plugin is on when the person agreed to this version, these files and everything it asks for.
+ * A plugin whose files can't be hashed (`digest` null) is never on.
+ */
+export function isGranted(
+  manifest: Manifest,
+  grant: Grant | undefined,
+  digest: string | null,
+): boolean {
   return (
     !!grant &&
+    !!digest &&
+    grant.digest === digest &&
     grant.version === manifest.version &&
     manifest.permissions.every((p) => grant.permissions.includes(p))
   );
@@ -218,6 +248,8 @@ export interface Loaded {
   manifest: Manifest | null;
   /** Why it can't be used: no manifest, a bad one. */
   error: string | null;
+  /** Hash of the plugin's files as they are now; null when they couldn't be read. */
+  digest: string | null;
   enabled: boolean;
   /** Approved before, but its version or permissions have changed since. */
   changed: boolean;
@@ -228,6 +260,7 @@ export interface Found {
   id: string;
   manifest: string | null;
   error: string | null;
+  digest: string | null;
 }
 
 /** Turns what is on disk and what was granted into the page's list. */
@@ -238,20 +271,29 @@ export function load(found: Found[], grants: Record<string, Grant>): Loaded[] {
         id: f.id,
         manifest: null,
         error: f.error ?? "No manifest",
+        digest: null,
         enabled: false,
         changed: false,
       };
     }
     const parsed = parseManifest(f.id, f.manifest);
     if (!parsed.ok) {
-      return { id: f.id, manifest: null, error: parsed.error, enabled: false, changed: false };
+      return {
+        id: f.id,
+        manifest: null,
+        error: parsed.error,
+        digest: null,
+        enabled: false,
+        changed: false,
+      };
     }
     const grant = Object.hasOwn(grants, f.id) ? grants[f.id] : undefined;
-    const enabled = isGranted(parsed.manifest, grant);
+    const enabled = isGranted(parsed.manifest, grant, f.digest);
     return {
       id: f.id,
       manifest: parsed.manifest,
       error: null,
+      digest: f.digest,
       enabled,
       changed: !!grant && !enabled,
     };
@@ -374,55 +416,97 @@ const isCall = (m: unknown): m is Call =>
 export interface Host {
   notify: (message: string) => void;
   readText: (path: string) => Promise<{ text: string; truncated: boolean }>;
+  /** Called once when the page keeps flooding the bridge; the host should remove the plugin. */
+  abuse?: () => void;
   now?: () => number;
 }
 
 /** How many runs' files a plugin can still read. */
 const MAX_RUNS = 5;
+/** How long after a run the plugin may still read its files (ms): it can't poll them later. */
+const RUN_TTL_MS = 60_000;
 const NOTICE_MAX = 200;
 /** A plugin may show this many messages within the window, then is told to wait. */
 const NOTICE_BURST = 5;
 const NOTICE_WINDOW_MS = 5000;
+/** Messages of any kind a page may send per second; the rest are refused without any work. */
+const CALLS_PER_SECOND = 50;
+/** Refused messages after which the page is called abusive. */
+const ABUSE_AFTER = 500;
+/** Reads a plugin may have under way at once, and per window: it can't starve real previews. */
+const MAX_READS_IN_FLIGHT = 2;
+const READS_PER_WINDOW = 20;
+const READ_WINDOW_MS = 10_000;
 
 /**
  * Answers one plugin's requests. `allow` names the files the plugin was handed (the ones an
- * action ran on, or the one being previewed): it can read those and no others. A call for
- * something it was not granted is refused with a message, never silently dropped.
+ * action ran on, or the one being previewed): it can read those, for a short time, and no
+ * others. A call for something it was not granted is refused with a message, never silently
+ * dropped.
  */
 export function createBridge(manifest: Manifest, host: Host) {
   /** The files of the last few runs: a second run must not cut off the first one's reads. */
-  const runs: string[][] = [];
+  const runs: { paths: string[]; at: number }[] = [];
   const stamps: number[] = [];
+  const readStamps: number[] = [];
+  let reading = 0;
+  let second = { start: 0, count: 0 };
+  let refused = 0;
+  let reported = false;
   const now = host.now ?? Date.now;
+
+  /** True while the page is within the rate it may send messages at. */
+  function withinRate(t: number): boolean {
+    if (t - second.start >= 1000 || t < second.start) second = { start: t, count: 0 };
+    if (++second.count <= CALLS_PER_SECOND) return true;
+    if (++refused >= ABUSE_AFTER && !reported) {
+      reported = true;
+      host.abuse?.();
+    }
+    return false;
+  }
 
   async function run(call: Call): Promise<unknown> {
     const need = (p: Permission) => {
       if (!manifest.permissions.includes(p)) throw new Error(`This plugin was not given "${p}"`);
     };
     const params = isObject(call.params) ? call.params : {};
+    const t = now();
     switch (call.method) {
       case "selection":
         need("selection");
-        return [...(runs.at(-1) ?? [])];
+        return [...(runs.at(-1)?.paths ?? [])];
       case "notify": {
         need("notify");
         if (typeof params.message !== "string") throw new Error('"message" must be text');
-        const t = now();
+        const message = oneLine(params.message).slice(0, NOTICE_MAX);
+        if (!message) throw new Error('"message" must be text');
         while (stamps.length && t - stamps[0] > NOTICE_WINDOW_MS) stamps.shift();
         if (stamps.length >= NOTICE_BURST) throw new Error("Too many messages: wait a moment");
         stamps.push(t);
-        host.notify(`${manifest.name}: ${params.message.slice(0, NOTICE_MAX)}`);
+        host.notify(`${oneLine(manifest.name)} (plugin): ${message}`);
         return null;
       }
       case "read": {
         need("read");
+        const path = params.path;
         if (
-          typeof params.path !== "string" ||
-          !runs.some((paths) => paths.includes(params.path as string))
+          typeof path !== "string" ||
+          !runs.some((r) => t - r.at <= RUN_TTL_MS && r.paths.includes(path))
         ) {
           throw new Error("That file was not given to this plugin");
         }
-        return host.readText(params.path);
+        while (readStamps.length && t - readStamps[0] > READ_WINDOW_MS) readStamps.shift();
+        if (reading >= MAX_READS_IN_FLIGHT || readStamps.length >= READS_PER_WINDOW) {
+          throw new Error("Too many reads: wait a moment");
+        }
+        readStamps.push(t);
+        reading++;
+        try {
+          return await host.readText(path);
+        } finally {
+          reading--;
+        }
       }
       default:
         throw new Error(`Unknown method "${call.method}"`);
@@ -431,15 +515,20 @@ export function createBridge(manifest: Manifest, host: Host) {
 
   return {
     /**
-     * The files a run hands the plugin, which it may now read. The last few runs stay readable,
-     * so runs that overlap don't undo each other; older ones are forgotten.
+     * The files a run hands the plugin, which it may now read. The last few runs stay readable
+     * for a minute, so runs that overlap don't undo each other; older ones are forgotten.
      */
     allow(paths: string[]) {
-      runs.push([...paths]);
+      runs.push({ paths: [...paths], at: now() });
       if (runs.length > MAX_RUNS) runs.shift();
     },
     /** The answer to a message from the page, or null for a message that is not a call. */
     async handle(message: unknown): Promise<Answer | null> {
+      if (!withinRate(now())) {
+        return isCall(message)
+          ? { folio: TAG, id: message.id, error: "Too many requests: slow down" }
+          : null;
+      }
       if (!isCall(message)) return null;
       try {
         return { folio: TAG, id: message.id, result: await run(message) };

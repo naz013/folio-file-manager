@@ -108,6 +108,7 @@ export interface PluginFound {
   id: string;
   manifest: string | null;
   error: string | null;
+  digest: string | null;
 }
 export const pluginsList = () => invoke<PluginFound[]>("plugins_list");
 /** The plugins folder (made if missing), for opening in the file manager. */

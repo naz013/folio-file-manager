@@ -8,7 +8,7 @@
     type Loaded,
     type Manifest,
   } from "$lib/plugins";
-  import { pluginNotify } from "$lib/plugins.svelte";
+  import { disablePlugin, pluginNotify } from "$lib/plugins.svelte";
 
   /** How long a page has to say it has loaded before it is called unresponsive (ms). */
   const READY_MS = 8000;
@@ -41,7 +41,17 @@
     void plugin.id;
     void manifest.version;
     return untrack(() =>
-      createBridge(plugin.manifest, { notify: pluginNotify, readText: readTextPreview }),
+      createBridge(plugin.manifest, {
+        notify: pluginNotify,
+        readText: readTextPreview,
+        // A page that floods the bridge is turned off, which also removes its frame.
+        abuse: () => {
+          pluginNotify(
+            `${plugin.manifest.name} (plugin) was turned off for sending too many requests`,
+          );
+          disablePlugin(plugin.id);
+        },
+      }),
     );
   });
 

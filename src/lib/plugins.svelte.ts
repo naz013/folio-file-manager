@@ -17,14 +17,28 @@ export const reloaded = $state({ n: 0 });
 /** Looks in the plugins folder again. */
 export async function reloadPlugins(): Promise<void> {
   reloaded.n++;
-  const found = await pluginsList().catch(() => []);
-  plugins.list = load(found, settings.plugins);
+  const found = await pluginsList().catch(() => null);
+  plugins.list = load(found ?? [], settings.plugins);
   plugins.loaded = true;
+  // An approval belongs to the plugin that was approved: when its folder is gone, so is the
+  // approval, and a later folder of the same name starts from nothing. Not done when the
+  // folder couldn't be read at all.
+  if (found) {
+    const kept = Object.entries(settings.plugins).filter(([id]) => found.some((f) => f.id === id));
+    if (kept.length !== Object.keys(settings.plugins).length) {
+      updateSettings({ plugins: Object.fromEntries(kept) });
+    }
+  }
 }
 
-/** Turns a plugin on for what its manifest asks for now: the person has just agreed to that. */
-export function enablePlugin(manifest: Manifest): void {
-  const grant: Grant = { version: manifest.version, permissions: [...manifest.permissions] };
+/** Turns a plugin on for what its manifest and files are now: the person has just agreed to that. */
+export function enablePlugin(manifest: Manifest, digest: string | null): void {
+  if (digest === null) return;
+  const grant: Grant = {
+    version: manifest.version,
+    permissions: [...manifest.permissions],
+    digest,
+  };
   updateSettings({ plugins: { ...settings.plugins, [manifest.id]: grant } });
   plugins.list = plugins.list.map((p) =>
     p.id === manifest.id ? { ...p, enabled: true, changed: false } : p,

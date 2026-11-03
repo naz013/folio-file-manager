@@ -81,53 +81,68 @@ test("a manifest with something wrong says what, and unknown fields are ignored"
 
 test("a plugin is on only for the version and permissions that were agreed to", () => {
   const { manifest } = parse(good);
-  const grant = { version: "1.0.0", permissions: ["selection", "read", "notify"] };
-  assert.ok(isGranted(manifest, grant));
-  assert.ok(!isGranted(manifest, undefined));
-  assert.ok(!isGranted(manifest, { ...grant, version: "1.0.1" }));
-  assert.ok(!isGranted(manifest, { ...grant, permissions: ["selection", "read"] }));
+  const grant = { version: "1.0.0", permissions: ["selection", "read", "notify"], digest: "aa" };
+  assert.ok(isGranted(manifest, grant, "aa"));
+  assert.ok(!isGranted(manifest, undefined, "aa"));
+  assert.ok(!isGranted(manifest, { ...grant, version: "1.0.1" }, "aa"));
+  assert.ok(!isGranted(manifest, { ...grant, permissions: ["selection", "read"] }, "aa"));
+  // The same version with other files is not what was agreed to; unreadable files are never on.
+  assert.ok(!isGranted(manifest, grant, "bb"));
+  assert.ok(!isGranted(manifest, grant, null));
+  assert.ok(!isGranted(manifest, { ...grant, digest: "" }, ""), "an approval from before hashes");
   // A plugin that asks for less than was granted stays on.
   const small = parse({ ...good, permissions: ["selection"] }).manifest;
-  assert.ok(isGranted(small, grant));
+  assert.ok(isGranted(small, grant, "aa"));
 });
 
 test("saved grants are cleaned of anything that isn't one", () => {
   assert.deepEqual(cleanGrants(null), {});
   assert.deepEqual(
     cleanGrants({
-      a: { version: "1", permissions: ["read", "root"] },
+      a: { version: "1", permissions: ["read", "root"], digest: "d" },
       b: { version: 2, permissions: [] },
       c: "x",
     }),
-    { a: { version: "1", permissions: ["read"] } },
+    { a: { version: "1", permissions: ["read"], digest: "d" } },
   );
 });
 
 test("the list shows enabled, changed, broken and manifest-less plugins", () => {
-  const grants = { demo: { version: "1.0.0", permissions: ["selection", "read", "notify"] } };
+  const grants = {
+    demo: { version: "1.0.0", permissions: ["selection", "read", "notify"], digest: "d1" },
+  };
   const text = JSON.stringify(good);
-  const [on, changed, broken, none] = load(
+  const [on, changed, broken, none, swapped] = load(
     [
-      { id: "demo", manifest: text, error: null },
+      { id: "demo", manifest: text, error: null, digest: "d1" },
       {
         id: "old",
         manifest: text.replace('"demo"', '"old"').replace("1.0.0", "2.0.0"),
         error: null,
+        digest: "d1",
       },
-      { id: "bad", manifest: "{}", error: null },
-      { id: "empty", manifest: null, error: "No plugin.json" },
+      { id: "bad", manifest: "{}", error: null, digest: "d1" },
+      { id: "empty", manifest: null, error: "No plugin.json", digest: null },
+      { id: "swapped", manifest: text.replace('"demo"', '"swapped"'), error: null, digest: "d2" },
     ],
-    { ...grants, old: { version: "1.0.0", permissions: [] } },
+    {
+      ...grants,
+      old: { version: "1.0.0", permissions: [], digest: "d1" },
+      swapped: { version: "1.0.0", permissions: ["selection", "read", "notify"], digest: "d1" },
+    },
   );
   assert.ok(on.enabled && !on.changed);
   assert.ok(!changed.enabled && changed.changed);
+  assert.ok(!swapped.enabled && swapped.changed, "same version, other files: off until approved");
   assert.ok(broken.error && !broken.enabled);
   assert.equal(none.error, "No plugin.json");
 });
 
 function plugins() {
-  const grants = { demo: { version: "1.0.0", permissions: ["selection", "read", "notify"] } };
-  return load([{ id: "demo", manifest: JSON.stringify(good), error: null }], grants);
+  const grants = {
+    demo: { version: "1.0.0", permissions: ["selection", "read", "notify"], digest: "d1" },
+  };
+  return load([{ id: "demo", manifest: JSON.stringify(good), error: null, digest: "d1" }], grants);
 }
 
 const file = (name) => ({ path: `C:\\x\\${name}`, name, isDir: false });
@@ -153,7 +168,7 @@ test("an action is offered for matching files, folders and counts only", () => {
 });
 
 test("a plugin that is off offers nothing", () => {
-  const off = load([{ id: "demo", manifest: JSON.stringify(good), error: null }], {});
+  const off = load([{ id: "demo", manifest: JSON.stringify(good), error: null, digest: "d1" }], {});
   assert.deepEqual(actionsFor(off, [file("a.txt")]), []);
   assert.equal(previewFor(off, file("a.csv")), null);
 });
@@ -239,7 +254,12 @@ test("a plugin reads the files it was handed and no others", async () => {
 
 test("a plugin id like an object property is not taken for a saved grant", () => {
   const found = [
-    { id: "constructor", manifest: JSON.stringify({ ...good, id: "constructor" }), error: null },
+    {
+      id: "constructor",
+      manifest: JSON.stringify({ ...good, id: "constructor" }),
+      error: null,
+      digest: "d",
+    },
   ];
   const [p] = load(found, {});
   assert.ok(!p.enabled && !p.changed);
@@ -262,13 +282,75 @@ test("a failed read is an error answer, not a crash", async () => {
 test("messages carry the plugin's name, are cut short, and come at a limited rate", async () => {
   const { b, shown, tick } = bridge(["notify"]);
   await b.handle(call("notify", { message: "x".repeat(500) }));
-  assert.equal(shown[0].length, "Demo: ".length + 200);
+  assert.equal(shown[0].length, "Demo (plugin): ".length + 200);
   assert.match((await b.handle(call("notify", { message: 5 }))).error, /text/);
   for (let i = 0; i < 4; i++)
     assert.equal((await b.handle(call("notify", { message: "m" }))).error, undefined);
   assert.match((await b.handle(call("notify", { message: "m" }))).error, /Too many/);
   tick(6000);
   assert.equal((await b.handle(call("notify", { message: "m" }))).error, undefined);
+});
+
+test("a name or text can't hide characters or pass for Folio or Windows", async () => {
+  for (const name of [
+    "Folio",
+    "Windows Security",
+    "W\u200Bindows",
+    "ＦＯＬＩＯ updates",
+    "fol-io",
+  ]) {
+    assert.ok(!parse({ ...good, name }).ok, name);
+  }
+  assert.ok(parse({ ...good, name: "Text tools" }).ok);
+  assert.ok(!parse({ ...good, description: "a\u202Eb" }).ok, "bidi override");
+  const { b, shown } = bridge(["notify"]);
+  await b.handle(call("notify", { message: "line one\n\u202Eline\ttwo\u0007" }));
+  assert.equal(shown[0], "Demo (plugin): line one line two");
+  assert.match((await b.handle(call("notify", { message: "\n \u200B" }))).error, /text/);
+});
+
+test("files are readable for a minute after a run, not for ever", async () => {
+  const { b, tick } = bridge(["read"]);
+  const read = () => b.handle(call("read", { path: "C:\\a" }));
+  b.allow(["C:\\a"]);
+  tick(59_000);
+  assert.equal((await read()).error, undefined);
+  tick(2_000);
+  assert.match((await read()).error, /not given/);
+  b.allow(["C:\\a"]);
+  assert.equal((await read()).error, undefined);
+});
+
+test("reads are limited in number at once and over time", async () => {
+  let release;
+  const gate = new Promise((r) => (release = r));
+  const { b, tick } = bridge(["read"], {
+    readText: () => gate.then(() => ({ text: "", truncated: false })),
+  });
+  const read = (id) => b.handle(call("read", { path: "C:\\a" }, id));
+  b.allow(["C:\\a"]);
+  const pending = [read(1), read(2)];
+  assert.match((await read(3)).error, /Too many reads/);
+  release();
+  await Promise.all(pending);
+  for (let i = 0; i < 18; i++) assert.equal((await read(10 + i)).error, undefined);
+  assert.match((await read(99)).error, /Too many reads/);
+  tick(11_000);
+  assert.equal((await read(100)).error, undefined);
+});
+
+test("a page that floods the bridge is refused, then reported once", async () => {
+  let reports = 0;
+  const { b, tick } = bridge(["notify"], { abuse: () => reports++ });
+  let refused = 0;
+  for (let i = 0; i < 600; i++) {
+    const r = await b.handle(i % 2 ? call("nope", {}, i) : "junk");
+    if (r?.error?.startsWith("Too many requests")) refused++;
+  }
+  assert.ok(refused > 0 && reports === 1, `${refused} refused, ${reports} reports`);
+  tick(2000);
+  const next = await b.handle(call("nope", {}));
+  assert.match(next.error, /Unknown method/, "a new second starts afresh");
 });
 
 test("the example plugin's manifest is valid and does what its page claims", () => {

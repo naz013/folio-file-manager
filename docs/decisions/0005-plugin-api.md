@@ -56,8 +56,12 @@ sees anywhere, unless the person has said so for that plugin and that ability.
   loops can't outlive its disabling.
 - All plugins share one address (`plugin.localhost`), so one plugin's page can load another's
   files; a plugin keeps nothing secret from another that is on.
-- Approval is of the version and permissions; the files are read when the page loads, so changing
-  files without changing the version runs the new files.
+- Approval is of the version, the permissions and a hash of the files (taken when the folder is
+  read). Files changed afterwards, before the next Reload or start, still run; removing a
+  plugin's folder drops its approval at Reload.
+- A page can read a handed file for a minute, a few at a time; one that floods the bridge is
+  turned off. Served pages also carry `sandbox allow-scripts` in their policy, and a plugin's
+  own folder must not be a link or junction.
 - The sandbox rests on the webview: a flaw in WebView2's iframe sandbox is a flaw here. Not a
   substitute for only enabling plugins one trusts.
 - Out of scope: a store or updater for plugins, signing, plugins in other languages, and

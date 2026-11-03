@@ -14,9 +14,11 @@ of web files that runs in a sandbox and can do only what you allow. The reasonin
 3. Choose **Reload**, then turn the plugin on. Folio lists what it asks to be allowed to do;
    nothing runs until you choose **Allow and turn on**.
 
-A plugin turns itself off if its `version` or its permissions change, so what you approved is
-what runs. The approval covers those two things, not the files: change a plugin's files and keep
-its version, and the new files run. Bump the version when you change what a plugin does. Turning it off forgets the approval.
+A plugin turns itself off if its `version`, its permissions or any of its files change, so what
+you approved is what runs. Folio hashes the manifest and every file it could serve when the
+folder is read (at start and on **Reload**); a plugin edited in place needs approving again.
+Turning it off, or removing its folder, forgets the approval. A `name` can't start like Folio or
+a part of Windows, and its messages are shown as `Name (plugin): …`.
 
 ## The manifest
 
@@ -122,7 +124,8 @@ cut each other off. A preview's page is made when the file is shown and removed 
 | `read`      | `{ path }`    | `read`      | `{ text, truncated }`; start of a text file |
 | `notify`    | `{ message }` | `notify`    | `null`                                      |
 
-`read` works only for paths Folio gave the plugin in its last few `action` or `preview` events, as text,
+`read` works only for paths Folio gave the plugin in its last few `action` or `preview` events, for
+a minute after each, at most 2 at once and 20 per 10 seconds, as text,
 up to the size Quick Look reads, and not for files that are only in the cloud (the error then is
 `Only in the cloud`). A call without its permission is answered with an error naming it.
 
@@ -136,5 +139,6 @@ files are read when the page loads.
 ## Limits of this version
 
 - No way to change files, and no storage between runs.
+- A page that keeps sending more than 50 messages a second is turned off.
 - Two extension points: actions and previews. Toolbar buttons and sidebar sections are not there.
 - Plugins are not signed or reviewed, and there is no store; turn on only ones you trust.

@@ -364,7 +364,8 @@
           {#if p.error}<p class="error" role="alert">{p.error}</p>{/if}
           {#if p.changed}
             <p class="note" role="status">
-              It has changed since you turned it on, so it is off. Turn it on again to review it.
+              Its version, permissions or files have changed since you turned it on, so it is off.
+              Turn it on again to review it.
             </p>
           {/if}
           {#if p.manifest && (p.enabled || reviewing === p.id)}
@@ -383,7 +384,7 @@
             <div class="buttons">
               <button
                 onclick={() => {
-                  if (p.manifest) enablePlugin(p.manifest);
+                  if (p.manifest) enablePlugin(p.manifest, p.digest);
                   reviewing = null;
                 }}>Allow and turn on</button
               >
