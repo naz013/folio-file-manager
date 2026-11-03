@@ -92,6 +92,31 @@ blue `#0A84FF` · purple `#AF52DE` · gray `#8E8E93`
 - Size: titlebar 46 (`size.titlebar`, the Tab Bar and the sidebar brand row, which share one drag strip)
 - Elevation: _raised_ (controls, active tab), _popover_ (menus), _window_
 
+## Interaction states
+
+Every button has the same states, from `src/lib/styles/global.css`; a new button gets them
+without any CSS of its own.
+
+| State    | Neutral button                               | Filled accent button  |
+| -------- | -------------------------------------------- | --------------------- |
+| Hover    | `bg.hover` laid over its own fill            | `accent.hover` fill   |
+| Pressed  | `bg.pressed` laid over its own fill          | `accent.pressed` fill |
+| Focus    | 2 px `focus.ring` outline, 1 px offset       | same                  |
+| Disabled | `opacity.disabled` (0.45), no hover or press | same                  |
+
+- A button that is on (`aria-pressed`, `.on`, `.active`, `.selected`) keeps its own look on hover.
+- A filled accent button must carry one of the classes named in `global.css`
+  (`primary`, `done`, `apply`, `go`, `add`) to get the accent states; a filled destructive
+  button takes `danger-fill`. The shared rules are low in specificity (`:where`), so a
+  component can override a state for itself.
+- Tokens: `bg.pressed`, `accent.pressed`, `danger.hover`, `danger.pressed`, `focus.ring`,
+  `opacity.disabled` (CSS: `--bg-pressed`, `--accent-pressed`, `--bg-danger-hover`,
+  `--bg-danger-pressed`, `--focus-ring`, `--opacity-disabled`). They are in the Penpot token sets.
+- Transitions use `--duration-fast` and `--ease-standard`, and are off under reduced motion.
+- **Penpot:** Button has a State variant for Primary, Secondary and Danger (Default, Hover,
+  Pressed, Focus, Disabled) and Icon Button has Focus. Danger and the Focus rings are drawn with
+  the values above; the Button group's layout on the Components board still needs tidying.
+
 ## UX rules
 
 - One accent color. Tag colors are for tags only, never for UI chrome.

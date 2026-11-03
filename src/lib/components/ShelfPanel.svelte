@@ -203,6 +203,19 @@
     font-weight: var(--font-weight-medium);
   }
 
+  /* The shared hover and press tint is a shadow too: keep the lift under it. */
+  .fab:hover {
+    box-shadow:
+      inset 0 0 0 999px var(--bg-hover),
+      var(--shadow-popover);
+  }
+
+  .fab:active {
+    box-shadow:
+      inset 0 0 0 999px var(--bg-pressed),
+      var(--shadow-popover);
+  }
+
   .bubble {
     min-width: 20px;
     padding: 0 var(--space-xs);

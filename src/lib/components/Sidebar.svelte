@@ -250,7 +250,7 @@
             <span>{smart.name}</span>
           </button>
         {/each}
-        <button class="item add" onclick={onsmartnew}>
+        <button class="item create" onclick={onsmartnew}>
           <span class="icon"><Icon name="plus" /></span>
           <span>New smart folder…</span>
         </button>
@@ -446,7 +446,7 @@
     color: var(--text-tertiary);
   }
 
-  .add {
+  .create {
     color: var(--text-secondary);
   }
 

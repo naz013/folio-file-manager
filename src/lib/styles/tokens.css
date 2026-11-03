@@ -74,12 +74,28 @@
   --accent-default: #4561f2;
   --accent-hover: #3650d8;
   --accent-subtle: #e8eefe;
+  --bg-pressed: #e4e4eb;
+  --accent-pressed: #2c43bd;
+  --bg-danger-hover: #b80012;
+  --bg-danger-pressed: #9a0010;
   --folder-back: #7cb7f7;
   --folder-front: #a3cdfb;
 
   /* elevation */
   --shadow-raised: 0 1px 2px rgb(0 0 0 / 0.06), 0 1px 1px rgb(0 0 0 / 0.04);
   --shadow-popover: 0 8px 24px rgb(0 0 0 / 0.12), 0 0 1px rgb(0 0 0 / 0.08);
+
+  /* interaction states (hover colors are the *-hover tokens above; see docs/DESIGN.md) */
+  --focus-ring: var(--accent-default);
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 1px;
+  --opacity-disabled: 0.45;
+
+  /* motion: durations and curves (#107 extends this set) */
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.05, 0.7, 0.1, 1);
 
   --scrim: rgb(0 0 0 / 0.35);
   --scrim-strong: rgb(0 0 0 / 0.55);
@@ -108,6 +124,10 @@
     --accent-default: #6c85ff;
     --accent-hover: #7f95ff;
     --accent-subtle: #26315a;
+    --bg-pressed: #3a3a41;
+    --accent-pressed: #5a73ea;
+    --bg-danger-hover: #ff6a61;
+    --bg-danger-pressed: #e63a30;
     --folder-back: #4e8fd9;
     --folder-front: #6fa8ea;
     --shadow-raised: 0 1px 2px rgb(0 0 0 / 0.3), 0 1px 1px rgb(0 0 0 / 0.2);
@@ -134,6 +154,10 @@
   --accent-default: #6c85ff;
   --accent-hover: #7f95ff;
   --accent-subtle: #26315a;
+  --bg-pressed: #3a3a41;
+  --accent-pressed: #5a73ea;
+  --bg-danger-hover: #ff6a61;
+  --bg-danger-pressed: #e63a30;
   --folder-back: #4e8fd9;
   --folder-front: #6fa8ea;
   --shadow-raised: 0 1px 2px rgb(0 0 0 / 0.3), 0 1px 1px rgb(0 0 0 / 0.2);
@@ -142,9 +166,10 @@
 }
 
 /*
- * Contrast (WCAG AA, checked for every text token on every background token in both modes:
- * text 4.5:1 or more, white or dark text on the accent 4.5:1 or more). Keep to this when
- * changing a color above. With "increase contrast" on in the OS, borders and quiet text go
+ * Contrast (WCAG AA, checked for every text token on every window background token in both
+ * modes: text 4.5:1 or more, white or dark text on the accent and its hover and pressed fills
+ * 4.5:1 or more). The one exception is quiet (tertiary) text on --bg-pressed, 4.2 to 4.4:1,
+ * which only shows while a button is held down. Keep to this when changing a color above. With "increase contrast" on in the OS, borders and quiet text go
  * stronger still. The repeated :root outranks the data-theme rules above.
  */
 @media (prefers-contrast: more) {

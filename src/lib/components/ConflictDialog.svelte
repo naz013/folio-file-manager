@@ -196,18 +196,9 @@
     color: var(--text-primary);
     font-weight: var(--font-weight-medium);
   }
-  .buttons button:hover:not(:disabled) {
-    background: var(--bg-hover);
-  }
-  .buttons button:disabled {
-    opacity: 0.4;
-  }
   .buttons .primary {
     background: var(--accent-default);
     color: var(--text-on-accent);
-  }
-  .buttons .primary:hover {
-    background: var(--accent-hover);
   }
   .buttons .danger {
     color: var(--status-danger);

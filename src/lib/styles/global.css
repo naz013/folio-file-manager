@@ -32,11 +32,78 @@ button {
   border: none;
   padding: 0;
   cursor: default;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard),
+    opacity var(--duration-fast) var(--ease-standard);
+}
+
+/*
+ * One set of states for every button, so a new button has them without asking.
+ *
+ * - Hover and pressed are painted as an inset shadow, which sits over whatever background the
+ *   component gave the button (none, a control fill, a selection) without replacing it.
+ *   A button that is on (selected, pressed, current) keeps its own look on hover.
+ * - These rules are kept low in specificity (:where) so a component can still set its own look
+ *   for a state, such as the shelf button that keeps its lift.
+ * - A filled accent button changes its fill. Its classes are named here because each dialog
+ *   has its own; a button added with another class name gets the neutral states. A filled
+ *   destructive button takes the class `danger-fill`.
+ * - A disabled button is inert: no hover, no press, dimmed.
+ */
+button:where(
+  :hover:not(
+    :disabled,
+    [aria-disabled="true"],
+    [aria-pressed="true"],
+    [aria-current]:not([aria-current="false"]),
+    [aria-selected="true"],
+    .on,
+    .active,
+    .selected
+  )
+) {
+  box-shadow: inset 0 0 0 999px var(--bg-hover);
+}
+
+button:where(:active:not(:disabled, [aria-disabled="true"], .on, .active, .selected)) {
+  box-shadow: inset 0 0 0 999px var(--bg-pressed);
+}
+
+/* Not :where on purpose: these must beat the fill the dialog gave the button. */
+button:is(.primary, .done, .apply, .go, .add):hover:not(:disabled, [aria-disabled="true"]) {
+  box-shadow: none;
+  background-color: var(--accent-hover);
+}
+
+button:is(.primary, .done, .apply, .go, .add):active:not(:disabled, [aria-disabled="true"]) {
+  box-shadow: none;
+  background-color: var(--accent-pressed);
+}
+
+button.danger-fill {
+  background-color: var(--bg-danger);
+  color: var(--text-on-danger);
+}
+
+button.danger-fill:where(:hover:not(:disabled, [aria-disabled="true"])) {
+  box-shadow: none;
+  background-color: var(--bg-danger-hover);
+}
+
+button.danger-fill:where(:active:not(:disabled, [aria-disabled="true"])) {
+  box-shadow: none;
+  background-color: var(--bg-danger-pressed);
+}
+
+button:disabled,
+button[aria-disabled="true"] {
+  opacity: var(--opacity-disabled);
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent-default);
-  outline-offset: 1px;
+  outline: var(--focus-ring-width) solid var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
 }
 
 /* No motion for people who turned it off in the OS. The spring ring below is not decoration:
@@ -62,6 +129,16 @@ button {
   :focus-visible {
     outline: 2px solid Highlight;
     outline-offset: 1px;
+  }
+
+  /* Hover and press are shadows, which this mode drops: show them as an outline. */
+  button:where(:hover:not(:disabled, [aria-disabled="true"], :focus-visible)) {
+    outline: 1px solid Highlight;
+    outline-offset: -1px;
+  }
+
+  button:where(:active:not(:disabled, [aria-disabled="true"], :focus-visible)) {
+    outline-width: 2px;
   }
 
   [aria-selected="true"],
