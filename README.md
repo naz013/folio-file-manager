@@ -45,4 +45,6 @@ Other scripts:
 
 ## License
 
-MIT
+[GNU AGPL-3.0](LICENSE). You may use, modify and redistribute Folio, but any redistributed or
+network-served version, modified or not, must stay under the AGPL with its source available.
+Copyright (C) 2026 Nazar Sukhovych.
