@@ -229,7 +229,7 @@ fn same_place(a: &Path, b: &Path) -> bool {
 /// placeholder. Reading one would download it, listing a folder of them makes the sync
 /// provider fetch it, and removing it is not freeing local space.
 #[cfg(windows)]
-fn cloud_only_attributes(meta: &std::fs::Metadata) -> bool {
+pub(crate) fn cloud_only_attributes(meta: &std::fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
     const OFFLINE: u32 = 0x1000;
     const RECALL_ON_OPEN: u32 = 0x4_0000;
@@ -238,7 +238,7 @@ fn cloud_only_attributes(meta: &std::fs::Metadata) -> bool {
 }
 
 #[cfg(not(windows))]
-fn cloud_only_attributes(_meta: &std::fs::Metadata) -> bool {
+pub(crate) fn cloud_only_attributes(_meta: &std::fs::Metadata) -> bool {
     false
 }
 

@@ -17,6 +17,7 @@ use crate::search::{self, Hit, Query};
 use crate::session::{Session, WindowTabs};
 use crate::shelf::{Shelf, ShelfItem};
 use crate::slow;
+use crate::smart::{self, Criteria, SmartFolder};
 use crate::tags::{Tag, Tags};
 use crate::watch::DirWatcher;
 use serde::{Deserialize, Serialize};
@@ -879,6 +880,83 @@ pub fn tag_files(tags: tauri::State<'_, Tags>, tag: i64) -> Vec<(String, Entry, 
         .into_iter()
         .map(|(path, entry, ids)| (path.to_string_lossy().into_owned(), entry, ids))
         .collect()
+}
+
+#[tauri::command]
+pub fn smart_list(tags: tauri::State<'_, Tags>) -> Vec<SmartFolder> {
+    tags.smart_list()
+}
+
+/// Adds a smart folder, or changes the one with `id`.
+#[tauri::command]
+pub fn smart_save(
+    tags: tauri::State<'_, Tags>,
+    id: Option<i64>,
+    name: String,
+    criteria: Criteria,
+) -> CmdResult<SmartFolder> {
+    tags.smart_save(id, &name, &criteria)
+}
+
+#[tauri::command]
+pub fn smart_delete(tags: tauri::State<'_, Tags>, id: i64) -> CmdResult<()> {
+    tags.smart_delete(id)
+}
+
+/// The folder walk of each window's smart folder under way, so a newer one can stop it.
+#[derive(Default)]
+pub struct SmartWalks(std::sync::Mutex<std::collections::HashMap<String, Arc<AtomicBool>>>);
+
+impl SmartWalks {
+    /// The stop flag for a new walk for `window`; the walk before it, if any, is stopped.
+    fn begin(&self, window: &str) -> Arc<AtomicBool> {
+        let mut walks = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let fresh = Arc::new(AtomicBool::new(false));
+        if let Some(old) = walks.insert(window.to_owned(), Arc::clone(&fresh)) {
+            old.store(true, Ordering::Relaxed);
+        }
+        fresh
+    }
+}
+
+/// What a smart folder matches right now: (path, entry, the item's tag ids). The answer is
+/// worked out afresh, so it is always current. A folder tree is walked on its own thread and
+/// stopped if it takes too long; a tag lookup is quick.
+#[tauri::command]
+pub async fn smart_open(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    walks: tauri::State<'_, SmartWalks>,
+    id: i64,
+) -> CmdResult<Vec<(String, Entry, Vec<i64>)>> {
+    let now = u64::try_from(journal::unix_now()).unwrap_or(0) * 1000;
+    let folder = {
+        let app = app.clone();
+        blocking(move || app.state::<Tags>().smart_get(id)).await?
+    };
+    let found = if folder.criteria.tags.is_empty() {
+        // A new look from this window stops the one before it, which no one waits for now.
+        let stop = walks.begin(window.label());
+        let flag = Arc::clone(&stop);
+        let criteria = folder.criteria;
+        let walked = slow::WALKS
+            .within(slow::SMART, move || smart::walk(&criteria, now, &flag))
+            .await;
+        let Some(result) = walked else {
+            stop.store(true, Ordering::Relaxed);
+            return Err("Looking took too long. Try a smaller folder.".into());
+        };
+        result?
+    } else {
+        blocking(move || app.state::<Tags>().smart_tagged(&folder.criteria, now)).await?
+    };
+    Ok(found
+        .into_iter()
+        .map(|(path, entry, ids)| (path.to_string_lossy().into_owned(), entry, ids))
+        .collect())
 }
 
 /// What a finished tags export tells the window.

@@ -1,6 +1,6 @@
 <script lang="ts">
   import Icon, { type IconName } from "./Icon.svelte";
-  import { joinPath, listDrives, type Drive, type Tag } from "$lib/api/fs";
+  import { joinPath, listDrives, type Drive, type SmartFolder, type Tag } from "$lib/api/fs";
   import { formatSize } from "$lib/format";
   import { tagColor } from "$lib/tags";
   import { settings } from "$lib/settings.svelte";
@@ -23,6 +23,11 @@
     tags,
     activeTag,
     ontag,
+    smartFolders,
+    activeSmart,
+    onsmart,
+    onsmartnew,
+    onsmartmenu,
     onbin,
     binShown = false,
     folderTint,
@@ -47,6 +52,14 @@
     activeTag: number | null;
     /** Show every item with this tag. */
     ontag: (tag: Tag) => void;
+    smartFolders: SmartFolder[];
+    /** The smart folder the list shows, if any. */
+    activeSmart: number | null;
+    onsmart: (folder: SmartFolder) => void;
+    /** Start a new smart folder. */
+    onsmartnew: () => void;
+    /** Right-click on a smart folder. */
+    onsmartmenu: (folder: SmartFolder, e: MouseEvent) => void;
     /** Open the Recycle Bin. */
     onbin: () => void;
     /** The tab shows the Recycle Bin. */
@@ -71,6 +84,7 @@
     favorites: "Favorites",
     drives: "Drives",
     tags: "Tags",
+    smart: "Smart folders",
   } as const;
   const folded = (section: keyof typeof sections) => collapsed.includes(section);
 
@@ -206,6 +220,31 @@
             <span>{tag.name}</span>
           </button>
         {/each}
+      </div>
+    {/if}
+
+    {@render heading("smart")}
+    {#if !folded("smart")}
+      <div role="group" aria-labelledby="smart-label">
+        {#each smartFolders as smart (smart.id)}
+          <button
+            class="item"
+            class:selected={activeSmart === smart.id}
+            aria-pressed={activeSmart === smart.id}
+            onclick={() => onsmart(smart)}
+            oncontextmenu={(e) => {
+              e.preventDefault();
+              onsmartmenu(smart, e);
+            }}
+          >
+            <span class="icon"><Icon name="search" /></span>
+            <span>{smart.name}</span>
+          </button>
+        {/each}
+        <button class="item add" onclick={onsmartnew}>
+          <span class="icon"><Icon name="plus" /></span>
+          <span>New smart folder…</span>
+        </button>
       </div>
     {/if}
   </div>
@@ -396,6 +435,10 @@
     grid-row: 1;
     font-size: var(--font-size-caption);
     color: var(--text-tertiary);
+  }
+
+  .add {
+    color: var(--text-secondary);
   }
 
   .tag {

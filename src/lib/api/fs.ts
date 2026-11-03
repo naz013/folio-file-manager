@@ -43,6 +43,41 @@ export async function tagFiles(
     tags: Object.fromEntries(wire.map(([path, , ids]) => [path, ids])),
   };
 }
+
+/** What a smart folder looks for. Everything given must hold. */
+export interface SmartCriteria {
+  /** Items must have all of these tags. */
+  tags: number[];
+  /** Part of the name, or a pattern with `*` and `?`; empty for any name. */
+  text: string;
+  /** Changed within this many days up to now. */
+  modifiedDays: number | null;
+  /** Only in this folder or below; needed when no tag is given. */
+  folder: string | null;
+}
+/** A saved search, worked out again each time it is opened. */
+export interface SmartFolder {
+  id: number;
+  name: string;
+  criteria: SmartCriteria;
+}
+/** What `smartOpen` rejects with when a newer look at the same smart folder took over (`smart::SUPERSEDED`). */
+export const SMART_SUPERSEDED = "A newer look at this smart folder took over";
+export const smartList = () => invoke<SmartFolder[]>("smart_list");
+/** Adds a smart folder, or changes the one with `id`. Rejects with why it can't be saved. */
+export const smartSave = (id: number | null, name: string, criteria: SmartCriteria) =>
+  invoke<SmartFolder>("smart_save", { id, name, criteria });
+export const smartDelete = (id: number) => invoke<void>("smart_delete", { id });
+/** What the smart folder matches right now, with the tag ids of each, by path. */
+export async function smartOpen(
+  id: number,
+): Promise<{ entries: Entry[]; tags: Record<string, number[]> }> {
+  const wire = await invoke<[string, WireEntry, number[]][]>("smart_open", { id });
+  return {
+    entries: wire.map(([path, w]) => decode(path, w)),
+    tags: Object.fromEntries(wire.map(([path, , ids]) => [path, ids])),
+  };
+}
 export const homeDir = () => invoke<string>("home_dir");
 export const watchDir = (path: string) => invoke<void>("watch_dir", { path });
 export const openPath = (path: string) => invoke<void>("open_path", { path });

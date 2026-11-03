@@ -1,6 +1,7 @@
 //! Searching a folder and everything below it by name and size. Matches are handed over in
 //! batches while the walk goes on, and the walk stops as soon as it is cancelled.
 
+use crate::cleanup;
 use crate::fs::{self, Entry};
 use serde::Serialize;
 use std::fs as stdfs;
@@ -26,6 +27,10 @@ pub struct Query {
     /// them out too.
     pub min_size: Option<u64>,
     pub max_size: Option<u64>,
+    /// Items last changed before this time (milliseconds since 1970) are left out. One with
+    /// no readable time is left out too.
+    #[serde(default)]
+    pub modified_since: Option<u64>,
     pub hidden: bool,
 }
 
@@ -81,16 +86,17 @@ fn wildcard(pattern: &[char], name: &[char]) -> bool {
 }
 
 /// A query ready to test names against.
-struct Matcher {
+pub(crate) struct Matcher {
     text: Vec<char>,
     plain: String,
     pattern: bool,
     min_size: Option<u64>,
     max_size: Option<u64>,
+    modified_since: Option<u64>,
 }
 
 impl Matcher {
-    fn new(q: &Query) -> Self {
+    pub(crate) fn new(q: &Query) -> Self {
         let plain = q.text.trim().to_lowercase();
         Self {
             text: plain.chars().collect(),
@@ -98,10 +104,17 @@ impl Matcher {
             plain,
             min_size: q.min_size,
             max_size: q.max_size,
+            modified_since: q.modified_since,
         }
     }
 
-    fn name_fits(&self, name: &str) -> bool {
+    /// Whether the item was changed late enough.
+    pub(crate) fn date_fits(&self, entry: &Entry) -> bool {
+        self.modified_since
+            .is_none_or(|since| entry.modified.is_some_and(|m| m >= since))
+    }
+
+    pub(crate) fn name_fits(&self, name: &str) -> bool {
         if self.plain.is_empty() {
             return true;
         }
@@ -148,6 +161,12 @@ pub fn search(
     let mut folders: Vec<PathBuf> = vec![root.to_path_buf()];
 
     'walk: while let Some(folder) = folders.pop() {
+        // A cancel is looked at before each folder too: on a share that went away every
+        // folder still waiting would block on the disk before the next item is checked.
+        if cancel.load(Ordering::Relaxed) {
+            out.cancelled = true;
+            break;
+        }
         let Ok(read) = stdfs::read_dir(&folder) else {
             continue;
         };
@@ -182,10 +201,12 @@ pub fn search(
             if entry.hidden && !query.hidden {
                 continue;
             }
-            if is_dir {
+            // A folder whose content is only in the cloud is listed by its name but not
+            // walked into: listing it makes the sync provider fetch it.
+            if is_dir && !cleanup::cloud_only_attributes(&meta) {
                 folders.push(path.clone());
             }
-            if !named || !matcher.size_fits(&entry) {
+            if !named || !matcher.size_fits(&entry) || !matcher.date_fits(&entry) {
                 continue;
             }
             batch.push(Hit {
@@ -304,6 +325,31 @@ mod tests {
     }
 
     #[test]
+    fn a_date_limit_leaves_out_older_items_before_they_are_counted() {
+        let tmp = tree();
+        let old = std::time::SystemTime::now() - Duration::from_hours(40 * 24);
+        let file = std::fs::File::options()
+            .write(true)
+            .open(tmp.path().join("a/report-2.txt"))
+            .unwrap();
+        file.set_modified(old).unwrap();
+        drop(file);
+        let week_ago = std::time::SystemTime::now() - Duration::from_hours(7 * 24);
+        let since = u64::try_from(
+            week_ago
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+        )
+        .unwrap();
+        let query = Query {
+            modified_since: Some(since),
+            ..q("report")
+        };
+        assert_eq!(run(tmp.path(), &query).0, ["Report.TXT"]);
+    }
+
+    #[test]
     fn hidden_items_and_what_is_below_them_are_left_out_unless_asked_for() {
         let tmp = tree();
         create_dir_all(tmp.path().join(".git")).unwrap();
@@ -328,6 +374,28 @@ mod tests {
         });
         assert!(out.cancelled);
         assert_eq!(sent, 0);
+    }
+
+    /// A folder marked offline holds files that are only in the cloud: walking into it would
+    /// make the sync provider fetch its listing.
+    #[cfg(windows)]
+    #[test]
+    fn a_cloud_only_folder_is_not_walked_into() {
+        use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_OFFLINE, SetFileAttributesW};
+        use windows::core::HSTRING;
+
+        let tmp = tree();
+        let folder = tmp.path().join("a");
+        assert_eq!(run(tmp.path(), &q("notes")).0, ["notes.md"]);
+        // SAFETY: the path is an owned HSTRING that outlives the call.
+        unsafe { SetFileAttributesW(&HSTRING::from(folder.as_os_str()), FILE_ATTRIBUTE_OFFLINE) }
+            .unwrap();
+        assert_eq!(run(tmp.path(), &q("notes")).0, Vec::<String>::new());
+        assert_eq!(
+            run(tmp.path(), &q("a")).0,
+            ["a"],
+            "it is still listed by name"
+        );
     }
 
     #[test]

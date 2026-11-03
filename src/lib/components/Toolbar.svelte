@@ -20,7 +20,7 @@
     onsettings,
     onsearch,
     searchOpen = false,
-    tagLabel,
+    resultLabel,
     placeTitle = null,
     inspectorOpen,
     oninspector,
@@ -42,8 +42,8 @@
     /** Opens the search bar for the folder. */
     onsearch: () => void;
     searchOpen?: boolean;
-    /** Set while the list shows the items of a tag instead of a folder. */
-    tagLabel: string | null;
+    /** Set while the list shows the items of a tag or a smart folder instead of a folder. */
+    resultLabel: { name: string; smart: boolean } | null;
     /** The name of the screen the tab shows instead of a folder, if it does. */
     placeTitle?: string | null;
     inspectorOpen: boolean;
@@ -242,11 +242,11 @@
     <div class="tagview">
       <strong>{placeTitle}</strong>
     </div>
-  {:else if tagLabel}
+  {:else if resultLabel}
     <div class="tagview">
-      <span class="label">Tagged</span>
-      <strong>{tagLabel}</strong>
-      <span class="hint">in all folders</span>
+      <span class="label">{resultLabel.smart ? "Smart folder" : "Tagged"}</span>
+      <strong>{resultLabel.name}</strong>
+      <span class="hint">{resultLabel.smart ? "updates as files change" : "in all folders"}</span>
     </div>
   {:else if editing}
     <div class="editor">
@@ -365,7 +365,7 @@
     class="icon-btn"
     class:on={searchOpen}
     aria-pressed={searchOpen}
-    disabled={!!placeTitle || !!tagLabel}
+    disabled={!!placeTitle || !!resultLabel}
     onclick={onsearch}
     aria-label="Search (Ctrl+F)"
     title="Search (Ctrl+F)"

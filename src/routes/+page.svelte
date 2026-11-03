@@ -28,6 +28,13 @@
     shelfSetMode,
     type ShelfItem,
     tagFiles,
+    SMART_SUPERSEDED,
+    smartDelete,
+    smartList,
+    smartOpen,
+    smartSave,
+    type SmartCriteria,
+    type SmartFolder,
     searchCancel,
     searchDir,
     type SearchQuery,
@@ -87,6 +94,7 @@
   import ConflictDialog from "$lib/components/ConflictDialog.svelte";
   import ContextMenu, { type MenuItem } from "$lib/components/ContextMenu.svelte";
   import QuickLook from "$lib/components/QuickLook.svelte";
+  import SmartFolderDialog from "$lib/components/SmartFolderDialog.svelte";
   import TagDialog from "$lib/components/TagDialog.svelte";
   import BulkRenameDialog from "$lib/components/BulkRenameDialog.svelte";
   import SearchBar from "$lib/components/SearchBar.svelte";
@@ -262,8 +270,19 @@
 
   /** Ids of the tags the folder is filtered by: an item must have all of them. */
   let tagFilter = $state<number[]>([]);
-  /** The tag whose items the list shows, from every folder, instead of a folder. */
-  let tagView = $state<Tag | null>(null);
+  /**
+   * What the list shows instead of a folder, from many folders at once: the items with a tag,
+   * or what a smart folder matches. Null when the list shows a folder.
+   */
+  type ResultView = { name: string; tag: Tag } | { name: string; smart: SmartFolder };
+  let resultView = $state<ResultView | null>(null);
+  /** The saved searches, in the sidebar. */
+  let smartFolders = $state<SmartFolder[]>([]);
+  /** The smart folder dialog: a new folder, or the one being changed. */
+  let smartDialog = $state<{ folder: SmartFolder | null } | null>(null);
+  /** The items a result view lists, read afresh. */
+  const readResult = (view: ResultView) =>
+    "smart" in view ? smartOpen(view.smart.id) : tagFiles(view.tag.id);
   /** The search whose matches the list shows instead of the folder's items; null when none. */
   let search = $state<{ running: boolean; found: number; truncated: boolean } | null>(null);
   /** Whether the search bar is open. */
@@ -281,7 +300,7 @@
   const place = $derived(placeOf(path));
   const inBin = $derived(place === "bin");
   /** There is no folder to create in, paste into or open a terminal in. */
-  const noFolder = $derived(!!tagView || !!search || place !== null);
+  const noFolder = $derived(!!resultView || !!search || place !== null);
   /** The last real folder a tab showed, for Storage to open on. */
   let lastFolder = $state("");
   /** The list's order, set from the column headers. */
@@ -328,7 +347,7 @@
   async function loadFolderSizes(dir: string) {
     const sizes = await scanChildren(dir).catch(() => []);
     // A tag's items come from many folders, so there is nothing to read for them.
-    if (dir !== path || tagView || search) return;
+    if (dir !== path || resultView || search) return;
     keepCursor(() => {
       folderSizes = Object.fromEntries(sizes.map((s) => [sizeKey(s.path), s.bytes]));
     });
@@ -362,29 +381,38 @@
     if (search) search = { ...search, found: entries.length };
   }
 
-  /** Reloads the current folder, keeping the selection for paths that still exist. */
-  async function refresh(select?: string[]) {
+  /**
+   * Reloads the current folder, keeping the selection for paths that still exist. `quiet`: a
+   * check made on a timer, which says nothing if it fails.
+   */
+  async function refresh(select?: string[], quiet = false): Promise<boolean> {
     if (search) {
       // The matches are not the folder's items: they are found again, unless the search
       // is still going and will find the change by itself.
       if (!search.running && searchQuery) runSearch(searchQuery);
-      return;
+      return true;
     }
-    if (place) return;
+    if (place) return true;
     const gen = navGen;
     let list: Entry[];
     let tags: Record<string, number[]>;
     try {
-      if (tagView) {
-        ({ entries: list, tags } = await tagFiles(tagView.id));
+      if (resultView) {
+        ({ entries: list, tags } = await readResult(resultView));
       } else {
         [list, tags] = await Promise.all([listDir(path), fetchTagMap(path)]);
       }
     } catch (e) {
-      notify(String(e), true);
-      return;
+      // A newer look at the same smart folder took over: it will show its own answer.
+      if (String(e) === SMART_SUPERSEDED) return true;
+      if (quiet) quietError = String(e);
+      else notify(String(e), true);
+      return false;
     }
-    if (gen !== navGen) return; // the tab switched or navigated meanwhile
+    if (gen !== navGen) return true; // the tab switched or navigated meanwhile
+    // A check on a timer that finds nothing new leaves the list alone: no redraw, nothing lost.
+    if (quiet && sameListing(list, tags)) return true;
+    const at = visible[cursor]?.path;
     entries = list;
     tagMap = tags;
     // Only what is shown can stay selected.
@@ -392,8 +420,30 @@
     const keep = (select ?? [...selection]).filter((p) => existing.has(p));
     selection.clear();
     keep.forEach((p) => selection.add(p));
-    cursor = keep.length ? visible.findIndex((e) => e.path === keep[keep.length - 1]) : -1;
+    if (keep.length) cursor = visible.findIndex((e) => e.path === keep[keep.length - 1]);
+    else cursor = at === undefined ? -1 : visible.findIndex((e) => e.path === at);
     anchor = cursor;
+    return true;
+  }
+
+  /** Why the last check on a timer failed, for the note when it keeps failing. */
+  let quietError = "";
+
+  /** Whether `list` and `tags` are what the list shows already. */
+  function sameListing(list: Entry[], tags: Record<string, number[]>): boolean {
+    return (
+      list.length === entries.length &&
+      list.every((e, i) => {
+        const shown = entries[i];
+        return (
+          e.path === shown.path &&
+          e.isDir === shown.isDir &&
+          e.size === shown.size &&
+          e.modified === shown.modified
+        );
+      }) &&
+      JSON.stringify(tags) === JSON.stringify(tagMap)
+    );
   }
 
   /** Shows `target` in the active tab. Resolves to false on error, null if a newer navigation took over. */
@@ -405,7 +455,7 @@
     if (placeOf(target)) {
       entries = [];
       path = target;
-      tagView = null;
+      resultView = null;
       tagFilter = [];
       tagMap = {};
       if (tabs[active]) {
@@ -429,7 +479,7 @@
     if (gen !== navGen) return null;
     entries = list;
     path = target;
-    tagView = null;
+    resultView = null;
     tagFilter = [];
     tagMap = tags;
     recordRecent(target);
@@ -449,7 +499,7 @@
 
   /** Opens `target`; resolves to whether it is now shown (null: a newer navigation won). */
   async function navigate(target: string, quiet = false): Promise<boolean | null> {
-    if (target === path && !tagView && !search) return true;
+    if (target === path && !resultView && !search) return true;
     const from = path;
     const ok = await load(target, quiet);
     if (ok) {
@@ -461,7 +511,7 @@
 
   async function goBack() {
     // A tag view or a search is not a step in the history: back leaves it, for the folder it came from.
-    if (tagView || search) {
+    if (resultView || search) {
       searchOpen = false;
       await load(path);
       return;
@@ -1511,7 +1561,7 @@
   async function removeTag(id: number) {
     await run(() => tagDelete(id));
     await loadTagDefs();
-    if (tagView?.id === id) await load(path);
+    if (resultView && "tag" in resultView && resultView.tag.id === id) await load(path);
     else await refresh();
   }
 
@@ -1530,7 +1580,7 @@
 
   /** Opens the search bar, or moves to it when it is open. */
   function openSearch() {
-    if (place || tagView) return;
+    if (place || resultView) return;
     searchOpen = true;
     searchBar?.focus();
   }
@@ -1545,7 +1595,7 @@
 
   /** Searches the open folder and everything below it, showing matches as they come in. */
   async function runSearch(query: SearchQuery | null) {
-    if (place || tagView) return;
+    if (place || resultView) return;
     if (!query) {
       // Nothing to look for any more: the folder's own items come back.
       if (search) {
@@ -1585,16 +1635,23 @@
     }
   }
 
-  /** Shows every item with `tag`, from any folder, in the list. */
-  async function openTagView(tag: Tag) {
+  /** Shows what `view` lists, from any folder, in place of a folder. */
+  async function openResultView(view: ResultView) {
     const gen = navGen;
-    const found = await run(() => tagFiles(tag.id));
+    let found: Awaited<ReturnType<typeof readResult>>;
+    try {
+      found = await readResult(view);
+    } catch (e) {
+      // A newer look at the same smart folder took over: it will show its own answer.
+      if (String(e) !== SMART_SUPERSEDED) notify(String(e), true);
+      return;
+    }
     // Another navigation began while the items were being found: it wins.
-    if (!found || gen !== navGen) return;
+    if (gen !== navGen) return;
     navGen++;
     stopSearch();
     searchOpen = false;
-    tagView = tag;
+    resultView = view;
     tagFilter = [];
     entries = found.entries;
     tagMap = found.tags;
@@ -1603,6 +1660,98 @@
     renaming = null;
     fileView?.scrollToTop();
   }
+
+  /** Shows every item with `tag`, from any folder, in the list. */
+  const openTagView = (tag: Tag) => openResultView({ name: tag.name, tag });
+
+  /** Shows what a smart folder matches now; it stays current while it is open. */
+  const openSmart = (smart: SmartFolder) => openResultView({ name: smart.name, smart });
+
+  async function loadSmart() {
+    smartFolders = await smartList().catch(() => smartFolders);
+  }
+
+  /** Saves a smart folder from the dialog. Resolves to why it can't be saved, or null. */
+  async function saveSmart(
+    id: number | null,
+    name: string,
+    criteria: SmartCriteria,
+  ): Promise<string | null> {
+    let saved: SmartFolder;
+    try {
+      saved = await smartSave(id, name, criteria);
+    } catch (e) {
+      return String(e);
+    }
+    smartDialog = null;
+    await loadSmart();
+    // Changed while shown, or just made: show what it matches.
+    await openSmart(saved);
+    return null;
+  }
+
+  async function removeSmart(folder: SmartFolder) {
+    try {
+      await smartDelete(folder.id);
+    } catch (e) {
+      // Still there: the dialog stays, and so does the folder.
+      notify(String(e), true);
+      return;
+    }
+    smartDialog = null;
+    await loadSmart();
+    if (resultView && "smart" in resultView && resultView.smart.id === folder.id) await load(path);
+  }
+
+  // A smart folder is worked out again while it is open, so what changed anywhere shows without
+  // a visit to the folder. How soon depends on how long working it out takes, so a big search
+  // doesn't keep the disk busy.
+  const SMART_EVERY_MS = 15_000;
+  $effect(() => {
+    const view = resultView;
+    if (!view || !("smart" in view)) return;
+    let timer: ReturnType<typeof setTimeout>;
+    let last = 0;
+    let busy = false;
+    let live = true;
+    let failures = 0;
+    /** How long the last check took: the wait to the next is a multiple of it. */
+    let cost = 0;
+    const check = async () => {
+      if (busy || !live) return;
+      busy = true;
+      const began = performance.now();
+      try {
+        if (!document.hidden) {
+          failures = (await refresh(undefined, true)) ? 0 : failures + 1;
+          // Once, when it has failed three times running: the list is no longer current.
+          if (failures === 3) {
+            notify(`This smart folder can't be updated: ${quietError}`, true);
+          }
+        }
+      } finally {
+        busy = false;
+        last = performance.now();
+        cost = last - began;
+      }
+      if (live) timer = setTimeout(check, Math.max(SMART_EVERY_MS, 20 * cost));
+    };
+    timer = setTimeout(check, SMART_EVERY_MS);
+    // Back in the window after working elsewhere: look at once, unless just looked, or the
+    // last look was slow enough that the wait to the next one is the point.
+    const focused = () => {
+      if (performance.now() - last > Math.max(2000, 5 * cost)) {
+        clearTimeout(timer);
+        void check();
+      }
+    };
+    window.addEventListener("focus", focused);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+      window.removeEventListener("focus", focused);
+    };
+  });
 
   // ---- Command palette (Ctrl+K) ----
 
@@ -1654,6 +1803,10 @@
       ...action("Move to Recycle Bin", "Del", trashSelected, any),
       ...action("Quick Look", "Space", openQuickLook, any),
       ...action("Tags…", undefined, () => (tagsOpen = true), any),
+      ...action("New smart folder…", undefined, () => (smartDialog = { folder: null })),
+      ...smartFolders.flatMap((s) =>
+        action(`Smart folder: ${s.name}`, undefined, () => openSmart(s)),
+      ),
       ...tagDefs
         .filter((t) => t.id <= 7)
         .flatMap((t) => action(`Tag: ${t.name}`, String(t.id), () => toggleTag(t.id), any)),
@@ -1670,10 +1823,10 @@
         () => selectRange(0, visible.length - 1),
         visible.length > 0,
       ),
-      ...action("Search this folder", "Ctrl+F", openSearch, !place && !tagView),
+      ...action("Search this folder", "Ctrl+F", openSearch, !place && !resultView),
       ...action("Undo", "Ctrl+Z", () => stepHistory(false)),
       ...action("Redo", "Ctrl+Y", () => stepHistory(true)),
-      ...action("Back", "Alt+←", goBack, back.length > 0 || !!tagView || !!search),
+      ...action("Back", "Alt+←", goBack, back.length > 0 || !!resultView || !!search),
       ...action("Forward", "Alt+→", goForward, forward.length > 0),
       ...action("Up one folder", "Alt+↑", goUp),
       ...action("Refresh", undefined, () => refresh()),
@@ -1947,7 +2100,7 @@
   const ignore: Action = () => {};
 
   function goUp() {
-    if (tagView || search) {
+    if (resultView || search) {
       searchOpen = false;
       load(path);
       return;
@@ -2051,10 +2204,10 @@
           return () => updateSettings({ showHidden: !settings.showHidden });
       }
     }
-    const inColumns = view === "columns" && !tagView && !search && !place;
+    const inColumns = view === "columns" && !resultView && !search && !place;
     // The gallery's strip runs left to right, so its keys move one item at a time. Where it is
     // not shown (a search, a tag view) the items are in a grid.
-    const inGallery = view === "gallery" && !tagView && !search;
+    const inGallery = view === "gallery" && !resultView && !search;
     const grid = view === "grid" || (view === "gallery" && !inGallery);
     const row = grid ? (fileView?.columns() ?? 1) : 1;
     switch (key) {
@@ -2121,6 +2274,7 @@
       pdfTools ||
       imageTools ||
       tagsOpen ||
+      smartDialog ||
       bulkOpen ||
       paletteOpen
     )
@@ -2188,6 +2342,7 @@
       } else dragEnded();
     });
     loadTagDefs();
+    loadSmart();
     loadShelf();
     scanRunning().then(
       (running) => (scanning = running),
@@ -2243,7 +2398,7 @@
 <div class="app">
   <Sidebar
     {home}
-    current={tagView ? "" : path}
+    current={resultView ? "" : path}
     onnavigate={navigate}
     onopentab={(p) => openTab(p, true)}
     {dropTarget}
@@ -2252,8 +2407,23 @@
     collapsed={tabs[active]?.collapsed ?? []}
     ontogglesection={toggleSection}
     tags={tagDefs}
-    activeTag={tagView?.id ?? null}
+    activeTag={resultView && "tag" in resultView ? resultView.tag.id : null}
     ontag={openTagView}
+    {smartFolders}
+    activeSmart={resultView && "smart" in resultView ? resultView.smart.id : null}
+    onsmart={openSmart}
+    onsmartnew={() => (smartDialog = { folder: null })}
+    onsmartmenu={(folder, e) => {
+      menu = {
+        x: e.clientX,
+        y: e.clientY,
+        items: [
+          { label: "Edit…", run: () => (smartDialog = { folder }) },
+          "separator",
+          { label: "Delete smart folder", run: () => removeSmart(folder) },
+        ],
+      };
+    }}
     onbin={() => navigate(BIN_PATH)}
     binShown={inBin}
     folderTint={(p) => tintOf(sideTags[p])}
@@ -2306,7 +2476,7 @@
       onsettings={() => showScreen(SETTINGS_PATH)}
       onsearch={openSearch}
       {searchOpen}
-      tagLabel={tagView?.name ?? null}
+      resultLabel={resultView ? { name: resultView.name, smart: "smart" in resultView } : null}
       placeTitle={placeTitle(path)}
       inspectorOpen={settings.showInspector}
       oninspector={() => updateSettings({ showInspector: !settings.showInspector })}
@@ -2319,7 +2489,7 @@
         onclear={() => (tagFilter = [])}
       />
     {/if}
-    {#if searchOpen && !place && !tagView}
+    {#if searchOpen && !place && !resultView}
       <SearchBar
         bind:this={searchBar}
         folder={path.split(/[\\/]/).filter(Boolean).pop() ?? path}
@@ -2345,7 +2515,7 @@
           setTheme(t);
         }}
       />
-    {:else if view === "columns" && !tagView && !search}
+    {:else if view === "columns" && !resultView && !search}
       <ColumnView
         bind:this={fileView}
         {path}
@@ -2365,7 +2535,7 @@
         ondragout={dragOut}
         onselectin={goSelect}
       />
-    {:else if view === "gallery" && !tagView && !search}
+    {:else if view === "gallery" && !resultView && !search}
       <GalleryView
         bind:this={fileView}
         entries={visible}
@@ -2472,6 +2642,17 @@
       oncreate={createTag}
       ondelete={removeTag}
       onclose={() => (tagsOpen = false)}
+    />
+  {/if}
+
+  {#if smartDialog}
+    <SmartFolderDialog
+      tags={tagDefs}
+      folder={smartDialog.folder}
+      here={place ? "" : path}
+      onsave={saveSmart}
+      ondelete={removeSmart}
+      onclose={() => (smartDialog = null)}
     />
   {/if}
 

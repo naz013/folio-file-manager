@@ -72,6 +72,8 @@ See [ADR 0002](decisions/0002-tag-storage.md).
 
 Export and import (`tags.rs`, `Backup`): a file identity means nothing on another computer, so a tags file names files by path (plus the tag names and colours, and the home folder, so paths below it follow to the new computer's home). Reading one in only adds: missing tags are created, and each file found at its place gets its tags; nothing is removed, so it can be read twice or into an index with tags of its own. Files not found are counted.
 
+Smart folders (`smart.rs`) are saved searches kept in the same SQLite file as the tags. A smart folder stores its criteria (tags that must all be present, part of a name or a `*`/`?` pattern, changed within N days, an optional folder), not its results: opening one works the answer out again, so it is never stale. With tags it asks the tag index, then keeps the items that are still where they were tagged and fit the rest. With no tag it walks its folder with the search code, which drops items older than the window before counting them against its cap, and gives up (and stops the walk) after a minute. A tag it names that was deleted makes it fail with a message, not widen. The window shows the result like a tag view and re-reads it every 15 seconds (later after a slow one), when the window comes back to the front, and after any change it makes itself.
+
 ### Disk scanning
 
 - Parallel walk (`jwalk`) in a background task, results cached in SQLite per volume.

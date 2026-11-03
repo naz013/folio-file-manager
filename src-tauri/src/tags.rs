@@ -175,7 +175,7 @@ fn rehome(path: &str, from: Option<&str>, to: Option<&Path>) -> Option<PathBuf> 
 }
 
 /// `path` as text that two spellings of one path share: how folders and files are matched.
-fn key(path: &Path) -> String {
+pub(crate) fn key(path: &Path) -> String {
     ops::comparable(path)
         .unwrap_or_else(|_| path.to_path_buf())
         .to_string_lossy()
@@ -214,6 +214,11 @@ impl Tags {
                  identity TEXT NOT NULL REFERENCES files(identity) ON DELETE CASCADE,
                  tag_id   INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
                  PRIMARY KEY (identity, tag_id)
+             );
+             CREATE TABLE IF NOT EXISTS smart_folders (
+                 id       INTEGER PRIMARY KEY,
+                 name     TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                 criteria TEXT NOT NULL
              );",
         )?;
         for (id, (name, color)) in (1i64..).zip(COLORS) {
@@ -227,7 +232,7 @@ impl Tags {
         })
     }
 
-    fn conn(&self) -> MutexGuard<'_, Connection> {
+    pub(crate) fn conn(&self) -> MutexGuard<'_, Connection> {
         self.conn
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -287,6 +292,8 @@ impl Tags {
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         tx.execute("DELETE FROM tags WHERE id = ?1", params![id])
             .map_err(|e| e.to_string())?;
+        // Smart folders that used the tag must not match whatever tag gets its number next.
+        crate::smart::forget_tag(&tx, id).map_err(|e| e.to_string())?;
         // Files left with no tag need no row.
         tx.execute(
             "DELETE FROM files WHERE identity NOT IN (SELECT identity FROM file_tags)",
@@ -576,7 +583,7 @@ impl Tags {
         Ok(done)
     }
 
-    fn tag_ids(&self, identity: &str) -> Vec<i64> {
+    pub(crate) fn tag_ids(&self, identity: &str) -> Vec<i64> {
         let conn = self.conn();
         let Ok(mut stmt) =
             conn.prepare("SELECT tag_id FROM file_tags WHERE identity = ?1 ORDER BY tag_id")

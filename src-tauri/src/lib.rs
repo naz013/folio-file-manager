@@ -18,6 +18,7 @@ mod search;
 mod session;
 mod shelf;
 mod slow;
+mod smart;
 mod tags;
 mod thumbs;
 mod watch;
@@ -156,6 +157,7 @@ pub fn run() {
         .manage(preview::Current::default())
         .manage(commands::Measuring::default())
         .manage(commands::Searching::default())
+        .manage(commands::SmartWalks::default())
         .setup(|app| {
             #[cfg(desktop)]
             app.handle()
@@ -250,6 +252,10 @@ pub fn run() {
             commands::tags_export,
             commands::tags_import,
             commands::tag_files,
+            commands::smart_list,
+            commands::smart_save,
+            commands::smart_delete,
+            commands::smart_open,
             commands::clipboard_mirror,
             commands::clipboard_take,
             commands::shelf_list,
