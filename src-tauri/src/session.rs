@@ -17,7 +17,7 @@ pub const MAIN_LABEL: &str = "main";
 pub struct WindowTabs {
     pub tabs: Vec<String>,
     pub active: usize,
-    /// Each tab's view mode ("grid", "list" or "columns"), in tab order; "" or absent means the default.
+    /// Each tab's view mode ("grid", "list", "columns" or "gallery"), in tab order; "" or absent means the default.
     #[serde(default)]
     pub views: Vec<String>,
     /// Each tab's collapsed sidebar sections, comma separated, in tab order; "" or absent

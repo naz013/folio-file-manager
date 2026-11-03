@@ -3,7 +3,7 @@
   import Icon from "./Icon.svelte";
   import { joinPath, listDir, pathSegments, separatorOf } from "$lib/api/fs";
 
-  export type View = "grid" | "list" | "columns";
+  export type View = "grid" | "list" | "columns" | "gallery";
 
   let {
     path,
@@ -350,6 +350,14 @@
       aria-label="Column view"
     >
       <Icon name="columns" size={15} />
+    </button>
+    <button
+      class:active={view === "gallery"}
+      aria-pressed={view === "gallery"}
+      onclick={() => onview("gallery")}
+      aria-label="Gallery view"
+    >
+      <Icon name="gallery" size={15} />
     </button>
   </div>
 

@@ -123,6 +123,7 @@
   import { applyTheme, loadTheme, onThemeChange, setTheme, type Theme } from "$lib/theme";
   import ColumnView from "$lib/components/ColumnView.svelte";
   import FileView from "$lib/components/FileView.svelte";
+  import GalleryView from "$lib/components/GalleryView.svelte";
   import { measureJumps, measureScroll, nextPaint, perfConfig, perfReport } from "$lib/perf";
 
   let home = $state("");
@@ -214,7 +215,7 @@
   let saveTimer: ReturnType<typeof setTimeout>;
 
   const asView = (v: string | undefined): View | null =>
-    v === "grid" || v === "list" || v === "columns" ? v : null;
+    v === "grid" || v === "list" || v === "columns" || v === "gallery" ? v : null;
 
   const folderName = (p: string) => placeTitle(p) ?? pathSegments(p).at(-1)?.name ?? p;
   let tabPaths = $derived(tabs.map((t) => t.path));
@@ -1712,6 +1713,7 @@
       ...action("Grid view", undefined, () => setView("grid"), view !== "grid"),
       ...action("List view", undefined, () => setView("list"), view !== "list"),
       ...action("Column view", undefined, () => setView("columns"), view !== "columns"),
+      ...action("Gallery view", undefined, () => setView("gallery"), view !== "gallery"),
       ...action(settings.showHidden ? "Hide hidden files" : "Show hidden files", "Ctrl+H", () =>
         updateSettings({ showHidden: !settings.showHidden }),
       ),
@@ -2050,8 +2052,11 @@
       }
     }
     const inColumns = view === "columns" && !tagView && !search && !place;
-    const row = view === "grid" ? (fileView?.columns() ?? 1) : 1;
-    const grid = view === "grid";
+    // The gallery's strip runs left to right, so its keys move one item at a time. Where it is
+    // not shown (a search, a tag view) the items are in a grid.
+    const inGallery = view === "gallery" && !tagView && !search;
+    const grid = view === "grid" || (view === "gallery" && !inGallery);
+    const row = grid ? (fileView?.columns() ?? 1) : 1;
     switch (key) {
       case "Backspace":
         return goUp;
@@ -2065,13 +2070,13 @@
           const here = cursor >= 0 ? visible[cursor] : null;
           return here?.isDir && !shift ? () => goSelect(here.path, null) : null;
         }
-        return grid ? () => moveCursor(1, shift) : null;
+        return grid || inGallery ? () => moveCursor(1, shift) : null;
       case "ArrowLeft":
         if (inColumns) {
           const up = parentOf(path);
           return up && !shift ? () => goSelect(up, path) : null;
         }
-        return grid ? () => moveCursor(-1, shift) : null;
+        return grid || inGallery ? () => moveCursor(-1, shift) : null;
       case "Home":
         return () => moveCursor(-visible.length, shift);
       case "End":
@@ -2360,11 +2365,29 @@
         ondragout={dragOut}
         onselectin={goSelect}
       />
+    {:else if view === "gallery" && !tagView && !search}
+      <GalleryView
+        bind:this={fileView}
+        entries={visible}
+        {selection}
+        cursorIndex={cursor}
+        cut={cutSet}
+        {renaming}
+        folderTint={tintFor}
+        onitemclick={itemClick}
+        onopen={open}
+        onitemcontextmenu={itemContextMenu}
+        onbackgroundclick={() => selectOnly(-1)}
+        onbackgroundcontextmenu={backgroundContextMenu}
+        onrename={commitRename}
+        oncancelrename={() => (renaming = null)}
+        ondragout={dragOut}
+      />
     {:else}
       <FileView
         bind:this={fileView}
         entries={visible}
-        view={view === "columns" ? "list" : view}
+        view={view === "columns" ? "list" : view === "gallery" ? "grid" : view}
         {selection}
         cut={cutSet}
         {renaming}

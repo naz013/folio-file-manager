@@ -42,6 +42,7 @@
   --size-titlebar: 46px;
   --size-control-sm: 26px;
   --size-column: 240px;
+  --size-filmstrip: 96px;
 
   /* core: typography */
   --font-sans: "Inter Variable", "Inter", system-ui, "Segoe UI", sans-serif;

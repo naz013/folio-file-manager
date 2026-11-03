@@ -245,13 +245,19 @@
         <div class="row">
           <span id="view-label">Default view</span>
           <div class="segments" role="group" aria-labelledby="view-label">
-            {#each ["grid", "list", "columns"] as const as mode (mode)}
+            {#each ["grid", "list", "columns", "gallery"] as const as mode (mode)}
               <button
                 class:active={settings.defaultView === mode}
                 aria-pressed={settings.defaultView === mode}
                 onclick={() => updateSettings({ defaultView: mode })}
               >
-                {mode === "grid" ? "Grid" : mode === "list" ? "List" : "Columns"}
+                {mode === "grid"
+                  ? "Grid"
+                  : mode === "list"
+                    ? "List"
+                    : mode === "columns"
+                      ? "Columns"
+                      : "Gallery"}
               </button>
             {/each}
           </div>

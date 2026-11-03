@@ -9,6 +9,8 @@
     grid: '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>',
     columns:
       '<rect x="3.5" y="4" width="5" height="16" rx="1.2"/><rect x="9.5" y="4" width="5" height="16" rx="1.2"/><rect x="15.5" y="4" width="5" height="16" rx="1.2"/>',
+    gallery:
+      '<rect x="3.5" y="4" width="17" height="10" rx="1.5"/><rect x="3.5" y="16.5" width="4" height="3.5" rx="1"/><rect x="10" y="16.5" width="4" height="3.5" rx="1"/><rect x="16.5" y="16.5" width="4" height="3.5" rx="1"/>',
     list: '<path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"/>',
     clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
     home: '<path d="M4 11l8-7 8 7v8a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z"/>',

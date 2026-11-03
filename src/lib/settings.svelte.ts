@@ -7,7 +7,7 @@
 const KEY = "folio.settings";
 
 export const SPRING_DELAYS_MS = [500, 1000, 1500, 2000, 2500, 3000] as const;
-export type ViewMode = "grid" | "list" | "columns";
+export type ViewMode = "grid" | "list" | "columns" | "gallery";
 /** The thresholds cleanup offers for "large" (MB) and "old" (days). */
 export const CLEANUP_SIZES_MB = [10, 50, 100, 500, 1000, 5000] as const;
 export const CLEANUP_AGES_DAYS = [30, 90, 180, 365, 730] as const;
@@ -94,7 +94,11 @@ function read(): Settings {
     showHidden: saved.showHidden === true,
     showInspector: saved.showInspector === true,
     defaultView:
-      saved.defaultView === "list" || saved.defaultView === "columns" ? saved.defaultView : "grid",
+      saved.defaultView === "list" ||
+      saved.defaultView === "columns" ||
+      saved.defaultView === "gallery"
+        ? saved.defaultView
+        : "grid",
     springDelayMs:
       delay === null
         ? null
