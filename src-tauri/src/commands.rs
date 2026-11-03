@@ -385,9 +385,24 @@ fn begin(journal: &Journal, label: &str) -> Result<journal::Pending, String> {
     journal.begin(label).map_err(|e| e.to_string())
 }
 
-/// Moves `targets` to the Recycle Bin and returns the result with the journal steps for
-/// whatever really left its place, even when the call reported an error.
+/// Moves `targets` to the Recycle Bin, all or none (see [`ops::trash`]), and returns the
+/// result with the journal steps for whatever really left its place, even when the call
+/// reported an error.
 fn trash_with_steps(journal: &Journal, targets: &[PathBuf]) -> (CmdResult<()>, Vec<Step>) {
+    trash_steps(journal, targets, ops::trash)
+}
+
+/// [`trash_with_steps`] for targets already passed by `bin_guard::screen`, which the caller
+/// keeps until this returns.
+fn trash_screened_with_steps(journal: &Journal, targets: &[PathBuf]) -> (CmdResult<()>, Vec<Step>) {
+    trash_steps(journal, targets, ops::trash_screened)
+}
+
+fn trash_steps(
+    journal: &Journal,
+    targets: &[PathBuf],
+    mover: impl FnOnce(&[PathBuf]) -> Result<(), trash::Error>,
+) -> (CmdResult<()>, Vec<Step>) {
     let started = journal::unix_now() - 2;
     // Only what is there to trash can end up in the bin.
     let existing: Vec<PathBuf> = targets
@@ -395,7 +410,7 @@ fn trash_with_steps(journal: &Journal, targets: &[PathBuf]) -> (CmdResult<()>, V
         .filter(|p| std::fs::symlink_metadata(p).is_ok())
         .cloned()
         .collect();
-    let result = ops::trash(targets).map_err(|e| e.to_string());
+    let result = mover(targets).map_err(|e| e.to_string());
     let gone: Vec<PathBuf> = existing
         .into_iter()
         .filter(|p| std::fs::symlink_metadata(p).is_err())
@@ -496,29 +511,33 @@ fn submit_trash(
         let mut left_alone = changed.len();
         // The room left in the bin is looked at now, not when the job was queued: other
         // jobs ahead of this one may have filled it.
-        let (targets, no_room, last_look, no_bin) = if let Some(pick) = filter {
+        let (targets, mut no_room, last_look) = if let Some(pick) = filter {
             let before = targets.len();
             let picked = pick(targets);
             left_alone += before - picked.paths.len() - picked.no_room;
-            (picked.paths, picked.no_room, picked.last_look, 0)
+            (picked.paths, picked.no_room, picked.last_look)
         } else {
-            // A plain delete: what the bin can't take is held back, not left to the shell,
-            // which would delete it for good without asking.
-            let s = ops::bin_guard::screen(targets, crate::platform::recycle_limit);
-            (s.go, s.no_room, None, s.no_bin)
+            (targets, 0, None)
         };
+        // What the bin can't take is held back, not left to the shell, which would delete
+        // it for good without asking. The room it takes is set aside, against other jobs,
+        // until this one is over.
+        let screened = ops::bin_guard::screen(targets);
+        let (targets, no_bin) = (&screened.go, screened.no_bin);
+        no_room += screened.no_room;
         // Checking the files can take long; where the move depends on something staying
         // as it was, each one is looked at again right before it goes.
         let (result, steps) = match last_look {
-            None => trash_with_steps(&journal, &targets),
+            None => trash_screened_with_steps(&journal, targets),
             Some(ok_to_move) => {
                 let (mut result, mut steps) = (Ok(()), Vec::new());
-                for path in &targets {
+                for path in targets {
                     if !ok_to_move(path) {
                         left_alone += 1;
                         continue;
                     }
-                    let (one, mut done) = trash_with_steps(&journal, std::slice::from_ref(path));
+                    let (one, mut done) =
+                        trash_screened_with_steps(&journal, std::slice::from_ref(path));
                     steps.append(&mut done);
                     if one.is_err() {
                         result = one;

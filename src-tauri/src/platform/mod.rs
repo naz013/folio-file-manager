@@ -136,36 +136,41 @@ pub fn list_drives() -> Vec<DriveInfo> {
     }
 }
 
-/// How much more the drive's Recycle Bin can take, so a batch moved there stays whole, or
-/// `None` where it has none, or is set to delete at once (removable and network drives,
-/// "Don't move files to the Recycle Bin"), where a delete is for good. This is read from
-/// the user's own setting for the drive, less what is already in the bin. Elsewhere the
-/// Trash has no limit.
-#[cfg_attr(
-    not(windows),
-    expect(
-        clippy::unnecessary_wraps,
-        reason = "the Windows version has no limit to give"
-    )
-)]
-pub fn recycle_limit(path: &Path) -> Option<u64> {
+/// The volume an item is on, as a key that is the same whatever the spelling of its path
+/// (`C:\x`, `\?\C:\x`, through a junction or a folder mount), and how much more that
+/// volume's Recycle Bin can take, so a batch moved there stays whole. The room is `None`
+/// where there is no bin, or it is set to delete at once (removable and network drives,
+/// `subst` drives, "Don't move files to the Recycle Bin"), where a delete is for good. It is
+/// read from the user's own setting for the volume, less what is already in the bin.
+/// Elsewhere the Trash has no limit.
+pub struct BinVolume {
+    pub key: String,
+    pub room: Option<u64>,
+}
+
+/// Which volume `path` is on and how much its bin can take: see [`BinVolume`].
+pub fn bin_volume(path: &Path) -> BinVolume {
     #[cfg(windows)]
     {
-        use std::path::{Component, Prefix};
-        let Some(Component::Prefix(prefix)) = path.components().next() else {
-            return None;
-        };
-        let letter = match prefix.kind() {
-            Prefix::Disk(l) | Prefix::VerbatimDisk(l) => char::from(l),
-            _ => return None,
-        };
-        drives::bin_room(letter)
+        let found = drives::bin_volume(path);
+        BinVolume {
+            key: found.key,
+            room: found.room,
+        }
     }
     #[cfg(not(windows))]
     {
         let _ = path;
-        Some(u64::MAX)
+        BinVolume {
+            key: String::new(),
+            room: Some(u64::MAX),
+        }
     }
+}
+
+/// How much more the Recycle Bin of the volume holding `path` can take; see [`BinVolume`].
+pub fn recycle_limit(path: &Path) -> Option<u64> {
+    bin_volume(path).room
 }
 
 /// Puts `paths` on the system clipboard as files, for another program to paste: moved if

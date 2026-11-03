@@ -20,7 +20,46 @@ mod noclobber;
 pub mod pdf;
 pub mod progress;
 
+/// Moves `paths` to the OS trash, all or none: if the bin of any of them can't take it (no
+/// bin on its volume, already in a bin, or too big for the room left) nothing is moved and
+/// an error says so, because the shell would delete it for good without asking (ADR 0003).
+/// A job that wants to carry on with the rest screens first and calls [`trash_screened`].
 pub fn trash(paths: &[PathBuf]) -> Result<(), trash::Error> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let screened = bin_guard::screen(paths.to_vec());
+    if screened.go.len() != paths.len() {
+        let held: Vec<String> = paths
+            .iter()
+            .filter(|p| !screened.go.contains(p))
+            .map(|p| {
+                p.file_name()
+                    .unwrap_or(p.as_os_str())
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        let why = match (screened.no_bin, screened.no_room) {
+            (_, 0) => {
+                "there is no Recycle Bin for it (its drive has none, or it is already in one)"
+            }
+            (0, _) => "it is too big for the room left in the Recycle Bin",
+            _ => "the Recycle Bin can't take it",
+        };
+        return Err(trash::Error::Unknown {
+            description: format!(
+                "Folio did not move \"{}\" because {why}, and does not delete for good",
+                held.join("\", \"")
+            ),
+        });
+    }
+    trash_screened(&screened.go)
+}
+
+/// [`trash`] for paths that [`bin_guard::screen`] already passed, whose result is kept
+/// alive by the caller for as long as the move takes.
+pub fn trash_screened(paths: &[PathBuf]) -> Result<(), trash::Error> {
     // The Windows shell fails an empty request (E_UNEXPECTED), and a copy or move with
     // nothing to replace asks for exactly that.
     if paths.is_empty() {
@@ -1278,6 +1317,21 @@ mod tests {
         // Every copy and move asks the Recycle Bin to take what it replaces, which is
         // usually nothing; the Windows shell fails that request.
         assert!(trash(&[]).is_ok());
+    }
+
+    #[test]
+    fn trash_refuses_what_is_already_in_a_bin_and_moves_nothing() {
+        // The shell would delete it for good, and the one beside it must stay too.
+        let dir = tempfile::tempdir().unwrap();
+        let inside = dir.path().join("$Recycle.Bin").join("S-1");
+        fs::create_dir_all(&inside).unwrap();
+        let binned = inside.join("$R1");
+        let other = dir.path().join("other");
+        fs::write(&binned, b"x").unwrap();
+        fs::write(&other, b"x").unwrap();
+        let err = trash(&[other.clone(), binned.clone()]).unwrap_err();
+        assert!(err.to_string().contains("$R1"), "{err}");
+        assert!(binned.exists() && other.exists());
     }
 
     #[test]

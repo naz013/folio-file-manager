@@ -759,7 +759,7 @@ fn drop_unredoable(conn: &Connection, entry: &Entry) -> String {
 }
 
 fn trash_error(e: &trash::Error) -> io::Error {
-    io::Error::other(format!("the system couldn't move it to the trash ({e})"))
+    io::Error::other(format!("it could not be moved to the trash: {e}"))
 }
 
 /// `path` as the Recycle Bin / Trash records it: its folder resolved, then compared
