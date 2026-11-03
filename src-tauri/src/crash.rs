@@ -168,9 +168,25 @@ pub fn clear(dir: &Path) {
     }
 }
 
+/// Makes sure the folder for reports exists, so it can be shown. It only makes the empty
+/// folder: no report or count is written without consent.
+pub fn ensure_dir(dir: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("Could not make the logs folder: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_logs_folder_can_be_made_before_anything_is_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = dir.path().join("a").join("crash");
+        ensure_dir(&logs).unwrap();
+        ensure_dir(&logs).unwrap();
+        assert!(logs.is_dir());
+        assert_eq!(std::fs::read_dir(&logs).unwrap().count(), 0);
+    }
 
     #[test]
     fn nothing_is_recorded_until_the_user_says_yes() {

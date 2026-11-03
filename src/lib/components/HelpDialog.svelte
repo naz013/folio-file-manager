@@ -1,5 +1,10 @@
 <script lang="ts">
+  import { availableMonitors } from "@tauri-apps/api/window";
+  import { openUrl } from "@tauri-apps/plugin-opener";
   import { onMount } from "svelte";
+  import { appInfo, crashState, logsOpen } from "$lib/api/fs";
+  import { REPO, versionLine } from "$lib/about";
+  import { diagnosticsText, reportUrl } from "$lib/diagnostics";
   import { trapFocus } from "$lib/focus";
   import { findTopics } from "$lib/help";
   import { updateSettings } from "$lib/settings.svelte";
@@ -29,6 +34,76 @@
   /** The topic being read; the first match while none is picked or the picked one is filtered out. */
   let pickedId = $state("");
   const topic = $derived(topics.find((t) => t.id === pickedId) ?? topics[0]);
+
+  /** What the last diagnostics button did, in words. */
+  let note = $state("");
+
+  /** The diagnostics as text: asked of the core and the window each time, so it is current. */
+  async function gather(): Promise<string> {
+    const [info, crash, monitors] = await Promise.all([
+      appInfo(),
+      crashState().catch(() => null),
+      availableMonitors().catch(() => []),
+    ]);
+    return diagnosticsText(
+      versionLine(info),
+      {
+        locale: navigator.language,
+        monitors: monitors.map((m) => ({
+          width: m.size.width,
+          height: m.size.height,
+          scale: m.scaleFactor,
+        })),
+      },
+      crash,
+    );
+  }
+
+  /** A button is working: the others wait, so a double click does not do it twice. */
+  let busy = $state(false);
+
+  async function copyDiagnostics() {
+    if (busy) return;
+    busy = true;
+    try {
+      await navigator.clipboard.writeText(await gather());
+      note = "Copied. It holds no file names, paths or tags.";
+    } catch (e) {
+      note = `Could not copy the diagnostics: ${e}`;
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function showLogs() {
+    if (busy) return;
+    busy = true;
+    try {
+      await logsOpen();
+      const crash = await crashState().catch(() => null);
+      note =
+        crash?.consent === true && crash.reports > 0
+          ? ""
+          : "No reports here yet. Crash reports are only kept if you turn them on in Settings.";
+    } catch (e) {
+      note = `Could not open the logs folder: ${e}`;
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function reportBug() {
+    if (busy) return;
+    busy = true;
+    try {
+      await openUrl(reportUrl(REPO, await gather()));
+      note = "Opened in your browser. Nothing is sent until you press Submit there.";
+    } catch (e) {
+      note = `Could not open the report page: ${e}`;
+    } finally {
+      busy = false;
+    }
+  }
 
   /** The welcome tour is shown by the page once it is no longer marked as seen. */
   function replayTour() {
@@ -92,6 +167,14 @@
       </article>
     </div>
 
+    <section class="diagnostics" aria-label="Problems">
+      <span>Something wrong?</span>
+      <button onclick={copyDiagnostics} disabled={busy}>Copy diagnostics</button>
+      <button onclick={showLogs} disabled={busy}>Open logs folder</button>
+      <button onclick={reportBug} disabled={busy}>Report a bug</button>
+    </section>
+    <p class="note" role="status">{note}</p>
+
     <footer>
       <button onclick={onshortcuts}>Keyboard shortcuts</button>
       <button onclick={onwhatsnew}>What's new</button>
@@ -122,6 +205,29 @@
     background: var(--bg-window);
     box-shadow: var(--shadow-popover);
     outline: none;
+  }
+
+  .diagnostics {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-sm);
+    color: var(--text-secondary);
+  }
+
+  .diagnostics button {
+    padding: var(--space-xs) var(--space-md);
+    border-radius: var(--radius-md);
+    background: var(--bg-control);
+    color: var(--text-primary);
+    font-weight: var(--font-weight-medium);
+  }
+
+  .note {
+    min-height: 1.2em;
+    margin: calc(-1 * var(--space-sm)) 0 0;
+    color: var(--text-secondary);
+    font-size: var(--font-size-caption);
   }
 
   header,

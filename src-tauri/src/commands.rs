@@ -2225,6 +2225,17 @@ pub fn crash_set(dir: tauri::State<'_, CrashDir>, on: bool) -> crate::crash::Sta
     crate::crash::state(&dir.0)
 }
 
+/// Shows the folder where crash reports are kept, making it first if it is not there yet.
+#[tauri::command]
+pub async fn logs_open(dir: tauri::State<'_, CrashDir>) -> CmdResult<()> {
+    let dir = dir.0.clone();
+    blocking(move || {
+        crate::crash::ensure_dir(&dir)?;
+        tauri_plugin_opener::open_path(&dir, None::<&str>).map_err(|e| e.to_string())
+    })
+    .await
+}
+
 #[tauri::command]
 pub fn crash_clear(dir: tauri::State<'_, CrashDir>) -> crate::crash::State {
     crate::crash::clear(&dir.0);

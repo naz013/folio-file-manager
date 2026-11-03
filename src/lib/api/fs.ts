@@ -306,6 +306,8 @@ export interface CrashState {
 export const crashState = () => invoke<CrashState>("crash_state");
 export const crashSet = (on: boolean) => invoke<CrashState>("crash_set", { on });
 export const crashClear = () => invoke<CrashState>("crash_clear");
+/** Shows the folder where crash reports are kept. */
+export const logsOpen = () => invoke<void>("logs_open");
 
 /** Fails with a reason while Folio is busy with files: an update must wait for it. */
 export const updateGate = () => invoke<void>("update_gate");

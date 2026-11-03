@@ -318,6 +318,7 @@ pub fn run() {
             commands::crash_state,
             commands::crash_set,
             commands::crash_clear,
+            commands::logs_open,
             commands::image_edit,
             commands::image_estimate,
             commands::pdf_merge,
