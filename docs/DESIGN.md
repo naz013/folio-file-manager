@@ -142,7 +142,8 @@ change in place, `--ease-emphasized` for things that arrive; `--motion-shift` (6
   2000 entries skips even the view-switch fade (`LIST_ANIMATION_MAX`).
 - Off under `prefers-reduced-motion`, or Settings › Motion › Off. "Always on" overrides the OS.
   The spring-loading ring is a countdown, not decoration, and keeps its timing.
-- **Penpot:** not drawn yet; the table above is the spec until the Motion notes are added there.
+- **Penpot:** the Motion board on the Design System page (right of Patterns) lists the tokens and
+  the table above as text. Penpot cannot play motion, so it is a spec sheet, not a prototype.
 
 ## UX rules
 
