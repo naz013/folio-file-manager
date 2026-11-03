@@ -24,6 +24,8 @@
     hardDrive:
       '<rect x="3" y="13" width="18" height="7" rx="2"/><path d="M5.5 13l2-8h9l2 8M7 16.5h.01M11 16.5h4"/>',
     sidebar: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>',
+    dualPane:
+      '<rect x="3" y="4" width="8" height="16" rx="1.5"/><rect x="13" y="4" width="8" height="16" rx="1.5"/>',
     panelRight: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
     pause: '<path d="M9 5v14M15 5v14"/>',

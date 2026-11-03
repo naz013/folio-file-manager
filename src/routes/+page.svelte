@@ -117,6 +117,8 @@
   import Toolbar, { type View } from "$lib/components/Toolbar.svelte";
   import { isPinned, pinName, slotOver } from "$lib/favorites";
   import { createSpring } from "$lib/spring";
+  import { sideFolder, sideTarget } from "$lib/pane";
+  import SidePane from "$lib/components/SidePane.svelte";
   import {
     movePinned,
     pinFolders,
@@ -293,6 +295,103 @@
     columns(): number;
   }
   let fileView = $state<ListApi>();
+
+  // ---- Second pane ----
+
+  /** Which pane has the keyboard while two are shown. */
+  let activePane = $state<"main" | "side">("main");
+  let sidePane = $state<SidePane>();
+  /** Bumped when something finished that may have changed the second pane's folder. */
+  let sideRefresh = $state(0);
+  /** A press or focus anywhere but the second pane gives the keyboard back to the first. */
+  function leavePane(e: Event) {
+    if (!(e.target as Element | null)?.closest?.("[data-pane=side]")) activePane = "main";
+  }
+
+  // Hiding the pane (or showing a screen over it) leaves the keyboard with the first.
+  $effect(() => {
+    if (!showSide) activePane = "main";
+  });
+
+  function togglePanes() {
+    const on = !settings.dualPane;
+    if (on && !settings.secondPath) {
+      updateSettings({ dualPane: true, secondPath: place ? startPath(home) : path });
+    } else {
+      updateSettings({ dualPane: on });
+    }
+    activePane = "main";
+  }
+
+  /** F6: the keyboard goes to the other pane. */
+  async function switchPane() {
+    if (!showSide) return;
+    activePane = activePane === "main" ? "side" : "main";
+    await tick();
+    if (activePane === "main") fileView?.focusList();
+    else document.querySelector<HTMLElement>("[data-pane=side] [role=listbox]")?.focus();
+  }
+
+  /** Copies or moves items into the folder of the pane they are not in. */
+  async function sendToOther(paths: string[], copy: boolean, fromSide: boolean) {
+    if (!showSide || !paths.length) return;
+    const dest = fromSide ? path : settings.secondPath;
+    if (!dest || (fromSide && noFolder)) {
+      notify("Open a folder in the other pane first", true);
+      return;
+    }
+    await dropMany(paths, dest, copy);
+  }
+
+  /** Like a drop, but the verb is chosen by the caller instead of by the keys held. */
+  async function dropMany(paths: string[], dest: string, copy: boolean) {
+    const sources = paths.filter((p) => p !== dest && parentOf(p) !== dest);
+    if (!sources.length) return notify("They are in that folder already");
+    await transfer(sources, dest, copy);
+  }
+
+  async function trashPaneItems(paths: string[]) {
+    await run(() => trashPaths(paths));
+  }
+
+  function sideMenu(paths: string[], folder: string, e: MouseEvent | { x: number; y: number }) {
+    const at = "clientX" in e ? { x: e.clientX, y: e.clientY } : e;
+    if ("shiftKey" in e && e.shiftKey) {
+      nativeMenu(paths.length ? paths : [folder], true);
+      return;
+    }
+    const one = paths.length === 1 ? paths[0] : null;
+    menu = {
+      ...at,
+      items: paths.length
+        ? [
+            { label: "Open", run: () => one && sidePane?.openItem(one) },
+            {
+              label: "Copy to the other pane",
+              hint: "F5",
+              run: () => sendToOther(paths, true, true),
+            },
+            {
+              label: "Move to the other pane",
+              hint: "Shift+F5",
+              run: () => sendToOther(paths, false, true),
+            },
+            "separator",
+            {
+              label: "Move to Recycle Bin",
+              hint: hintFor("trash"),
+              danger: true,
+              run: () => trashPaneItems(paths),
+            },
+            "separator",
+            { label: "More options", run: () => nativeMenu(paths) },
+          ]
+        : [
+            { label: "Open in terminal", run: () => terminalIn(folder) },
+            { label: "More options", run: () => nativeMenu([folder]) },
+          ],
+    };
+  }
   /** The tint a folder takes from its tags; one function, so the lists don't see a new one on every render. */
   const tintFor = (p: string) => tintOf(tagMap[p]);
   let toolbar: Toolbar | undefined = $state();
@@ -328,6 +427,10 @@
   /** The screen the tab shows instead of a folder: the Recycle Bin, Storage, Cleanup or Settings. */
   const place = $derived(placeOf(path));
   const inBin = $derived(place === "bin");
+
+  /** Screens (Storage, Settings...) fill the area, so the second pane waits for a folder. */
+  const showSide = $derived(settings.dualPane && !place);
+  const sideActive = $derived(showSide && activePane === "side");
   /** Folders and the Recycle Bin have an inspector; the other screens do not. */
   const inspectorAvailable = $derived(!place || inBin);
   /** There is no folder to create in, paste into or open a terminal in. */
@@ -981,6 +1084,7 @@
     if (at < 0) jobs.push(job);
     else jobs[at] = job;
     if (reported.has(job.id)) return;
+    if (job.state === "done" || job.state === "failed" || job.state === "cancelled") sideRefresh++;
     if (job.state === "done") {
       reported.add(job.id);
       reportDone(job);
@@ -1220,12 +1324,14 @@
     eligible: (target) => {
       if (target === spent) return false;
       if (target === "new") return true;
+      const side = sideFolder(target);
+      if (side !== null) return side !== settings.secondPath && !dragPaths.includes(side);
       if (target.startsWith("tab:")) return Number(target.slice(4)) !== tabs[active]?.id;
       return target !== path && !dragPaths.includes(target);
     },
     open: springGo,
     ring: (target, ms) => {
-      springPath = target;
+      springPath = target && (sideFolder(target) ?? target);
       springMs = ms;
     },
   });
@@ -1249,6 +1355,15 @@
 
   async function springGo(target: string) {
     const id = dragId;
+    const side = sideFolder(target);
+    if (side !== null) {
+      // The second pane has no history trip to settle: it just goes there.
+      spent = target;
+      await sidePane?.navigate(side);
+      await nextPaint();
+      if (id === dragId && dragPos) hoverAt(dragPos);
+      return;
+    }
     if (target === "new" || target.startsWith("tab:")) {
       // Another tab has its own history, so the trip so far is complete.
       await settleTrip();
@@ -1325,7 +1440,9 @@
 
   /** The dragged folders, for pinning; a drag of files (or from another app) pins nothing. */
   function foldersOf(paths: string[]): string[] {
-    return paths.filter((p) => entries.some((e) => e.path === p && e.isDir));
+    return paths.filter(
+      (p) => entries.some((e) => e.path === p && e.isDir) || (showSide && sidePane?.isFolder(p)),
+    );
   }
 
   function hoverAt(pos: { x: number; y: number }) {
@@ -1338,9 +1455,14 @@
     dropTarget = intoFolder
       ? (el?.closest<HTMLElement>("[data-drop-path]")?.dataset.dropPath ?? null)
       : null;
-    const target = intoFolder
+    const springed = intoFolder
       ? (dropTarget ?? el?.closest<HTMLElement>("[data-spring]")?.dataset.spring ?? null)
       : null;
+    // A folder in the second pane opens in that pane, not in the tab.
+    const target =
+      springed !== null && springed === dropTarget && el?.closest("[data-pane=side]")
+        ? sideTarget(springed)
+        : springed;
     if (target !== spent) spent = null;
     spring.hover(target);
   }
@@ -1353,21 +1475,25 @@
    * filmstrip, which scrolls sideways, its left or right.
    */
   function autoScroll() {
-    if (!dragPos || !fileView) return;
-    const list = fileView.scrollElement();
-    const { dx, dy } = dragScroll(
-      dragPos.x,
-      dragPos.y,
-      list.getBoundingClientRect(),
-      scrollableAxes(list, getComputedStyle(list).overflowX),
-      EDGE,
-      MAX_SCROLL,
-    );
-    if (!dx && !dy) return;
-    const [x, y] = [list.scrollLeft, list.scrollTop];
-    list.scrollBy(dx, dy);
-    // Different items are under the pointer now.
-    if (list.scrollLeft !== x || list.scrollTop !== y) hoverAt(dragPos);
+    if (!dragPos) return;
+    // Either pane's list, whichever the pointer is near.
+    for (const lists of [fileView, showSide ? sidePane : undefined]) {
+      if (!lists) continue;
+      const list = lists.scrollElement();
+      const { dx, dy } = dragScroll(
+        dragPos.x,
+        dragPos.y,
+        list.getBoundingClientRect(),
+        scrollableAxes(list, getComputedStyle(list).overflowX),
+        EDGE,
+        MAX_SCROLL,
+      );
+      if (!dx && !dy) continue;
+      const [x, y] = [list.scrollLeft, list.scrollTop];
+      list.scrollBy(dx, dy);
+      // Different items are under the pointer now.
+      if (list.scrollLeft !== x || list.scrollTop !== y) hoverAt(dragPos);
+    }
   }
 
   async function dragTick() {
@@ -1415,7 +1541,13 @@
   }
 
   /** Where a drop that lands on no folder goes: the folder shown, if one is. */
-  const dropFallback = (): string | null => (noFolder ? null : path);
+  const dropFallback = (at?: { x: number; y: number }): string | null => {
+    // Over the second pane's empty space: its folder, not the tab's.
+    if (showSide && at && document.elementFromPoint(at.x, at.y)?.closest("[data-pane=side]")) {
+      return settings.secondPath || null;
+    }
+    return noFolder ? null : path;
+  };
 
   async function dropPaths(paths: string[], dest: string) {
     // Dropping items back into the folder they came from is a no-op.
@@ -1517,7 +1649,7 @@
     } else if (slot !== null) {
       pinFolders(foldersOf(paths), slot);
     } else {
-      const dest = onFolder ?? dropFallback();
+      const dest = onFolder ?? dropFallback({ x: e.clientX, y: e.clientY });
       if (dest) dropPaths(paths, dest);
     }
   }
@@ -1945,6 +2077,25 @@
       ...action("Cut", hintFor("cut"), cutSelection, any),
       ...action("Paste", hintFor("paste"), paste, !noFolder),
       ...action("Open the clipboard shelf", hintFor("shelf"), () => (shelfOpen = true)),
+      ...action(
+        settings.dualPane ? "Hide the second pane" : "Show a second pane",
+        hintFor("panes"),
+        togglePanes,
+        !place,
+      ),
+      ...action("Move between the two panes", hintFor("paneSwitch"), switchPane, showSide),
+      ...action(
+        "Copy to the other pane",
+        hintFor("toOther"),
+        () => sendToOther([...selection], true, false),
+        showSide && any,
+      ),
+      ...action(
+        "Move to the other pane",
+        "Shift+F5",
+        () => sendToOther([...selection], false, false),
+        showSide && any,
+      ),
       ...action("Open", hintFor("open"), () => open(selected()[0]), one),
       ...action(
         "Open in new tab",
@@ -2356,6 +2507,8 @@
     // Tabs: these work everywhere, including while a text field has focus.
     settings: () => () => showScreen(SETTINGS_PATH),
     // The toolbar draws the inspector button only where an inspector shows (folders, the bin).
+    panes: (e) => (e.repeat || place ? ignore : togglePanes),
+    paneSwitch: (e) => (e.repeat || !showSide ? ignore : switchPane),
     inspector: () =>
       inspectorAvailable
         ? () => updateSettings({ showInspector: !settings.showInspector })
@@ -2383,6 +2536,11 @@
     up: () => goUp,
     upBackspace: () => goUp,
     newFolder: () => newFolder,
+    // Copy to the other pane; Shift moves. Nothing selected, nothing to send.
+    toOther: (e) =>
+      showSide && selection.size && !e.repeat
+        ? () => sendToOther([...selection], !e.shiftKey, false)
+        : ignore,
     // Paste a few of the shelf's items: open the panel to pick them.
     shelf: () => () => (shelfOpen = !shelfOpen),
     // Holding the key must not undo one operation after another.
@@ -2452,6 +2610,8 @@
   }
 
   function onkeydown(e: KeyboardEvent) {
+    // The webview would reload the page, losing every tab and its state.
+    if (e.key === "F5") e.preventDefault();
     // A dialog handles its own keys; nothing behind it may act on them.
     if (
       asking ||
@@ -2483,6 +2643,7 @@
     // On Storage, Cleanup and Settings only Alt+arrows, for history, still reach the list.
     const fileKeys =
       !renaming &&
+      !sideActive &&
       (!place || inBin || (e.altKey && e.key.startsWith("Arrow"))) &&
       target.tagName !== "INPUT" &&
       !target.closest?.("[role=tablist]");
@@ -2525,7 +2686,7 @@
       } else if (payload.type === "over") {
         hoverAt(at);
       } else if (payload.type === "drop") {
-        const dest = folderAt(payload.position) ?? dropFallback();
+        const dest = folderAt(payload.position) ?? dropFallback(at);
         // Settle the trip first: the drop's own transfer then lands in the folder shown.
         dragEnded();
         if (dest) dropPaths(payload.paths, dest);
@@ -2630,7 +2791,12 @@
   {/if}
 {/snippet}
 
-<svelte:window {onkeydown} {oncontextmenu} />
+<svelte:window
+  {onkeydown}
+  {oncontextmenu}
+  onpointerdowncapture={leavePane}
+  onfocusincapture={leavePane}
+/>
 
 <div class="app">
   <Sidebar
@@ -2738,6 +2904,8 @@
       {place}
       inspectorOpen={settings.showInspector}
       oninspector={() => updateSettings({ showInspector: !settings.showInspector })}
+      panesOpen={showSide}
+      onpanes={togglePanes}
     />
     {#if !noFolder && (chipTags.length || tagFilter.length)}
       <TagChips
@@ -2757,98 +2925,126 @@
         onclose={closeSearch}
       />
     {/if}
-    {#if place === "bin"}
-      <BinView onrestored={() => refresh()} />
-    {:else if place === "storage"}
-      <StorageView start={lastFolder || startPath(home)} onopen={(p) => navigate(p)} />
-    {:else if place === "cleanup"}
-      {#key cleanupRun}
-        <CleanupView start={cleanupStart} onopen={(p) => navigate(p)} />
-      {/key}
-    {:else if place === "settings"}
-      <SettingsView
-        {theme}
-        ontheme={(t) => {
-          theme = t;
-          setTheme(t);
-        }}
-        onabout={() => (aboutOpen = true)}
-        onshortcuts={() => (shortcutsOpen = true)}
-        onhelp={() => (helpOpen = true)}
-      />
-    {:else if view === "columns" && !resultView && !search}
-      <ColumnView
-        bind:this={fileView}
-        {path}
-        entries={visible}
-        {selection}
-        cursorIndex={cursor}
-        cut={cutSet}
-        {renaming}
-        showHidden={settings.showHidden}
-        folderTint={tintFor}
-        onitemclick={itemClick}
-        onopen={open}
-        onitemcontextmenu={itemContextMenu}
-        onbackgroundclick={() => selectOnly(-1)}
-        onrename={commitRename}
-        oncancelrename={() => (renaming = null)}
-        ondragout={dragOut}
-        onselectin={goSelect}
-      />
-    {:else if view === "gallery" && !resultView && !search}
-      <div class="stage">
-        <GalleryView
-          bind:this={fileView}
-          entries={visible}
-          {selection}
-          cursorIndex={cursor}
-          cut={cutSet}
-          {renaming}
-          folderTint={tintFor}
-          onitemclick={itemClick}
-          onopen={open}
-          onitemcontextmenu={itemContextMenu}
-          onbackgroundclick={() => selectOnly(-1)}
-          onbackgroundcontextmenu={backgroundContextMenu}
-          onrename={commitRename}
-          oncancelrename={() => (renaming = null)}
-          ondragout={dragOut}
-        />
-        {@render blank()}
+    <div class="panes">
+      <div class="primary" class:active={!sideActive}>
+        {#if place === "bin"}
+          <BinView onrestored={() => refresh()} />
+        {:else if place === "storage"}
+          <StorageView start={lastFolder || startPath(home)} onopen={(p) => navigate(p)} />
+        {:else if place === "cleanup"}
+          {#key cleanupRun}
+            <CleanupView start={cleanupStart} onopen={(p) => navigate(p)} />
+          {/key}
+        {:else if place === "settings"}
+          <SettingsView
+            {theme}
+            ontheme={(t) => {
+              theme = t;
+              setTheme(t);
+            }}
+            onabout={() => (aboutOpen = true)}
+            onshortcuts={() => (shortcutsOpen = true)}
+            onhelp={() => (helpOpen = true)}
+          />
+        {:else if view === "columns" && !resultView && !search}
+          <ColumnView
+            bind:this={fileView}
+            {path}
+            entries={visible}
+            {selection}
+            cursorIndex={cursor}
+            cut={cutSet}
+            {renaming}
+            showHidden={settings.showHidden}
+            folderTint={tintFor}
+            onitemclick={itemClick}
+            onopen={open}
+            onitemcontextmenu={itemContextMenu}
+            onbackgroundclick={() => selectOnly(-1)}
+            onrename={commitRename}
+            oncancelrename={() => (renaming = null)}
+            ondragout={dragOut}
+            onselectin={goSelect}
+          />
+        {:else if view === "gallery" && !resultView && !search}
+          <div class="stage">
+            <GalleryView
+              bind:this={fileView}
+              entries={visible}
+              {selection}
+              cursorIndex={cursor}
+              cut={cutSet}
+              {renaming}
+              folderTint={tintFor}
+              onitemclick={itemClick}
+              onopen={open}
+              onitemcontextmenu={itemContextMenu}
+              onbackgroundclick={() => selectOnly(-1)}
+              onbackgroundcontextmenu={backgroundContextMenu}
+              onrename={commitRename}
+              oncancelrename={() => (renaming = null)}
+              ondragout={dragOut}
+            />
+            {@render blank()}
+          </div>
+        {:else}
+          <div class="stage">
+            <FileView
+              bind:this={fileView}
+              entries={visible}
+              view={view === "columns" ? "list" : view === "gallery" ? "grid" : view}
+              {selection}
+              cut={cutSet}
+              {renaming}
+              onitemclick={itemClick}
+              onbackgroundclick={() => selectOnly(-1)}
+              onopen={open}
+              onrename={commitRename}
+              oncancelrename={() => (renaming = null)}
+              ondragout={dragOut}
+              onitemcontextmenu={itemContextMenu}
+              onbackgroundcontextmenu={backgroundContextMenu}
+              onopentab={(p) => openTab(p, true)}
+              {dropTarget}
+              {springPath}
+              {springMs}
+              {tagColors}
+              folderTint={(p) => tintOf(tagMap[p])}
+              onband={bandSelect}
+              {sort}
+              onsort={sortBy}
+              folderSize={(p) => folderSizes[sizeKey(p)]}
+              cursorIndex={cursor}
+            />
+            {@render blank()}
+          </div>
+        {/if}
       </div>
-    {:else}
-      <div class="stage">
-        <FileView
-          bind:this={fileView}
-          entries={visible}
-          view={view === "columns" ? "list" : view === "gallery" ? "grid" : view}
-          {selection}
-          cut={cutSet}
-          {renaming}
-          onitemclick={itemClick}
-          onbackgroundclick={() => selectOnly(-1)}
-          onopen={open}
-          onrename={commitRename}
-          oncancelrename={() => (renaming = null)}
-          ondragout={dragOut}
-          onitemcontextmenu={itemContextMenu}
-          onbackgroundcontextmenu={backgroundContextMenu}
-          onopentab={(p) => openTab(p, true)}
-          {dropTarget}
-          {springPath}
-          {springMs}
-          {tagColors}
-          folderTint={(p) => tintOf(tagMap[p])}
-          onband={bandSelect}
-          {sort}
-          onsort={sortBy}
-          folderSize={(p) => folderSizes[sizeKey(p)]}
-          cursorIndex={cursor}
-        />
-        {@render blank()}
-      </div>
-    {/if}
+      {#if settings.dualPane}
+        <div class="side" hidden={!showSide}>
+          <SidePane
+            bind:this={sidePane}
+            path={settings.secondPath}
+            fallback={path}
+            showHidden={settings.showHidden}
+            active={sideActive}
+            refreshKey={sideRefresh}
+            otherPath={noFolder ? settings.secondPath : path}
+            {dropTarget}
+            {springPath}
+            {springMs}
+            onpath={(p) => updateSettings({ secondPath: p })}
+            onfocuspane={() => (activePane = "side")}
+            ondragout={dragOut}
+            ontoother={(paths, copy) => sendToOther(paths, copy, true)}
+            ontrash={trashPaneItems}
+            onmenu={sideMenu}
+            onerror={(text) => notify(text, true)}
+            onclose={togglePanes}
+          />
+        </div>
+      {/if}
+    </div>
     <footer class="status" role="status">
       <span
         >{#if !place}{plural(visible.length, "item")}{selection.size
@@ -3063,6 +3259,33 @@
     flex: 1;
     flex-direction: column;
     min-height: 0;
+  }
+
+  /* The folder and, when shown, the second pane beside it. */
+  .panes {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .primary {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  /* Kept mounted while a screen covers it, so its place and history survive. */
+  .side {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .side[hidden] {
+    display: none;
   }
 
   .blank {

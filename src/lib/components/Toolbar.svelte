@@ -25,6 +25,8 @@
     place = null,
     inspectorOpen,
     oninspector,
+    panesOpen = false,
+    onpanes,
   }: {
     path: string;
     view: View;
@@ -51,6 +53,9 @@
     place?: string | null;
     inspectorOpen: boolean;
     oninspector: () => void;
+    /** Whether the second pane is shown, and the button that shows or hides it. */
+    panesOpen?: boolean;
+    onpanes?: () => void;
   } = $props();
 
   let segments = $derived(pathSegments(path));
@@ -380,6 +385,18 @@
       title="Search (Ctrl+F)"
     >
       <Icon name="search" size={16} />
+    </button>
+  {/if}
+  {#if folderControls && onpanes}
+    <button
+      class="icon-btn"
+      class:on={panesOpen}
+      aria-pressed={panesOpen}
+      onclick={onpanes}
+      aria-label="Second pane (F8)"
+      title="Second pane (F8)"
+    >
+      <Icon name="dualPane" size={16} />
     </button>
   {/if}
   {#if inspectorControl}

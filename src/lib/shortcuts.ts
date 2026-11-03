@@ -90,6 +90,14 @@ export const SHORTCUTS = [
     chords: [{ key: "a", ctrl: true, shift: false }],
   },
   {
+    id: "toOther",
+    scope: "files",
+    group: "Files",
+    keys: "F5",
+    does: "Copy to the other pane (Shift+F5: move)",
+    chords: [{ key: "F5", ctrl: false, alt: false }],
+  },
+  {
     id: "newFolder",
     scope: "files",
     group: "Files",
@@ -308,6 +316,22 @@ export const SHORTCUTS = [
     keys: "Ctrl+I",
     does: "Show or hide the inspector",
     chords: [{ key: "i", ctrl: true, shift: false, alt: false }],
+  },
+  {
+    id: "panes",
+    scope: "tabs",
+    group: "Window",
+    keys: "F8",
+    does: "Show or hide the second pane",
+    chords: [{ key: "F8", shift: false, ctrl: false, alt: false }],
+  },
+  {
+    id: "paneSwitch",
+    scope: "tabs",
+    group: "Window",
+    keys: "F6",
+    does: "Move between the two panes",
+    chords: [{ key: "F6", ctrl: false, alt: false }],
   },
   {
     id: "settings",

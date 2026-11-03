@@ -26,6 +26,10 @@ export interface Settings {
   showHidden: boolean;
   /** The inspector panel at the right of the list. */
   showInspector: boolean;
+  /** A second folder beside the first, for moving things between two places. */
+  dualPane: boolean;
+  /** The folder the second pane shows; empty until it is first opened. */
+  secondPath: string;
   defaultView: ViewMode;
   /** How long a drag hovers over a folder or tab before it opens; null turns it off. */
   springDelayMs: number | null;
@@ -65,6 +69,8 @@ export const DEFAULTS: Settings = {
   startLocation: "home",
   showHidden: false,
   showInspector: false,
+  dualPane: false,
+  secondPath: "",
   defaultView: "grid",
   springDelayMs: 2000,
   returnAfterDrop: false,
@@ -105,6 +111,8 @@ function read(): Settings {
         : DEFAULTS.startLocation,
     showHidden: saved.showHidden === true,
     showInspector: saved.showInspector === true,
+    dualPane: saved.dualPane === true,
+    secondPath: typeof saved.secondPath === "string" ? saved.secondPath : "",
     defaultView:
       saved.defaultView === "list" ||
       saved.defaultView === "columns" ||
