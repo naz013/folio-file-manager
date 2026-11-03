@@ -28,7 +28,7 @@ const PROGRESS_EVERY: u64 = 5_000;
 /// How the cache names a folder: lower case and without a trailing separator, like the tag
 /// index, because Windows paths are not case sensitive. (On a case-sensitive file system
 /// `/a/Foo` and `/a/foo` would collide: fine while Windows is the target, to revisit in 1.1.)
-fn key(path: &Path) -> String {
+pub(crate) fn key(path: &Path) -> String {
     let mut lower = path.to_string_lossy().to_lowercase();
     if cfg!(windows) {
         // `a/b` and `a` are the same folder.
@@ -58,7 +58,7 @@ pub const CATEGORIES: [&str; 7] = [
 ];
 
 /// The index into [`CATEGORIES`] of a file name.
-fn category(name: &std::ffi::OsStr) -> usize {
+pub(crate) fn category(name: &std::ffi::OsStr) -> usize {
     let ext = Path::new(name)
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
@@ -78,27 +78,27 @@ fn category(name: &std::ffi::OsStr) -> usize {
 
 /// What was found directly in one folder.
 #[derive(Default, Clone)]
-struct Acc {
-    own: u64,
-    own_files: u64,
+pub(crate) struct Acc {
+    pub own: u64,
+    pub own_files: u64,
     /// Bytes per category.
-    cats: [u64; CATEGORIES.len()],
+    pub cats: [u64; CATEGORIES.len()],
 }
 
-struct Big {
-    path: PathBuf,
-    dir: PathBuf,
-    size: u64,
-    mtime: i64,
+pub(crate) struct Big {
+    pub path: PathBuf,
+    pub dir: PathBuf,
+    pub size: u64,
+    pub mtime: i64,
 }
 
 /// A walked tree: each folder's own contents and the big files.
 #[derive(Default)]
-struct Tree {
-    dirs: HashMap<PathBuf, Acc>,
-    big: Vec<Big>,
-    files: u64,
-    bytes: u64,
+pub(crate) struct Tree {
+    pub dirs: HashMap<PathBuf, Acc>,
+    pub big: Vec<Big>,
+    pub files: u64,
+    pub bytes: u64,
 }
 
 /// The scan was cancelled.
@@ -439,12 +439,27 @@ impl Scanner {
     /// nothing. The slot taken by [`begin`](Self::begin) is released when this returns, or
     /// unwinds. The root is watched from before the walk, and what changed meanwhile is
     /// refreshed after it is stored.
+    #[cfg(test)]
     pub fn scan(
         &self,
         root: &Path,
         cancel: &AtomicBool,
         progress: &dyn Fn(u64, u64),
     ) -> Result<Outcome, String> {
+        self.scan_with(root, cancel, progress, false)
+            .map(|(outcome, _)| outcome)
+    }
+
+    /// Like [`scan`](Self::scan), reading the drive's file table through the elevated helper
+    /// when `fast` is set. When that can't be done the folder is walked instead; the second
+    /// part of the answer is then the reason, for the person to be told.
+    pub fn scan_with(
+        &self,
+        root: &Path,
+        cancel: &AtomicBool,
+        progress: &dyn Fn(u64, u64),
+        fast: bool,
+    ) -> Result<(Outcome, Option<String>), String> {
         struct Slot<'a>(&'a Inner);
         impl Drop for Slot<'_> {
             fn drop(&mut self) {
@@ -458,9 +473,26 @@ impl Scanner {
         let slot = Slot(&self.inner);
         let was_cached = self.size_of(root).is_some();
         let watching = self.watch(root).is_ok();
+        let mut note = None;
         let result = (|| {
-            let Ok(tree) = walk(root, cancel, progress) else {
-                return Ok(Outcome::Cancelled);
+            let found = if fast {
+                match crate::mft::scan(root, cancel, progress) {
+                    crate::mft::Fast::Tree(tree) => Some(tree),
+                    crate::mft::Fast::Cancelled => return Ok(Outcome::Cancelled),
+                    crate::mft::Fast::Fallback(why) => {
+                        note = Some(why);
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            let tree = match found {
+                Some(tree) => tree,
+                None => match walk(root, cancel, progress) {
+                    Ok(tree) => tree,
+                    Err(Cancelled) => return Ok(Outcome::Cancelled),
+                },
             };
             if cancel.load(Ordering::Relaxed) {
                 return Ok(Outcome::Cancelled);
@@ -493,7 +525,7 @@ impl Scanner {
                 self.unwatch(root);
             }
         }
-        result
+        result.map(|outcome| (outcome, note))
     }
 
     fn store(&self, root: &Path, tree: &Tree) -> rusqlite::Result<()> {

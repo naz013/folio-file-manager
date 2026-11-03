@@ -26,6 +26,8 @@ export interface Settings {
   showHidden: boolean;
   /** The inspector panel at the right of the list. */
   showInspector: boolean;
+  /** Windows: scans read the drive's file table through an elevated helper (needs a prompt each time). */
+  fastScan: boolean;
   /** A second folder beside the first, for moving things between two places. */
   dualPane: boolean;
   /** The folder the second pane shows; empty until it is first opened. */
@@ -69,6 +71,7 @@ export const DEFAULTS: Settings = {
   startLocation: "home",
   showHidden: false,
   showInspector: false,
+  fastScan: false,
   dualPane: false,
   secondPath: "",
   defaultView: "grid",
@@ -111,6 +114,7 @@ function read(): Settings {
         : DEFAULTS.startLocation,
     showHidden: saved.showHidden === true,
     showInspector: saved.showInspector === true,
+    fastScan: saved.fastScan === true,
     dualPane: saved.dualPane === true,
     secondPath: typeof saved.secondPath === "string" ? saved.secondPath : "",
     defaultView:

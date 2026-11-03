@@ -9,6 +9,14 @@ mod commands;
 mod crash;
 mod fs;
 mod journal;
+#[cfg_attr(
+    not(windows),
+    allow(
+        dead_code,
+        reason = "the volume reader runs only on Windows; its parser is tested everywhere"
+    )
+)]
+mod mft;
 mod ops;
 mod perf;
 mod platform;
@@ -148,6 +156,20 @@ impl<R: tauri::Runtime> Protocols for tauri::Builder<R> {
                 });
             },
         )
+    }
+}
+
+/// Runs the elevated fast-scan helper when Folio was started as one (ADR 0004), and returns the
+/// exit code; `None` for a normal start. Called before anything else, so the helper opens no
+/// window and touches no settings.
+pub fn helper_entry() -> Option<i32> {
+    #[cfg(windows)]
+    {
+        mft::helper::run_if_requested()
+    }
+    #[cfg(not(windows))]
+    {
+        None
     }
 }
 

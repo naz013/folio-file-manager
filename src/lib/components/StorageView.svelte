@@ -15,6 +15,7 @@
     type SizedDir,
   } from "$lib/api/fs";
   import { formatSize } from "$lib/format";
+  import { settings } from "$lib/settings.svelte";
   import { squarify } from "$lib/treemap";
 
   let {
@@ -52,6 +53,8 @@
   let scanning = $state(false);
   let seen = $state(0);
   let error = $state("");
+  /** Why the last fast scan was not used, when it fell back to walking. */
+  let note = $state("");
 
   const norm = (p: string) => p.toLowerCase().replace(/\//g, "\\").replace(/\\+$/, "");
   /** Scanned folders that are not a whole drive, so they can be looked at too. */
@@ -162,7 +165,7 @@
     scanning = true;
     seen = 0;
     try {
-      await scanStart(root);
+      await scanStart(root, settings.fastScan);
     } catch (e) {
       scanning = false;
       error = String(e);
@@ -177,6 +180,7 @@
     const unlistenDone = onScanDone(async (d) => {
       scanning = false;
       if (d.error) error = d.error;
+      note = d.note ? `Fast scan was not used: ${d.note}.` : "";
       await refreshScanned();
       if (norm(d.root) === norm(root)) load(dir);
     });
@@ -224,6 +228,8 @@
 
   {#if error}
     <p class="error" role="alert">{error}</p>
+  {:else if note}
+    <p class="note" role="status">{note}</p>
   {/if}
 
   {#if !isScanned && !scanning}

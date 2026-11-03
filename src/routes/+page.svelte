@@ -182,8 +182,12 @@
     // Set first: the scan can end before the call returns.
     scanning = true;
     try {
-      await scanStart(path);
-      notify("Scanning folder sizes in the background");
+      await scanStart(path, settings.fastScan);
+      notify(
+        settings.fastScan
+          ? "Windows may ask for permission to read the drive's file table"
+          : "Scanning folder sizes in the background",
+      );
     } catch (e) {
       scanning = false;
       notify(String(e), true);
@@ -2665,7 +2669,11 @@
       loadFolderSizes(path);
       if (d.error) notify(`Scan failed: ${d.error}`, true);
       else if (d.cancelled) notify("Scan cancelled");
-      else notify(`Scanned ${plural(d.files, "file")}, ${formatSize(d.bytes)}`);
+      else {
+        const done = `Scanned ${plural(d.files, "file")}, ${formatSize(d.bytes)}${d.fast ? " (fast scan)" : ""}`;
+        // A fast scan that fell back still scanned: say why it was the slow way.
+        notify(d.note ? `${done}. Fast scan was not used: ${d.note}` : done);
+      }
     });
     const unlistenBlocked = onCloseBlocked(() =>
       notify("Operations are still running. Wait for them, or cancel them, before closing.", true),

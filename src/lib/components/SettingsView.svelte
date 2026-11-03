@@ -15,6 +15,9 @@
   import { themes, type Theme } from "$lib/theme";
   import { checkForUpdate, updateStatusText, updates } from "$lib/updates.svelte";
 
+  /** Fast scan reads the NTFS file table, so only Windows offers it. */
+  const onWindows = navigator.userAgent.includes("Windows");
+
   let {
     theme,
     ontheme,
@@ -264,6 +267,29 @@
         />
       </div>
     </section>
+
+    {#if onWindows}
+      <section>
+        <h3>Disk scans</h3>
+
+        <div class="row">
+          <span id="fast-label">Fast scan (administrator)</span>
+          <input
+            type="checkbox"
+            class="switch"
+            role="switch"
+            aria-labelledby="fast-label"
+            checked={settings.fastScan}
+            onchange={(e) => updateSettings({ fastScan: e.currentTarget.checked })}
+          />
+        </div>
+        <p class="note">
+          Reads an NTFS drive's file table, so a whole drive is scanned in seconds. Windows asks for
+          administrator permission each time a scan starts, and only the scan runs with it: Folio
+          itself does not. If you say no, or the drive is not NTFS, the folders are walked as usual.
+        </p>
+      </section>
+    {/if}
 
     <section>
       <h3>Motion</h3>

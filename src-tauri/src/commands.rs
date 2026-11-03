@@ -1150,12 +1150,16 @@ struct ScanDone {
     bytes: u64,
     cancelled: bool,
     error: Option<String>,
+    /// The scan read the drive's file table (fast scan) rather than walking it.
+    fast: bool,
+    /// Why a fast scan fell back to walking, when it did.
+    note: Option<String>,
 }
 
 /// Starts scanning `root` in the background; progress and the end are events for every
 /// window. One scan runs at a time.
 #[tauri::command]
-pub fn scan_start(app: tauri::AppHandle, root: String) -> CmdResult<()> {
+pub fn scan_start(app: tauri::AppHandle, root: String, fast: Option<bool>) -> CmdResult<()> {
     use crate::scan::Outcome;
     use tauri::Emitter;
     let flag = app
@@ -1175,11 +1179,12 @@ pub fn scan_start(app: tauri::AppHandle, root: String) -> CmdResult<()> {
                 },
             );
         };
-        let result = scanner.scan(&root_path, &flag, &progress);
-        let (files, bytes, cancelled, error) = match result {
-            Ok(Outcome::Done { files, bytes }) => (files, bytes, false, None),
-            Ok(Outcome::Cancelled) => (0, 0, true, None),
-            Err(e) => (0, 0, false, Some(e)),
+        let fast = fast.unwrap_or(false);
+        let result = scanner.scan_with(&root_path, &flag, &progress, fast);
+        let (files, bytes, cancelled, error, note) = match result {
+            Ok((Outcome::Done { files, bytes }, note)) => (files, bytes, false, None, note),
+            Ok((Outcome::Cancelled, _)) => (0, 0, true, None, None),
+            Err(e) => (0, 0, false, Some(e), None),
         };
         let _ = app.emit(
             "scan-done",
@@ -1189,6 +1194,8 @@ pub fn scan_start(app: tauri::AppHandle, root: String) -> CmdResult<()> {
                 bytes,
                 cancelled,
                 error,
+                fast: fast && note.is_none(),
+                note,
             },
         );
     });

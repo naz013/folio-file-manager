@@ -176,9 +176,16 @@ export interface ScanProgress {
 export interface ScanDone extends ScanProgress {
   cancelled: boolean;
   error: string | null;
+  /** The drive's file table was read (fast scan) instead of walking the folders. */
+  fast: boolean;
+  /** Why a fast scan was not used and the folders were walked, when that happened. */
+  note: string | null;
 }
-/** Scans a folder in the background; progress and the end arrive as events. */
-export const scanStart = (root: string) => invoke<void>("scan_start", { root });
+/**
+ * Scans a folder in the background; progress and the end arrive as events. `fast` reads the
+ * drive's file table through an elevated helper, after Windows' own permission prompt.
+ */
+export const scanStart = (root: string, fast = false) => invoke<void>("scan_start", { root, fast });
 export const scanCancel = () => invoke<void>("scan_cancel");
 /** The subfolders of a scanned folder, largest first. */
 export const scanChildren = (dir: string) => invoke<SizedDir[]>("scan_children", { dir });
