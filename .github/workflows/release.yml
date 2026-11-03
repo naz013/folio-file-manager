@@ -29,6 +29,14 @@ jobs:
         run: |
           v=$(node -p "require('./src-tauri/tauri.conf.json').version")
           [ "${GITHUB_REF_NAME}" = "v$v" ] || { echo "tag ${GITHUB_REF_NAME} != v$v"; exit 1; }
+      # The notes the app shows after an update are the release's own: the body of the draft
+      # release if one was written for the tag, else GitHub's generated notes. They are
+      # built into the app so they show offline.
+      - name: Bundle the release notes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/release-notes.mjs "${GITHUB_REF_NAME}"
       # Signing is on when the certificate secrets exist, and the build still works without
       # them (an unsigned installer, which SmartScreen warns about). The certificate is
       # imported for this job only; the runner is thrown away afterwards.

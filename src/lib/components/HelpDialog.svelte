@@ -7,10 +7,13 @@
   let {
     onclose,
     onshortcuts,
+    onwhatsnew,
   }: {
     onclose: () => void;
     /** Show the list of keyboard shortcuts in its place. */
     onshortcuts: () => void;
+    /** Show the notes of this version. */
+    onwhatsnew: () => void;
   } = $props();
 
   let input: HTMLInputElement;
@@ -91,6 +94,7 @@
 
     <footer>
       <button onclick={onshortcuts}>Keyboard shortcuts</button>
+      <button onclick={onwhatsnew}>What's new</button>
       <button onclick={replayTour}>Replay the tour</button>
     </footer>
   </div>

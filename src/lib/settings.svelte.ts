@@ -52,6 +52,8 @@ export interface Settings {
   updateSkipped: string;
   /** Show the hints in empty areas that say what to do there. */
   showHints: boolean;
+  /** The version whose release notes were last offered, so they show once per version. */
+  lastSeenVersion: string;
 }
 
 export const DEFAULTS: Settings = {
@@ -73,6 +75,7 @@ export const DEFAULTS: Settings = {
   updateLastCheck: 0,
   updateSkipped: "",
   showHints: true,
+  lastSeenVersion: "",
 };
 
 /** The allowed delay closest to `ms`, so a hand-edited value still shows in the list. */
@@ -135,6 +138,7 @@ function read(): Settings {
         : DEFAULTS.updateLastCheck,
     updateSkipped: typeof saved.updateSkipped === "string" ? saved.updateSkipped : "",
     showHints: saved.showHints !== false,
+    lastSeenVersion: typeof saved.lastSeenVersion === "string" ? saved.lastSeenVersion : "",
     pinnedFolders: Array.isArray(saved.pinnedFolders)
       ? saved.pinnedFolders.filter(
           (p, i, all): p is string => typeof p === "string" && !!p && all.indexOf(p) === i,

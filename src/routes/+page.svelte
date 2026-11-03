@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
+  import { getVersion } from "@tauri-apps/api/app";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import {
@@ -123,12 +124,15 @@
     updateSettings,
   } from "$lib/settings.svelte";
   import SettingsView from "$lib/components/SettingsView.svelte";
+  import WhatsNewDialog from "$lib/components/WhatsNewDialog.svelte";
   import HelpDialog from "$lib/components/HelpDialog.svelte";
   import OnboardingTour from "$lib/components/OnboardingTour.svelte";
   import ImageToolsDialog from "$lib/components/ImageToolsDialog.svelte";
   import PdfToolsDialog from "$lib/components/PdfToolsDialog.svelte";
   import UpdateBanner from "$lib/components/UpdateBanner.svelte";
   import { checkForUpdate } from "$lib/updates.svelte";
+  import { bundledNotes } from "$lib/notes";
+  import { shouldShowNotes } from "$lib/whatsnew";
   import CrashPrompt from "$lib/components/CrashPrompt.svelte";
   import StorageView from "$lib/components/StorageView.svelte";
   import CleanupView from "$lib/components/CleanupView.svelte";
@@ -1459,6 +1463,40 @@
   /** The keyboard shortcuts list. */
   let shortcutsOpen = $state(false);
   let helpOpen = $state(false);
+  /** The version whose release notes are shown, or "" while they are not. */
+  let notesVersion = $state("");
+  let notesChecked = false;
+
+  /** This build's version, read once so the notes can open without waiting for it. */
+  let appVersion = "";
+  getVersion().then(
+    (v) => (appVersion = v),
+    () => {},
+  );
+
+  function showNotes() {
+    // Without a version there is nothing to name; the dialog would have no notes either.
+    if (appVersion) notesVersion = appVersion;
+  }
+
+  // Once the tab is restored and nothing else is asking for attention, a new version's notes
+  // show once. A fresh install (the tour has not been seen) is only marked as seen.
+  $effect(() => {
+    if (!restored || !crashKnown || askCrash || notesChecked) return;
+    notesChecked = true;
+    getVersion().then(
+      (version) => {
+        const notes = bundledNotes(version);
+        const seen = settings.lastSeenVersion;
+        if (shouldShowNotes({ onboarded: settings.onboarded, seen, version, notes })) {
+          notesVersion = version;
+        } else if (seen !== version) {
+          updateSettings({ lastSeenVersion: version });
+        }
+      },
+      () => {},
+    );
+  });
 
   // Nothing selected (it was moved or deleted meanwhile): nothing to tag.
   $effect(() => {
@@ -2286,6 +2324,7 @@
       aboutOpen ||
       shortcutsOpen ||
       helpOpen ||
+      !!notesVersion ||
       bulkOpen ||
       paletteOpen
     )
@@ -2711,12 +2750,26 @@
     />
   {/if}
 
+  {#if notesVersion}
+    <WhatsNewDialog
+      version={notesVersion}
+      onclose={() => {
+        updateSettings({ lastSeenVersion: notesVersion });
+        notesVersion = "";
+      }}
+    />
+  {/if}
+
   {#if helpOpen}
     <HelpDialog
       onclose={() => (helpOpen = false)}
       onshortcuts={() => {
         helpOpen = false;
         shortcutsOpen = true;
+      }}
+      onwhatsnew={() => {
+        helpOpen = false;
+        showNotes();
       }}
     />
   {/if}
@@ -2726,7 +2779,13 @@
   {/if}
 
   {#if aboutOpen}
-    <AboutDialog onclose={() => (aboutOpen = false)} />
+    <AboutDialog
+      onclose={() => (aboutOpen = false)}
+      onwhatsnew={() => {
+        aboutOpen = false;
+        showNotes();
+      }}
+    />
   {/if}
 
   {#if smartDialog}

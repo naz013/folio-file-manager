@@ -7,7 +7,7 @@
   import { checkForUpdate, updateStatusText, updates } from "$lib/updates.svelte";
   import Icon from "./Icon.svelte";
 
-  let { onclose }: { onclose: () => void } = $props();
+  let { onclose, onwhatsnew }: { onclose: () => void; onwhatsnew: () => void } = $props();
 
   let dialog: HTMLElement;
   /** Where focus was, so closing the dialog gives it back. */
@@ -114,6 +114,7 @@
       >
         Check for updates
       </button>
+      <button onclick={onwhatsnew}>What's new</button>
     </div>
     <p class="status" role="status">{updateStatus}</p>
 
