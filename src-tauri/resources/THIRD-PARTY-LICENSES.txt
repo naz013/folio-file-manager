@@ -1,0 +1,1 @@
+Third-party licenses are written here when the installer is built (npm run licenses).

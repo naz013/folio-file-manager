@@ -37,6 +37,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/release-notes.mjs "${GITHUB_REF_NAME}"
+      # The licenses of what is built in: shown in About and put next to the app. The build
+      # fails here when a dependency has an unknown or not allowed license.
+      - name: Collect the third-party licenses
+        run: npm run licenses
       # Signing is on when the certificate secrets exist, and the build still works without
       # them (an unsigned installer, which SmartScreen warns about). The certificate is
       # imported for this job only; the runner is thrown away afterwards.

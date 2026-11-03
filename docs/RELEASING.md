@@ -47,6 +47,20 @@ Every push to `main` also builds an unsigned installer and `folio.exe` in the **
 (job `build-windows`, after the checks pass). Download them from the run page, under Artifacts;
 they are kept for 14 days. They are for trying a commit, not for users: no signing, no update files.
 
+## Third-party licenses
+
+`scripts/licenses.mjs` reads cargo and npm metadata for what is built into the Windows app
+(production npm packages, normal Rust dependencies) and writes `src/lib/licenses.json` (About ›
+Open-source licenses) and `src-tauri/resources/THIRD-PARTY-LICENSES.txt` (installed next to
+the app). Both are committed as empty stubs; the **Release** workflow and the CI build job
+regenerate them, and the CI `licenses` job runs `npm run licenses:check` on every push.
+
+- The build fails when a dependency has no license or one that is not in
+  `scripts/licenses-policy.mjs`. Allowing a new license is a decision: add it there, with a reason.
+- A package that ships no license file gets the standard text of its license with the authors it
+  lists (a warning says so); if that cannot be made, the build fails.
+- Do not commit the generated files; `git checkout` them after a local run.
+
 ## Making a release
 
 1. Set the new version in `package.json`, `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`.

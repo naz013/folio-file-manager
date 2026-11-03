@@ -27,6 +27,22 @@ jobs:
       - run: npm run test:js
       - run: npm run build
 
+  licenses:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      # Fails when a dependency has an unknown or not allowed license.
+      - run: npm run licenses:check
+
   rust-linux:
     runs-on: ubuntu-latest
     steps:
@@ -86,6 +102,8 @@ jobs:
         with:
           workspaces: src-tauri
       - run: npm ci
+      - name: Collect the third-party licenses
+        run: npm run licenses
       - name: Build the installer
         run: npm run tauri build -- --bundles nsis
       - uses: actions/upload-artifact@v7

@@ -6,6 +6,7 @@
   import { trapFocus } from "$lib/focus";
   import { checkForUpdate, updateStatusText, updates } from "$lib/updates.svelte";
   import Icon from "./Icon.svelte";
+  import LicensesDialog from "./LicensesDialog.svelte";
 
   let { onclose, onwhatsnew }: { onclose: () => void; onwhatsnew: () => void } = $props();
 
@@ -24,6 +25,7 @@
     };
   });
 
+  let licensesOpen = $state(false);
   let info = $state<AppInfo | null>(null);
   let error = $state("");
   let copied = $state(false);
@@ -115,6 +117,7 @@
         Check for updates
       </button>
       <button onclick={onwhatsnew}>What's new</button>
+      <button onclick={() => (licensesOpen = true)}>Open-source licenses</button>
     </div>
     <p class="status" role="status">{updateStatus}</p>
 
@@ -135,6 +138,10 @@
     </footer>
   </div>
 </div>
+
+{#if licensesOpen}
+  <LicensesDialog onclose={() => (licensesOpen = false)} />
+{/if}
 
 <style>
   .backdrop {
