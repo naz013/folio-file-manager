@@ -51,14 +51,29 @@ async fn blocking<T: Send + 'static>(
 #[tauri::command]
 pub async fn list_dir(path: String) -> CmdResult<Vec<Entry>> {
     let dir = PathBuf::from(&path);
-    match slow::LISTINGS
-        .within(slow::LISTING, move || fs::list_dir(&dir))
-        .await
-    {
-        Some(listed) => listed.map_err(|e| format!("Cannot open {path}: {e}")),
-        None => Err(format!(
+    let outcome = slow::LISTINGS
+        .run(slow::LISTING, move || fs::list_dir(&dir))
+        .await;
+    listing_result(&path, outcome)
+}
+
+/// What a listing's outcome means to the person. A listing that never got a place says nothing
+/// about its own folder: it is the lane that is full, of slow folders somewhere else.
+fn listing_result(
+    path: &str,
+    outcome: slow::Outcome<std::io::Result<Vec<Entry>>>,
+) -> CmdResult<Vec<Entry>> {
+    match outcome {
+        slow::Outcome::Done(listed) => listed.map_err(|e| format!("Cannot open {path}: {e}")),
+        slow::Outcome::TimedOut => Err(format!(
             "{path} is not answering. If it is a network folder, check the connection."
         )),
+        slow::Outcome::Busy => Err(
+            "Folio is busy with slow folders, probably on a network drive \
+             that is not answering. Try again in a moment."
+                .into(),
+        ),
+        slow::Outcome::Failed => Err(format!("Cannot open {path}: the listing failed")),
     }
 }
 
@@ -2288,6 +2303,21 @@ pub fn perf_report(event: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_listing_that_started_and_timed_out_names_the_folder() {
+        let msg = listing_result("D:/share", slow::Outcome::TimedOut).unwrap_err();
+        assert!(msg.contains("D:/share is not answering"), "{msg}");
+    }
+
+    #[test]
+    fn a_listing_that_never_got_a_place_names_the_cause_not_the_folder() {
+        let msg = listing_result("C:/fine", slow::Outcome::Busy).unwrap_err();
+        assert!(msg.contains("busy with slow folders"), "{msg}");
+        assert!(!msg.contains("C:/fine"), "{msg}");
+        assert!(!msg.contains("not answering. If"), "{msg}");
+        assert!(!msg.contains("  "), "no run of spaces: {msg}");
+    }
 
     #[test]
     fn replacing_an_original_that_changed_leaves_it_alone_and_no_staged_file_behind() {

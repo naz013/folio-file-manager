@@ -2,6 +2,7 @@
 //! sleeping NAS. Such a call can block for minutes and cannot be cancelled, so it runs on
 //! its own thread and the caller stops waiting after a limit; the window stays usable.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tokio::sync::Semaphore;
@@ -41,6 +42,19 @@ pub static AUTO_MEASURES: LazyLock<Lane> = LazyLock::new(|| Lane::new(1));
 /// few dozen at a time.
 pub static THUMBNAILS: LazyLock<Lane> = LazyLock::new(|| Lane::new(32));
 
+/// How a call in a [`Lane`] ended. The cause matters to the message: a call that never got a
+/// place says the app is busy, one that started and went quiet says its disk is not answering.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Outcome<T> {
+    Done(T),
+    /// No place came free within the limit: the lane is full of other, slower calls.
+    Busy,
+    /// It started and did not finish within the limit.
+    TimedOut,
+    /// It panicked.
+    Failed,
+}
+
 /// A kind of call with a cap on how many run at once, stuck ones included. A stuck call
 /// keeps its thread, and the pool is shared with file operations, so thumbnails from a dead
 /// share must not be able to fill it. Calls past the cap wait their turn, inside their time
@@ -58,26 +72,52 @@ impl Lane {
     }
 
     /// Runs `work` off the calling thread and waits at most `limit` for it, a wait for a free
-    /// place included. `None` means it did not finish in time or panicked. A late call is not
-    /// stopped: its thread ends when the operating system finally answers, and its result is
-    /// dropped.
+    /// place included. `None` means it did not finish in time or panicked; [`Lane::run`] says
+    /// which. A late call is not stopped: its thread ends when the operating system finally
+    /// answers, and its result is dropped.
     pub async fn within<T: Send + 'static>(
         &self,
         limit: Duration,
         work: impl FnOnce() -> T + Send + 'static,
     ) -> Option<T> {
+        match self.run(limit, work).await {
+            Outcome::Done(value) => Some(value),
+            _ => None,
+        }
+    }
+
+    /// Like [`Lane::within`], but says why a call that did not finish did not.
+    pub async fn run<T: Send + 'static>(
+        &self,
+        limit: Duration,
+        work: impl FnOnce() -> T + Send + 'static,
+    ) -> Outcome<T> {
         let permits = Arc::clone(&self.permits);
+        // Set when the work begins, not when the place is taken: a call that holds a place but
+        // never ran (the blocking pool was full) is busy, not timed out.
+        let started = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&started);
         let turn = async move {
-            let place = permits.acquire_owned().await.ok()?;
+            let Ok(place) = permits.acquire_owned().await else {
+                return Outcome::Failed;
+            };
             // The place goes with the work, so a stuck call keeps its place to the end.
-            tauri::async_runtime::spawn_blocking(move || {
+            match tauri::async_runtime::spawn_blocking(move || {
                 let _place = place;
+                flag.store(true, Ordering::SeqCst);
                 work()
             })
             .await
-            .ok()
+            {
+                Ok(value) => Outcome::Done(value),
+                Err(_) => Outcome::Failed,
+            }
         };
-        tokio::time::timeout(limit, turn).await.ok()?
+        match tokio::time::timeout(limit, turn).await {
+            Ok(outcome) => outcome,
+            Err(_) if started.load(Ordering::SeqCst) => Outcome::TimedOut,
+            Err(_) => Outcome::Busy,
+        }
     }
 }
 
@@ -135,21 +175,42 @@ mod tests {
     }
 
     #[test]
+    fn says_why_a_call_did_not_finish() {
+        let lane = Lane::new(1);
+        // Started, then went quiet: timed out, and it keeps the only place.
+        let slow = run(lane.run(Duration::from_millis(250), || {
+            std::thread::sleep(Duration::from_millis(1200));
+        }));
+        assert_eq!(slow, Outcome::TimedOut);
+        // Never got a place: busy, not timed out.
+        let waiting = run(lane.run(Duration::from_millis(60), || ()));
+        assert_eq!(waiting, Outcome::Busy);
+    }
+
+    #[test]
+    fn a_finished_call_is_done_and_a_panic_is_failed() {
+        let lane = Lane::new(2);
+        assert_eq!(
+            run(lane.run(Duration::from_secs(5), || 3)),
+            Outcome::Done(3)
+        );
+        let failed: Outcome<()> = run(lane.run(Duration::from_secs(5), || panic!("boom")));
+        assert_eq!(failed, Outcome::Failed);
+    }
+
+    #[test]
     fn a_stuck_call_keeps_its_place_and_others_give_up_waiting() {
         let lane = Lane::new(1);
         let stuck = run(lane.within(Duration::from_millis(30), || {
             std::thread::sleep(Duration::from_millis(600));
         }));
         assert_eq!(stuck, None);
-        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ran = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&ran);
         let got = run(lane.within(Duration::from_millis(60), move || {
-            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            flag.store(true, Ordering::SeqCst);
         }));
         assert_eq!(got, None, "gave up waiting for a place");
-        assert!(
-            !ran.load(std::sync::atomic::Ordering::SeqCst),
-            "and never ran"
-        );
+        assert!(!ran.load(Ordering::SeqCst), "and never ran");
     }
 }
