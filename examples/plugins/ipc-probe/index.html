@@ -73,6 +73,19 @@
         out.append(li);
         return undefined;
       });
+      // Tauri's own helper, which Windows puts in every frame. Its answer can't be seen from here
+      // (it goes to Folio's page), so the sign is outside: an Explorer window on C:\Windows.
+      attempt("__TAURI_INTERNALS__.invoke(open_path)", () => {
+        const t = window.__TAURI_INTERNALS__;
+        if (!t || typeof t.invoke !== "function") return undefined;
+        t.invoke("open_path", { path: "C:\\Windows" }).catch(() => {});
+        const li = document.createElement("li");
+        li.className = "bad";
+        li.textContent =
+          "CHECK: invoke(open_path) was sent. If an Explorer window opened on C:\\Windows, the sandbox is OPEN";
+        out.append(li);
+        return undefined;
+      });
       // Tauri's custom-protocol channel: the policy must refuse the request.
       for (const url of ["http://ipc.localhost/plugins_folder", "ipc://localhost/plugins_folder"]) {
         attempt(`fetch ${url}`, async () => {
