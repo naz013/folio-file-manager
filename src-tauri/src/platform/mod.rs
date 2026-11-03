@@ -183,7 +183,13 @@ pub fn clipboard_take_files() -> Option<(Vec<std::path::PathBuf>, bool)> {
 
 /// Renders the OS thumbnail (or file icon when no thumbnail exists) as PNG,
 /// fitted into a `size`×`size` box.
+///
+/// A file whose content is only in the cloud gets none: drawing one reads the file, and that
+/// would download it. Every caller is covered here.
 pub fn thumbnail_png(path: &Path, size: u32) -> Result<Vec<u8>, String> {
+    if crate::cleanup::might_download(path) {
+        return Err("not on this computer".into());
+    }
     #[cfg(windows)]
     {
         win::thumbnail_png(path, size)

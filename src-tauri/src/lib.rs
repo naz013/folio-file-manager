@@ -17,6 +17,7 @@ mod scan;
 mod search;
 mod session;
 mod shelf;
+mod slow;
 mod tags;
 mod thumbs;
 mod watch;
@@ -130,8 +131,8 @@ impl<R: tauri::Runtime> Protocols for tauri::Builder<R> {
         .register_asynchronous_uri_scheme_protocol(
             thumbs::SCHEME,
             |_ctx, request, responder| {
-                tauri::async_runtime::spawn_blocking(move || {
-                    responder.respond(thumbs::handle(&request));
+                tauri::async_runtime::spawn(async move {
+                    responder.respond(thumbs::handle(request).await);
                 });
             },
         )

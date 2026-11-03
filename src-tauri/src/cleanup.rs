@@ -246,6 +246,18 @@ pub(crate) fn is_cloud_only(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok_and(|m| cloud_only_attributes(&m))
 }
 
+/// Whether drawing or reading `path` for show might download it: it is a placeholder, a link
+/// leads to one, or its attributes cannot be read to tell. For things done unasked, such as
+/// thumbnails; cleanup resolves links on its own and keeps [`is_cloud_only`].
+pub(crate) fn might_download(path: &Path) -> bool {
+    let own = std::fs::symlink_metadata(path);
+    let target = std::fs::metadata(path);
+    match (own, target) {
+        (Ok(own), Ok(target)) => cloud_only_attributes(&own) || cloud_only_attributes(&target),
+        _ => true,
+    }
+}
+
 /// Seconds in a day.
 const DAY: i64 = 86_400;
 

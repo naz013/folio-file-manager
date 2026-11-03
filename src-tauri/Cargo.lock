@@ -1318,6 +1318,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-updater",
  "tempfile",
+ "tokio",
  "trash",
  "windows 0.62.2",
  "zip",

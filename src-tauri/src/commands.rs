@@ -16,6 +16,7 @@ use crate::scan::{self, BigFile, Measured, RootInfo, Scanner, Sized};
 use crate::search::{self, Hit, Query};
 use crate::session::{Session, WindowTabs};
 use crate::shelf::{Shelf, ShelfItem};
+use crate::slow;
 use crate::tags::{Tag, Tags};
 use crate::watch::DirWatcher;
 use serde::{Deserialize, Serialize};
@@ -44,9 +45,17 @@ async fn blocking<T: Send + 'static>(
         .map_err(|e| e.to_string())?
 }
 
+/// Lists a folder off the main thread and gives up after a while: a network share that does
+/// not answer must not freeze the window, and the person can go somewhere else meanwhile.
 #[tauri::command]
-pub fn list_dir(path: String) -> CmdResult<Vec<Entry>> {
-    fs::list_dir(&PathBuf::from(&path)).map_err(|e| format!("Cannot open {path}: {e}"))
+pub async fn list_dir(path: String) -> CmdResult<Vec<Entry>> {
+    let dir = PathBuf::from(&path);
+    match slow::within(slow::LISTING, move || fs::list_dir(&dir)).await {
+        Some(listed) => listed.map_err(|e| format!("Cannot open {path}: {e}")),
+        None => Err(format!(
+            "{path} is not answering. If it is a network folder, check the connection."
+        )),
+    }
 }
 
 #[tauri::command]
@@ -57,16 +66,22 @@ pub fn home_dir(app: tauri::AppHandle) -> CmdResult<String> {
         .map_err(|e| e.to_string())
 }
 
+/// Starts watching a folder. Starting a watch on a network folder waits for the server, so it
+/// runs on the blocking pool: a command that only calls itself `async` would hold one of the
+/// runtime's few worker threads, and with them the timers that end the other waits.
 #[tauri::command]
-pub fn watch_dir(
+pub async fn watch_dir(
     app: tauri::AppHandle,
     window: tauri::WebviewWindow,
-    watcher: tauri::State<'_, DirWatcher>,
     path: String,
 ) -> CmdResult<()> {
-    watcher
-        .watch(app, window.label(), &PathBuf::from(path))
-        .map_err(|e| e.to_string())
+    let label = window.label().to_owned();
+    blocking(move || {
+        app.state::<DirWatcher>()
+            .watch(app.clone(), &label, &PathBuf::from(path))
+            .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 /// Tabs to restore in the calling window, if the session has any for it.
@@ -139,9 +154,11 @@ pub async fn open_window(
     })
 }
 
+// On the blocking pool: opening a file on a slow share, or one the shell must fetch, waits.
 #[tauri::command]
-pub fn open_path(path: String) -> CmdResult<()> {
-    tauri_plugin_opener::open_path(&path, None::<&str>).map_err(|e| e.to_string())
+pub async fn open_path(path: String) -> CmdResult<()> {
+    blocking(move || tauri_plugin_opener::open_path(&path, None::<&str>).map_err(|e| e.to_string()))
+        .await
 }
 
 /// Starts a native OS drag of `paths`, so files can be dropped into Explorer and other apps.
@@ -152,11 +169,16 @@ pub async fn start_drag(window: tauri::WebviewWindow, paths: Vec<String>) -> Cmd
     {
         let files: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
         let first = files.first().cloned().ok_or("Nothing to drag")?;
-        let preview = blocking(move || {
-            crate::platform::thumbnail_png(&first, 64)
-                .or_else(|_| crate::platform::encode_png(1, 1, &[0, 0, 0, 0]))
+        // A cloud-only file drags with a blank image; so does a folder, whose picture the shell
+        // may build from the files inside it.
+        let preview = slow::within(slow::THUMBNAIL, move || {
+            let draw = !first.is_dir();
+            draw.then(|| crate::platform::thumbnail_png(&first, 64))
+                .and_then(Result::ok)
+                .map_or_else(|| crate::platform::encode_png(1, 1, &[0, 0, 0, 0]), Ok)
         })
-        .await?;
+        .await
+        .ok_or("The file is not answering")??;
         let target = window.clone();
         window
             .run_on_main_thread(move || {
