@@ -16,11 +16,12 @@ const MAX_SIZE: u32 = 512;
 /// 404, which the page turns into the plain file icon.
 pub async fn handle(request: Request<Vec<u8>>) -> Response<Vec<u8>> {
     let made = match parse(request.uri()) {
-        Ok((path, size)) => slow::within(slow::THUMBNAIL, move || {
-            platform::thumbnail_png(&path, size)
-        })
-        .await
-        .unwrap_or_else(|| Err("took too long".into())),
+        Ok((path, size)) => slow::THUMBNAILS
+            .within(slow::THUMBNAIL, move || {
+                platform::thumbnail_png(&path, size)
+            })
+            .await
+            .unwrap_or_else(|| Err("took too long".into())),
         Err(e) => Err(e),
     };
     match made {

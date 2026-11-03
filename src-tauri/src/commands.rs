@@ -50,7 +50,10 @@ async fn blocking<T: Send + 'static>(
 #[tauri::command]
 pub async fn list_dir(path: String) -> CmdResult<Vec<Entry>> {
     let dir = PathBuf::from(&path);
-    match slow::within(slow::LISTING, move || fs::list_dir(&dir)).await {
+    match slow::LISTINGS
+        .within(slow::LISTING, move || fs::list_dir(&dir))
+        .await
+    {
         Some(listed) => listed.map_err(|e| format!("Cannot open {path}: {e}")),
         None => Err(format!(
             "{path} is not answering. If it is a network folder, check the connection."
@@ -171,14 +174,15 @@ pub async fn start_drag(window: tauri::WebviewWindow, paths: Vec<String>) -> Cmd
         let first = files.first().cloned().ok_or("Nothing to drag")?;
         // A cloud-only file drags with a blank image; so does a folder, whose picture the shell
         // may build from the files inside it.
-        let preview = slow::within(slow::THUMBNAIL, move || {
-            let draw = !first.is_dir();
-            draw.then(|| crate::platform::thumbnail_png(&first, 64))
-                .and_then(Result::ok)
-                .map_or_else(|| crate::platform::encode_png(1, 1, &[0, 0, 0, 0]), Ok)
-        })
-        .await
-        .ok_or("The file is not answering")??;
+        let preview = slow::THUMBNAILS
+            .within(slow::THUMBNAIL, move || {
+                let draw = !first.is_dir();
+                draw.then(|| crate::platform::thumbnail_png(&first, 64))
+                    .and_then(Result::ok)
+                    .map_or_else(|| crate::platform::encode_png(1, 1, &[0, 0, 0, 0]), Ok)
+            })
+            .await
+            .ok_or("The file is not answering")??;
         let target = window.clone();
         window
             .run_on_main_thread(move || {

@@ -30,7 +30,7 @@ drag = { path = "vendor/drag" }
 png = "0.18.1"
 percent-encoding = "2.3.2"
 # Deadlines for calls to slow disks; the runtime is the one tauri already uses.
-tokio = { version = "1", default-features = false, features = ["time"] }
+tokio = { version = "1", default-features = false, features = ["time", "sync"] }
 jwalk = "0.9"
 rusqlite = { version = "0.41.1", features = ["bundled"] }
 blake3 = "1.8.7"
