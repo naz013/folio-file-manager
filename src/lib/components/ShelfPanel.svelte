@@ -1,6 +1,8 @@
 <script lang="ts">
   import { parentOf, type ShelfItem } from "$lib/api/fs";
   import { formatSize } from "$lib/format";
+  import { hintFor } from "$lib/shortcuts";
+  import EmptyState from "./EmptyState.svelte";
   import Thumbnail from "./Thumbnail.svelte";
   import FolderIcon from "./FolderIcon.svelte";
 
@@ -158,7 +160,14 @@
           {/each}
         </div>
       {:else}
-        <p class="empty">Ctrl+X or Ctrl+C adds items here. Ctrl+V pastes them all.</p>
+        <EmptyState
+          icon="clipboard"
+          text="The shelf is empty. {hintFor('cut')} or {hintFor('copy')} adds items here; {hintFor(
+            'paste',
+          )} pastes them all."
+          hint
+          compact
+        />
       {/each}
     </div>
   </section>
@@ -351,11 +360,5 @@
   .x {
     padding: 0 var(--space-xs);
     color: var(--text-tertiary);
-  }
-
-  .empty {
-    margin: var(--space-lg);
-    color: var(--text-secondary);
-    font-size: var(--font-size-caption);
   }
 </style>

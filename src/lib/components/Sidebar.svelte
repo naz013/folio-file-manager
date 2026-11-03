@@ -2,7 +2,9 @@
   import Icon, { type IconName } from "./Icon.svelte";
   import { joinPath, listDrives, type Drive, type SmartFolder, type Tag } from "$lib/api/fs";
   import { formatSize } from "$lib/format";
+  import { hintFor } from "$lib/shortcuts";
   import { tagColor } from "$lib/tags";
+  import EmptyState from "./EmptyState.svelte";
   import { settings } from "$lib/settings.svelte";
 
   const baseName = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
@@ -219,6 +221,13 @@
             <span class="dot" style:background={tagColor(tag.color)}></span>
             <span>{tag.name}</span>
           </button>
+        {:else}
+          <EmptyState
+            icon="tag"
+            text="No tags yet. Select files and press {hintFor('tag')}."
+            hint
+            compact
+          />
         {/each}
       </div>
     {/if}

@@ -100,6 +100,7 @@
   import SmartFolderDialog from "$lib/components/SmartFolderDialog.svelte";
   import TagDialog from "$lib/components/TagDialog.svelte";
   import BulkRenameDialog from "$lib/components/BulkRenameDialog.svelte";
+  import EmptyState from "$lib/components/EmptyState.svelte";
   import SearchBar from "$lib/components/SearchBar.svelte";
   import TagChips from "$lib/components/TagChips.svelte";
   import Inspector from "$lib/components/Inspector.svelte";
@@ -141,6 +142,10 @@
   let path = $state("");
   // Raw (not deeply proxied): listings are replaced wholesale, and proxying 50k objects is slow.
   let entries = $state.raw<Entry[]>([]);
+  /** The folder could not be listed, so the empty tab says that rather than "empty folder". */
+  let unreadable = $state(false);
+  /** The last search stopped on an error, so an empty list is not "no matches". */
+  let searchFailed = $state(false);
   let cleanupStart = $state<"large" | "downloads" | "duplicates" | "partials">("large");
   /** Bumped each time a cleanup list is asked for, so one already open starts over on it. */
   let cleanupRun = $state(0);
@@ -457,6 +462,7 @@
     if (target !== path) searchOpen = false;
     if (placeOf(target)) {
       entries = [];
+      unreadable = false;
       path = target;
       resultView = null;
       tagFilter = [];
@@ -481,6 +487,7 @@
     }
     if (gen !== navGen) return null;
     entries = list;
+    unreadable = false;
     path = target;
     resultView = null;
     tagFilter = [];
@@ -576,6 +583,7 @@
     if (!ok) {
       // Nothing could be listed: show an empty tab, not the previous tab's files.
       entries = [];
+      unreadable = true;
       path = t.path;
       selection.clear();
     }
@@ -1621,6 +1629,7 @@
     selection.clear();
     anchor = cursor = -1;
     renaming = null;
+    searchFailed = false;
     search = { running: true, found: 0, truncated: false };
     fileView?.scrollToTop();
     try {
@@ -1638,6 +1647,7 @@
     } catch (e) {
       if (id !== searchId) return;
       search = { running: false, found: entries.length, truncated: false };
+      searchFailed = true;
       notify(String(e), true);
     }
   }
@@ -2388,6 +2398,53 @@
   });
 </script>
 
+<!-- What an empty list says, laid over the view so its menu, band and drops still work. -->
+{#snippet blank()}
+  {#if !visible.length && path}
+    <div class="blank">
+      {#if unreadable}
+        <EmptyState icon="folder" text="This folder can't be opened. Go back or pick another." />
+      {:else if search}
+        {#if searchFailed}
+          <EmptyState icon="search" text="The search stopped on an error." />
+        {:else if !search.running}
+          <EmptyState icon="search" text="Nothing matches this search." />
+        {/if}
+      {:else if tagFilter.length && entries.length}
+        <EmptyState
+          icon="tag"
+          text="No item here has all the chosen tags."
+          action="Clear tags"
+          onaction={() => (tagFilter = [])}
+        />
+      {:else if entries.length}
+        <EmptyState
+          icon="folder"
+          text="Everything here is hidden."
+          action="Show hidden items"
+          onaction={() => updateSettings({ showHidden: true })}
+        />
+      {:else if resultView && "tag" in resultView}
+        <EmptyState
+          icon="tag"
+          text="Nothing has this tag yet. Select files and press {hintFor('tag')} to add it."
+          hint
+        />
+      {:else if resultView}
+        <EmptyState icon="search" text="Nothing matches this smart folder right now." />
+      {:else}
+        <EmptyState
+          icon="folder"
+          text="This folder is empty. Drop files here or make one."
+          action="New file"
+          onaction={() => newFile()}
+          hint
+        />
+      {/if}
+    </div>
+  {/if}
+{/snippet}
+
 <svelte:window {onkeydown} {oncontextmenu} />
 
 <div class="app">
@@ -2533,51 +2590,57 @@
         onselectin={goSelect}
       />
     {:else if view === "gallery" && !resultView && !search}
-      <GalleryView
-        bind:this={fileView}
-        entries={visible}
-        {selection}
-        cursorIndex={cursor}
-        cut={cutSet}
-        {renaming}
-        folderTint={tintFor}
-        onitemclick={itemClick}
-        onopen={open}
-        onitemcontextmenu={itemContextMenu}
-        onbackgroundclick={() => selectOnly(-1)}
-        onbackgroundcontextmenu={backgroundContextMenu}
-        onrename={commitRename}
-        oncancelrename={() => (renaming = null)}
-        ondragout={dragOut}
-      />
+      <div class="stage">
+        <GalleryView
+          bind:this={fileView}
+          entries={visible}
+          {selection}
+          cursorIndex={cursor}
+          cut={cutSet}
+          {renaming}
+          folderTint={tintFor}
+          onitemclick={itemClick}
+          onopen={open}
+          onitemcontextmenu={itemContextMenu}
+          onbackgroundclick={() => selectOnly(-1)}
+          onbackgroundcontextmenu={backgroundContextMenu}
+          onrename={commitRename}
+          oncancelrename={() => (renaming = null)}
+          ondragout={dragOut}
+        />
+        {@render blank()}
+      </div>
     {:else}
-      <FileView
-        bind:this={fileView}
-        entries={visible}
-        view={view === "columns" ? "list" : view === "gallery" ? "grid" : view}
-        {selection}
-        cut={cutSet}
-        {renaming}
-        onitemclick={itemClick}
-        onbackgroundclick={() => selectOnly(-1)}
-        onopen={open}
-        onrename={commitRename}
-        oncancelrename={() => (renaming = null)}
-        ondragout={dragOut}
-        onitemcontextmenu={itemContextMenu}
-        onbackgroundcontextmenu={backgroundContextMenu}
-        onopentab={(p) => openTab(p, true)}
-        {dropTarget}
-        {springPath}
-        {springMs}
-        {tagColors}
-        folderTint={(p) => tintOf(tagMap[p])}
-        onband={bandSelect}
-        {sort}
-        onsort={sortBy}
-        folderSize={(p) => folderSizes[sizeKey(p)]}
-        cursorIndex={cursor}
-      />
+      <div class="stage">
+        <FileView
+          bind:this={fileView}
+          entries={visible}
+          view={view === "columns" ? "list" : view === "gallery" ? "grid" : view}
+          {selection}
+          cut={cutSet}
+          {renaming}
+          onitemclick={itemClick}
+          onbackgroundclick={() => selectOnly(-1)}
+          onopen={open}
+          onrename={commitRename}
+          oncancelrename={() => (renaming = null)}
+          ondragout={dragOut}
+          onitemcontextmenu={itemContextMenu}
+          onbackgroundcontextmenu={backgroundContextMenu}
+          onopentab={(p) => openTab(p, true)}
+          {dropTarget}
+          {springPath}
+          {springMs}
+          {tagColors}
+          folderTint={(p) => tintOf(tagMap[p])}
+          onband={bandSelect}
+          {sort}
+          onsort={sortBy}
+          folderSize={(p) => folderSizes[sizeKey(p)]}
+          cursorIndex={cursor}
+        />
+        {@render blank()}
+      </div>
     {/if}
     <footer class="status" role="status">
       <span
@@ -2754,6 +2817,24 @@
     flex-direction: column;
     min-width: 0;
     background: var(--bg-window);
+  }
+
+  /* The view and the note over it share the space the view alone would fill. */
+  .stage {
+    position: relative;
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .blank {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    /* Clicks reach the empty list underneath; only the note's own button takes them. */
+    pointer-events: none;
   }
 
   .status {

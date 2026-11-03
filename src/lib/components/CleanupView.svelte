@@ -32,6 +32,7 @@
     settings,
     updateSettings,
   } from "$lib/settings.svelte";
+  import EmptyState from "./EmptyState.svelte";
   import Thumbnail from "./Thumbnail.svelte";
 
   let {
@@ -69,6 +70,20 @@
   let tempComplete = $state(true);
   let drives = $state.raw<Drive[]>([]);
   let moving = $state(false);
+  /** What an empty list of suggestions says, by what was looked for. */
+  function nothingFound(): string {
+    if (mode === "temp") {
+      return "No temp file or cache in the places below has been left alone long enough. A file whose age can't be told is never listed.";
+    }
+    if (mode === "partials") {
+      return `No unfinished copy has been left alone for ${ageLabel(settings.cleanupPartialDays)}, among the scanned folders and files of 1 MB or more.`;
+    }
+    if (mode === "downloads") {
+      return `No installer or archive in Downloads has been untouched for ${ageLabel(settings.cleanupDownloadsDays)}.`;
+    }
+    return `No file is bigger than ${sizeLabel(settings.cleanupMinMb)} and untouched for ${ageLabel(settings.cleanupAgeDays)}.`;
+  }
+
   /** Nothing is picked until the person picks it: cleanup only suggests (ADR 0003). */
   const picked = $state<Record<string, boolean>>({});
   let loading = $state(true);
@@ -517,14 +532,14 @@
 
       {#if mode === "duplicates"}
         {#if loading && !groups.length}
-          <p class="empty" role="status">Comparing files. This can take a while for big files…</p>
+          <EmptyState icon="search" text="Comparing files. This can take a while for big files…" />
         {:else if !scannedAny}
-          <p class="empty" role="status">
-            Nothing has been scanned yet. Scan a drive in Storage first; duplicates are looked for
-            among the scanned files.
-          </p>
+          <EmptyState
+            icon="hardDrive"
+            text="Nothing has been scanned yet. Scan a drive in Storage first; duplicates are looked for among the scanned files."
+          />
         {:else if !groups.length}
-          <p class="empty" role="status">No identical files found.</p>
+          <EmptyState icon="check" text="No identical files found." />
         {:else}
           <p class="summary" role="status">
             {groups.length}
@@ -601,30 +616,14 @@
           </ul>
         {/if}
       {:else if loading && !files.length}
-        <p class="empty" role="status">Looking…</p>
+        <EmptyState icon="search" text="Looking…" />
       {:else if !scannedAny}
-        <p class="empty" role="status">
-          Nothing has been scanned yet. Scan a drive in Storage first; cleanup suggests files from
-          the scan.
-        </p>
+        <EmptyState
+          icon="hardDrive"
+          text="Nothing has been scanned yet. Scan a drive in Storage first; cleanup suggests files from the scan."
+        />
       {:else if !files.length}
-        <p class="empty" role="status">
-          {#if mode === "temp"}
-            No temp file or cache in the places below has been left alone long enough. A file whose
-            age can't be told is never listed.
-          {:else if mode === "partials"}
-            No unfinished copy has been left alone for {ageLabel(settings.cleanupPartialDays)},
-            among the scanned folders and files of 1 MB or more.
-          {:else if mode === "downloads"}
-            No installer or archive in Downloads has been untouched for {ageLabel(
-              settings.cleanupDownloadsDays,
-            )}.
-          {:else}
-            No file is bigger than {sizeLabel(settings.cleanupMinMb)} and untouched for {ageLabel(
-              settings.cleanupAgeDays,
-            )}.
-          {/if}
-        </p>
+        <EmptyState icon="check" text={nothingFound()} />
       {:else}
         {#if mode === "temp"}
           <p class="note">
@@ -812,12 +811,6 @@
   .note {
     margin: 0;
     color: var(--text-secondary);
-  }
-
-  .empty {
-    margin: var(--space-xl) 0;
-    color: var(--text-secondary);
-    text-align: center;
   }
 
   .fixed {

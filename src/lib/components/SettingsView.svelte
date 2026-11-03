@@ -262,6 +262,26 @@
     </section>
 
     <section>
+      <h3>Hints</h3>
+
+      <div class="row">
+        <span id="hints-label">Show hints in empty areas</span>
+        <input
+          type="checkbox"
+          class="switch"
+          role="switch"
+          aria-labelledby="hints-label"
+          checked={settings.showHints}
+          onchange={(e) => updateSettings({ showHints: e.currentTarget.checked })}
+        />
+      </div>
+      <p class="note">
+        An empty folder, tag list or clipboard shelf says what to do there. Turn this off once you
+        know. Messages about a search, the Recycle Bin or a cleanup that found nothing always show.
+      </p>
+    </section>
+
+    <section>
       <h3>Updates</h3>
 
       <div class="row">

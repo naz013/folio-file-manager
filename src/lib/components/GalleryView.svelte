@@ -216,8 +216,6 @@
       {:else}
         <FileIcon name={current.name} size={160} />
       {/if}
-    {:else}
-      <p class="empty">Nothing here</p>
     {/if}
   </div>
 
@@ -417,11 +415,5 @@
     color: var(--text-primary);
     background: var(--bg-window);
     user-select: text;
-  }
-
-  .empty {
-    margin: 0;
-    color: var(--text-tertiary);
-    font-size: var(--font-size-caption);
   }
 </style>

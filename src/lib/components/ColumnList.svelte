@@ -10,6 +10,7 @@
 
 <script lang="ts">
   import type { Entry } from "$lib/api/fs";
+  import EmptyState from "./EmptyState.svelte";
   import FileIcon from "./FileIcon.svelte";
   import FolderIcon from "./FolderIcon.svelte";
   import Icon from "./Icon.svelte";
@@ -212,7 +213,7 @@
           >{/if}
       </div>
     {:else}
-      <p class="empty">Empty</p>
+      <EmptyState icon="folder" text="Empty folder" compact />
     {/each}
   </div>
 </div>
@@ -305,11 +306,5 @@
     color: var(--text-primary);
     background: var(--bg-window);
     user-select: text;
-  }
-
-  .empty {
-    margin: var(--space-lg) var(--space-md);
-    color: var(--text-tertiary);
-    font-size: var(--font-size-caption);
   }
 </style>

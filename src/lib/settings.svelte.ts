@@ -50,6 +50,8 @@ export interface Settings {
   updateLastCheck: number;
   /** A version the user said "Later" to: not offered again until a newer one is out. */
   updateSkipped: string;
+  /** Show the hints in empty areas that say what to do there. */
+  showHints: boolean;
 }
 
 export const DEFAULTS: Settings = {
@@ -70,6 +72,7 @@ export const DEFAULTS: Settings = {
   updateCheck: true,
   updateLastCheck: 0,
   updateSkipped: "",
+  showHints: true,
 };
 
 /** The allowed delay closest to `ms`, so a hand-edited value still shows in the list. */
@@ -131,6 +134,7 @@ function read(): Settings {
         ? saved.updateLastCheck
         : DEFAULTS.updateLastCheck,
     updateSkipped: typeof saved.updateSkipped === "string" ? saved.updateSkipped : "",
+    showHints: saved.showHints !== false,
     pinnedFolders: Array.isArray(saved.pinnedFolders)
       ? saved.pinnedFolders.filter(
           (p, i, all): p is string => typeof p === "string" && !!p && all.indexOf(p) === i,

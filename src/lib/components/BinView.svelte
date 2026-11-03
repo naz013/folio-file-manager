@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { binList, binPurge, binRestore, binSizes, type BinItem, type BinSize } from "$lib/api/fs";
   import { formatDate, formatSize } from "$lib/format";
+  import EmptyState from "./EmptyState.svelte";
 
   let {
     onrestored,
@@ -123,9 +124,12 @@
   {/if}
 
   {#if loading && !items.length}
-    <p class="empty" role="status">Reading the Recycle Bin…</p>
+    <EmptyState icon="trash" text="Reading the Recycle Bin…" />
   {:else if !items.length}
-    <p class="empty">The Recycle Bin is empty.</p>
+    <EmptyState
+      icon="trash"
+      text="The Recycle Bin is empty. Deleted files wait here until you empty it."
+    />
   {:else}
     <ul class="list" aria-label="Items in the Recycle Bin">
       {#each items as item (item.id)}
@@ -221,11 +225,6 @@
   .error {
     margin: 0;
     color: var(--status-danger);
-  }
-
-  .empty {
-    margin: var(--space-xl) 0;
-    color: var(--text-secondary);
   }
 
   .list {
