@@ -2075,8 +2075,9 @@ fn a_cancelled_move_between_items_stops_and_reports_what_was_moved() {
 fn file_symlink(target: &str, at: &Path) -> bool {
     #[cfg(unix)]
     let made = std::os::unix::fs::symlink(target, at);
+    // Windows doesn't resolve `/` in the target of a relative link.
     #[cfg(windows)]
-    let made = std::os::windows::fs::symlink_file(target, at);
+    let made = std::os::windows::fs::symlink_file(target.replace('/', "\\"), at);
     if made.is_err() {
         eprintln!("skipped: this account can't create symlinks, so nothing was checked");
     }
