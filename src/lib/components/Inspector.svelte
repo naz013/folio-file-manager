@@ -49,8 +49,21 @@
 
   const colorOf = (kind: string) => KINDS.find((k) => k.name === kind)?.color ?? "--tag-gray";
 
-  /** Ids for the folder counts, so a newer selection can stop the ones under way. */
-  let nextJob = 0;
+  /**
+   * Ids for the folder counts, so a newer selection can stop the ones under way. They start
+   * from the time, so a reloaded page or a second window does not reuse an id still in use.
+   */
+  let nextJob = Date.now();
+  /** How long the open folder is shown before it is counted. */
+  const OPEN_SETTLE_MS = 300;
+  /** How long a folder that has changed under the inspector waits before it is counted again. */
+  const RECOUNT_MS = 2000;
+  /** Why a folder has no count, in the words for it. */
+  const WHY: Record<string, string> = {
+    network: "Not counted on a network folder",
+    cloud: "Not counted: the folder is online only",
+    large: "Too big to count here",
+  };
 </script>
 
 <script lang="ts">
@@ -108,8 +121,11 @@
     (async () => {
       for (const path of paths) {
         if (!current) return;
-        active = ++nextJob;
-        const m = await measureDir(active, path).catch(() => null);
+        const job = ++nextJob;
+        active = job;
+        const m = await measureDir(job, path).catch(() => null);
+        // Finished: there is nothing left to stop.
+        active = 0;
         if (!current) return;
         if (m) {
           measured[path] = m;
@@ -123,18 +139,60 @@
     };
   });
 
+  /** What the open folder holds in all, as last counted, for the folder it was counted for. */
+  let opened = $state<{ path: string; m: Measured } | null>(null);
+  /** Whether the open folder has been counted since it was shown or last changed. */
+  let openedFresh = $state(false);
+
+  // With nothing selected, the open folder is counted in the background like a selected one.
+  // It waits a moment first, so passing through folders doesn't start a count in each, and
+  // it stops when the folder changes, something is selected, or the window shows another folder.
+  $effect(() => {
+    const path = picked.length ? null : folder;
+    // A change in what the folder holds counts it again.
+    void entries.length;
+    if (!path) return;
+    // A folder already counted that merely changed waits longer: one that keeps changing
+    // would otherwise be counted over and over.
+    const delay = untrack(() => {
+      openedFresh = false;
+      return opened?.path === path ? RECOUNT_MS : OPEN_SETTLE_MS;
+    });
+    let current = true;
+    let started = false;
+    let finished = false;
+    const job = ++nextJob;
+    const timer = setTimeout(async () => {
+      started = true;
+      const m = await measureDir(job, path, true).catch(() => null);
+      finished = true;
+      if (!current || !m) return;
+      opened = { path, m };
+      openedFresh = true;
+    }, delay);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+      // Only a count that is running needs stopping; one that never began or has ended has
+      // nothing to stop, and a stop for it would be left behind.
+      if (started && !finished) measureCancel(job).catch(() => {});
+    };
+  });
+
   const pickedFolders = $derived(picked.filter((e) => e.isDir).map((e) => e.path));
   const counting = (paths: string[]) => paths.some((p) => !fresh.includes(p));
   /** The size of the selection: files as listed, folders as counted. Null until every folder
-   *  has been counted at least once. */
-  const selectionBytes = (items: Entry[]) => {
+   *  has been counted at least once; "unknown" if one was too big to count. */
+  const selectionBytes = (items: Entry[]): number | null | "unknown" => {
     let sum = 0;
+    let unknown = false;
     for (const e of items) {
       if (!e.isDir) sum += e.size;
+      else if (measured[e.path]?.skipped) unknown = true;
       else if (measured[e.path]) sum += measured[e.path].bytes;
       else return null;
     }
-    return sum;
+    return unknown ? "unknown" : sum;
   };
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -176,7 +234,10 @@
       {:else}
         {@const m = measured[item.path]}
         <dd class:busy={counting([item.path])} aria-busy={counting([item.path])}>
-          {#if m}{formatSize(m.bytes)} · {plural(m.files, "file")}{:else}Calculating…{/if}
+          {#if m?.skipped}Too big to count{:else if m}{formatSize(m.bytes)} · {plural(
+              m.files,
+              "file",
+            )}{:else}Calculating…{/if}
         </dd>
       {/if}
       <dt>Modified</dt>
@@ -193,7 +254,11 @@
       <dd>{folders(picked)}</dd>
       <dt>Total size</dt>
       <dd class:busy={counting(pickedFolders)} aria-busy={counting(pickedFolders)}>
-        {pickedBytes === null ? "Calculating…" : formatSize(pickedBytes)}
+        {pickedBytes === null
+          ? "Calculating…"
+          : pickedBytes === "unknown"
+            ? "Too big to count"
+            : formatSize(pickedBytes)}
       </dd>
     </dl>
   {:else}
@@ -204,8 +269,24 @@
     <dl>
       <dt>Items</dt>
       <dd>{entries.length}</dd>
-      <dt>Files</dt>
-      <dd>{entries.length - folders(entries)} · {formatSize(total(entries))}</dd>
+      {#if folder}
+        {@const here = opened?.path === folder ? opened.m : null}
+        <dt>Size</dt>
+        <dd class:busy={!openedFresh && !here?.skipped} aria-busy={!openedFresh && !here?.skipped}>
+          {#if here?.skipped}
+            {WHY[here.skipped]} · {plural(entries.length - folders(entries), "file")} here, {formatSize(
+              total(entries),
+            )}
+          {:else if here}
+            {formatSize(here.bytes)} · {plural(here.files, "file")}
+          {:else}
+            Calculating…
+          {/if}
+        </dd>
+      {:else}
+        <dt>Files</dt>
+        <dd>{entries.length - folders(entries)} · {formatSize(total(entries))}</dd>
+      {/if}
       {#if folder}<dt>Where</dt>
         <dd class="path">{folder}</dd>{/if}
     </dl>
@@ -233,7 +314,14 @@
     </section>
   {:else if breakdownTotal > 0}
     <section>
-      <h3>{folder ? "Space in this folder" : "Space in these items"}</h3>
+      <!-- The kinds come from the listing, which has only the folder's own files. -->
+      <h3>
+        {!folder
+          ? "Space in these items"
+          : folders(entries)
+            ? "Space in this folder's own files"
+            : "Space in this folder"}
+      </h3>
       <div class="bar" role="img" aria-label="Space by kind of file">
         {#each breakdown as [kind, bytes] (kind)}
           <span

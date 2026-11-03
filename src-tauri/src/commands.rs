@@ -1148,29 +1148,69 @@ pub fn scan_size(scanner: tauri::State<'_, Scanner>, dir: String) -> Option<(u64
 pub struct Measuring(std::sync::Mutex<std::collections::HashMap<u64, Arc<AtomicBool>>>);
 
 impl Measuring {
-    fn jobs(&self) -> std::sync::MutexGuard<'_, std::collections::HashMap<u64, Arc<AtomicBool>>> {
+    /// The cancel flag of count `id`. A cancel that comes before the count has started
+    /// leaves the flag set, so the count ends at once.
+    fn flag(&self, id: u64) -> Arc<AtomicBool> {
+        let mut jobs = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Arc::clone(jobs.entry(id).or_default())
+    }
+
+    fn done(&self, id: u64) {
         self.0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&id);
     }
 }
 
 /// Counts a folder fresh from the disk, in the background: (bytes, files, folders), or
-/// nothing if `measure_cancel` stopped it first.
-#[tauri::command(async)]
-pub fn measure_dir(jobs: tauri::State<'_, Measuring>, id: u64, dir: String) -> Option<Measured> {
-    let cancel = Arc::new(AtomicBool::new(false));
-    jobs.jobs().insert(id, Arc::clone(&cancel));
-    let out = scan::measure(&PathBuf::from(dir), &cancel);
-    jobs.jobs().remove(&id);
-    out
+/// nothing if `measure_cancel` stopped it first. `auto` is a count nobody asked for (the
+/// folder being looked at): it is not made for a network share, a cloud-only folder or the top
+/// of a drive, and it is given up sooner; the answer then says why it has no numbers (as it
+/// does for any count that ran out of time). It runs on a thread of its own with a time limit,
+/// so a share that does not answer cannot hold up anything else.
+#[tauri::command]
+pub async fn measure_dir(
+    app: tauri::AppHandle,
+    id: u64,
+    dir: String,
+    auto: Option<bool>,
+) -> Option<Measured> {
+    let dir = PathBuf::from(dir);
+    let auto = auto == Some(true);
+    let cancel = app.state::<Measuring>().flag(id);
+    let flag = Arc::clone(&cancel);
+    let (lane, limit) = if auto {
+        (&slow::AUTO_MEASURES, slow::MEASURE_AUTO)
+    } else {
+        (&slow::MEASURES, slow::MEASURE)
+    };
+    // All of it runs in the lane: even asking a drive what it is can wait on a share that went
+    // away. The count starts only when it has a place: a cancel while it waited stops it.
+    let out = lane
+        .within(limit, move || {
+            if auto && let Some(why) = scan::unasked_skip(&dir) {
+                return Some(Measured::skip(why));
+            }
+            scan::measure(&dir, &flag)
+        })
+        .await;
+    app.state::<Measuring>().done(id);
+    match out {
+        Some(counted) => counted,
+        // Out of time (or no place came free): the walk is told to stop so it doesn't go on in
+        // the background. If it was already stopped, the person moved on and wants no answer.
+        None if cancel.swap(true, Ordering::Relaxed) => None,
+        None => Some(Measured::skip(scan::Skipped::Large)),
+    }
 }
 
 #[tauri::command]
 pub fn measure_cancel(jobs: tauri::State<'_, Measuring>, id: u64) {
-    if let Some(cancel) = jobs.jobs().get(&id) {
-        cancel.store(true, Ordering::Relaxed);
-    }
+    jobs.flag(id).store(true, Ordering::Relaxed);
 }
 
 /// What a search tells the window that started it.

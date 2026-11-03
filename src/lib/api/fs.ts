@@ -276,10 +276,17 @@ export interface Measured {
   bytes: number;
   files: number;
   folders: number;
+  /** Why it was not counted, if it was not: the numbers are then zero. */
+  skipped: "network" | "cloud" | "large" | null;
 }
-/** Counts a folder in the background; null if `measureCancel(id)` stopped it first. */
-export const measureDir = (id: number, dir: string) =>
-  invoke<Measured | null>("measure_dir", { id, dir });
+/**
+ * Counts a folder in the background; null if `measureCancel(id)` stopped it first. A folder
+ * that was not counted (too big, or not to be read unasked) answers with `skipped` set.
+ * `auto` marks a count nobody asked for, which a network folder, a cloud-only folder or the
+ * top of a drive is not given. Call `measureCancel` only for a count that is still running.
+ */
+export const measureDir = (id: number, dir: string, auto = false) =>
+  invoke<Measured | null>("measure_dir", { id, dir, auto });
 export const measureCancel = (id: number) => invoke<void>("measure_cancel", { id });
 export const scanRoots = () => invoke<ScanRoot[]>("scan_roots");
 export const onScanProgress = (cb: (p: ScanProgress) => void): Promise<UnlistenFn> =>

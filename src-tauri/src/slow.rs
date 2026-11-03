@@ -12,6 +12,13 @@ pub const LISTING: Duration = Duration::from_secs(10);
 /// How long a smart folder may walk a folder tree before it gives up and stops.
 pub const SMART: Duration = Duration::from_secs(60);
 
+/// How long counting the size of a folder may take before it is stopped.
+pub const MEASURE: Duration = Duration::from_mins(5);
+
+/// How long counting the folder being looked at may take before it is given up as too big:
+/// nobody asked for it, so it must not go on and on.
+pub const MEASURE_AUTO: Duration = Duration::from_secs(30);
+
 /// How long a thumbnail may take before the plain icon is shown instead.
 pub const THUMBNAIL: Duration = Duration::from_secs(5);
 
@@ -21,6 +28,14 @@ pub static LISTINGS: LazyLock<Lane> = LazyLock::new(|| Lane::new(16));
 /// Where smart folders walk a folder tree. Walks last long, so they have a lane of their own: a
 /// few of them must not hold up the listing of a folder.
 pub static WALKS: LazyLock<Lane> = LazyLock::new(|| Lane::new(2));
+
+/// Where the size of a folder is counted for the inspector. Counting is a long walk, so it has
+/// a lane of its own, like the smart folders' walks.
+pub static MEASURES: LazyLock<Lane> = LazyLock::new(|| Lane::new(2));
+
+/// Where the folder being looked at is counted without being asked. Apart from the counts the
+/// person asks for by selecting a folder, so those never wait behind it.
+pub static AUTO_MEASURES: LazyLock<Lane> = LazyLock::new(|| Lane::new(1));
 
 /// Where thumbnails are drawn: a big grid asks for a few hundred at once, and they are made a
 /// few dozen at a time.

@@ -38,6 +38,32 @@ pub fn bin_room(letter: char) -> Option<u64> {
     left
 }
 
+/// `DRIVE_REMOTE` from `GetDriveTypeW`.
+const REMOTE: u32 = 4;
+
+/// Whether `path` is on another computer, where reading a whole folder tree is slow and
+/// not worth doing unasked: a `\\server\share` path, or a drive letter mapped to a share.
+pub fn is_network(path: &std::path::Path) -> bool {
+    let text = path.to_string_lossy().replace('/', "\\");
+    if let Some(rest) = text.strip_prefix("\\\\") {
+        // `\\?\C:\` and `\\.\C:` name volumes of this computer; `\\?\UNC\server` and
+        // `\\server` name another one.
+        let local = rest
+            .strip_prefix("?\\")
+            .or_else(|| rest.strip_prefix(".\\"))
+            .is_some_and(|r| r.as_bytes().get(1) == Some(&b':'));
+        return !local;
+    }
+    let bytes = text.as_bytes();
+    if bytes.len() < 2 || bytes[1] != b':' || !bytes[0].is_ascii_alphabetic() {
+        return false;
+    }
+    let root = format!("{}:\\", char::from(bytes[0]).to_ascii_uppercase());
+    let wide: Vec<u16> = root.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: `wide` is NUL-terminated and outlives the call.
+    unsafe { GetDriveTypeW(PCWSTR(wide.as_ptr())) == REMOTE }
+}
+
 /// Bytes the current user may still write on the volume holding `path`.
 pub fn free_for(path: &std::path::Path) -> Option<u64> {
     use std::os::windows::ffi::OsStrExt;
@@ -253,5 +279,29 @@ mod tests {
     #[test]
     fn a_drive_of_no_size_has_no_bin() {
         assert_eq!(room(0, &BinSetup::default(), 0), None);
+    }
+
+    #[test]
+    fn share_paths_are_network_and_local_spellings_are_not() {
+        use std::path::Path;
+        for share in [
+            "\\\\server\\share\\a",
+            "//server/share/a",
+            "\\\\?\\UNC\\server\\share\\a",
+            "\\\\wsl.localhost\\Ubuntu\\home",
+        ] {
+            assert!(is_network(Path::new(share)), "{share}");
+        }
+        for local in [
+            "\\\\?\\C:\\Users",
+            "\\\\.\\C:",
+            "relative\\dir",
+            "folio:bin",
+            "",
+        ] {
+            assert!(!is_network(Path::new(local)), "{local}");
+        }
+        // A fixed drive is not a share. The system drive is always there on Windows.
+        assert!(!is_network(Path::new("C:\\Windows")));
     }
 }

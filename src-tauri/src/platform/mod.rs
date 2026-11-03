@@ -25,6 +25,21 @@ pub fn show_context_menu(
     win_menu::show(hwnd, paths, extended).map_err(|e| e.to_string())
 }
 
+/// Whether `path` is on another computer (a network share), where reading a whole folder
+/// tree is slow and should not be done unasked. Only Windows tells; elsewhere nothing is
+/// taken to be a share.
+pub fn is_network(path: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        drives::is_network(path)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        false
+    }
+}
+
 /// Bytes a program may still write on the volume holding `path`; `None` where that can't be
 /// told.
 pub fn free_space(path: &Path) -> Option<u64> {

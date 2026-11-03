@@ -230,6 +230,47 @@ pub struct Measured {
     pub bytes: u64,
     pub files: u64,
     pub folders: u64,
+    /// Why it was not counted, if it was not; the numbers are then zero.
+    pub skipped: Option<Skipped>,
+}
+
+/// Why a folder was not counted.
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum Skipped {
+    /// On a network share: reading the whole tree would go over the network.
+    Network,
+    /// A folder whose content is only in the cloud: listing it would make the provider fetch it.
+    Cloud,
+    /// Too big to count here: the top of a drive, or a count that took too long.
+    Large,
+}
+
+impl Measured {
+    /// The answer for a folder that was not counted.
+    pub fn skip(why: Skipped) -> Self {
+        Self {
+            bytes: 0,
+            files: 0,
+            folders: 0,
+            skipped: Some(why),
+        }
+    }
+}
+
+/// Whether a count nobody asked for (the folder being looked at) should not be made, and why:
+/// the top of a drive or a network share is too much to read unasked, and a cloud-only folder
+/// must not be listed.
+pub fn unasked_skip(dir: &Path) -> Option<Skipped> {
+    if crate::platform::is_network(dir) {
+        Some(Skipped::Network)
+    } else if crate::cleanup::is_cloud_only(dir) {
+        Some(Skipped::Cloud)
+    } else if dir.parent().is_none() {
+        Some(Skipped::Large)
+    } else {
+        None
+    }
 }
 
 /// A file from the big-file list.
@@ -1005,12 +1046,15 @@ fn add_above(
 
 /// Counts what is in `root` and below it, straight from the disk and without the cache, for
 /// a folder the user is looking at. Links are not followed and what can't be read is
-/// skipped. `None` if `cancel` was set before it finished.
+/// skipped. A folder whose content is only in the cloud is counted as a folder but not
+/// entered: listing it would make the sync provider fetch it. `None` if `cancel` was set
+/// before it finished.
 pub fn measure(root: &Path, cancel: &AtomicBool) -> Option<Measured> {
     let mut out = Measured {
         bytes: 0,
         files: 0,
         folders: 0,
+        skipped: None,
     };
     let walker = WalkDirGeneric::<((), Option<u64>)>::new(root)
         .skip_hidden(false)
@@ -1019,6 +1063,12 @@ pub fn measure(root: &Path, cancel: &AtomicBool) -> Option<Measured> {
             for child in children.iter_mut().flatten() {
                 if child.file_type().is_file() {
                     child.client_state = child.metadata().ok().map(|m| m.len());
+                } else if child.file_type().is_dir()
+                    && child
+                        .metadata()
+                        .is_ok_and(|m| crate::cleanup::cloud_only_attributes(&m))
+                {
+                    child.read_children = None;
                 }
             }
         });
@@ -1311,6 +1361,62 @@ mod tests {
         assert_eq!(got.files, 5);
         assert_eq!(got.folders, 3);
         assert_eq!(got.bytes, 10 + 100 + 1_000 + BIG_MIN + 5);
+    }
+
+    #[test]
+    fn measuring_a_folder_of_only_subfolders_counts_what_is_inside_them() {
+        let dir = tempfile::tempdir().unwrap();
+        write(&dir.path().join("a/one.bin"), 30);
+        write(&dir.path().join("b/c/two.bin"), 70);
+        let got = measure(dir.path(), &AtomicBool::new(false)).unwrap();
+        assert_eq!((got.bytes, got.files, got.folders), (100, 2, 3));
+        assert_eq!(got.skipped, None);
+    }
+
+    #[test]
+    fn an_unasked_count_skips_a_drive_top_and_not_an_ordinary_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(unasked_skip(dir.path()), None);
+        let top = if cfg!(windows) { "C:\\" } else { "/" };
+        assert_eq!(unasked_skip(Path::new(top)), Some(Skipped::Large));
+        assert_eq!(
+            unasked_skip(Path::new("\\\\server\\share\\a")).is_some(),
+            cfg!(windows)
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_unasked_count_skips_a_cloud_only_folder_itself() {
+        use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_OFFLINE, SetFileAttributesW};
+        use windows::core::HSTRING;
+
+        let dir = sample();
+        let sub = dir.path().join("sub");
+        assert_eq!(unasked_skip(&sub), None);
+        // SAFETY: the path is an owned HSTRING that outlives the call.
+        unsafe { SetFileAttributesW(&HSTRING::from(sub.as_os_str()), FILE_ATTRIBUTE_OFFLINE) }
+            .unwrap();
+        assert_eq!(unasked_skip(&sub), Some(Skipped::Cloud));
+    }
+
+    /// A folder marked offline holds files that are only in the cloud: measuring must not
+    /// enter it.
+    #[cfg(windows)]
+    #[test]
+    fn measure_does_not_enter_a_cloud_only_folder() {
+        use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_OFFLINE, SetFileAttributesW};
+        use windows::core::HSTRING;
+
+        let dir = sample();
+        let before = measure(dir.path(), &AtomicBool::new(false)).unwrap();
+        let sub = dir.path().join("sub");
+        // SAFETY: the path is an owned HSTRING that outlives the call.
+        unsafe { SetFileAttributesW(&HSTRING::from(sub.as_os_str()), FILE_ATTRIBUTE_OFFLINE) }
+            .unwrap();
+        let after = measure(dir.path(), &AtomicBool::new(false)).unwrap();
+        assert!(after.files < before.files, "{before:?} then {after:?}");
+        assert!(after.bytes < before.bytes);
     }
 
     #[test]
