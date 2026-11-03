@@ -4,6 +4,7 @@
   import * as pdfjs from "pdfjs-dist";
   import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
   import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+  import { createZoomEase, wheelFactor } from "$lib/zoom";
 
   pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -47,6 +48,7 @@
       doc = null;
       sizes = [];
       error = "";
+      ease.stop();
       zoom = settled = 1;
       visible.clear();
       drawn.clear();
@@ -152,6 +154,14 @@
     el.scrollTop = sy * ratio - py;
   }
 
+  /** Wheel and pinch ask for a zoom; it eases there over a few frames. */
+  const ease = createZoomEase({
+    get: () => zoom,
+    min: MIN_ZOOM,
+    max: MAX_ZOOM,
+    apply: zoomTo,
+  });
+
   const at = (el: HTMLElement, x: number, y: number): [number, number] => {
     const box = el.getBoundingClientRect();
     return [x - box.left, y - box.top];
@@ -166,7 +176,7 @@
       if (!e.ctrlKey) return;
       e.preventDefault();
       const [px, py] = at(el, e.clientX, e.clientY);
-      zoomTo(zoom * Math.exp(-e.deltaY * 0.01), px, py);
+      if (!pinch) ease.by(wheelFactor(e, viewH), px, py);
     };
 
     const spread = (e: TouchEvent) =>
@@ -177,6 +187,7 @@
 
     const ontouchstart = (e: TouchEvent) => {
       pinch = e.touches.length === 2 ? spread(e) : 0;
+      if (pinch) ease.stop();
     };
 
     const ontouchmove = (e: TouchEvent) => {
@@ -201,6 +212,7 @@
     el.addEventListener("touchcancel", onend);
     return {
       destroy() {
+        ease.stop();
         el.removeEventListener("wheel", onwheel);
         el.removeEventListener("touchstart", ontouchstart);
         el.removeEventListener("touchmove", ontouchmove);
@@ -212,6 +224,7 @@
 
   function toggleZoom(e: MouseEvent) {
     const [px, py] = at(e.currentTarget as HTMLElement, e.clientX, e.clientY);
+    ease.stop();
     zoomTo(zoom > 1 ? 1 : 2, px, py);
   }
 </script>

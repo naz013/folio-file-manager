@@ -5,6 +5,7 @@
   import { previewKind } from "$lib/preview";
   import { previewEvent, previewFor, type PreviewHit } from "$lib/plugins";
   import { plugins } from "$lib/plugins.svelte";
+  import { createZoomEase, pixelsPer, wheelFactor } from "$lib/zoom";
   import FileIcon from "./FileIcon.svelte";
   import FolderIcon from "./FolderIcon.svelte";
   import PdfViewer from "./PdfViewer.svelte";
@@ -89,6 +90,14 @@
     return [x - (box.left + box.width / 2), y - (box.top + box.height / 2)];
   }
 
+  /** Wheel, pinch and double-click ask for a zoom; it eases there over a few frames. */
+  const ease = createZoomEase({
+    get: () => zoom,
+    min: 1,
+    max: MAX_ZOOM,
+    apply: zoomTo,
+  });
+
   /** Full size, or twice the fit for a picture that already fills the window at full size. */
   const actualSize = () => (fit < 1 ? 1 / fit : 2);
 
@@ -104,10 +113,10 @@
       e.preventDefault();
       if (e.ctrlKey) {
         const [cx, cy] = fromMiddle(stage, e.clientX, e.clientY);
-        zoomTo(zoom * Math.exp(-e.deltaY * 0.01), cx, cy);
+        // Fingers on the screen are pinching; a wheel event then must not pull against them.
+        if (!pinch) ease.by(wheelFactor(e, stageH), cx, cy);
       } else {
-        // Lines and pages (a mouse wheel) are scaled up to pixels.
-        const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? stageH : 1;
+        const k = pixelsPer(e, stageH);
         moveTo(panX - e.deltaX * k, panY - e.deltaY * k);
       }
     };
@@ -120,7 +129,10 @@
     const ondown = (e: PointerEvent) => {
       pointers.set(e.pointerId, [e.clientX, e.clientY]);
       stage.setPointerCapture(e.pointerId);
-      if (pointers.size === 2) pinch = spread();
+      if (pointers.size === 2) {
+        ease.stop();
+        pinch = spread();
+      }
     };
 
     const onmove = (e: PointerEvent) => {
@@ -162,12 +174,14 @@
 
   function toggleZoom(e: MouseEvent) {
     const [cx, cy] = fromMiddle(e.currentTarget as HTMLElement, e.clientX, e.clientY);
-    zoomTo(zoom > 1 ? 1 : actualSize(), cx, cy);
+    const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    ease.to(zoom > 1 ? 1 : actualSize(), cx, cy, still);
   }
 
   // Each picture starts whole.
   $effect(() => {
     void shown;
+    ease.stop();
     natW = natH = 0;
     zoom = 1;
     panX = panY = 0;
@@ -177,6 +191,7 @@
   onMount(() => {
     dialog.focus();
     return () => {
+      ease.stop();
       releasePreview().catch(() => {});
     };
   });
