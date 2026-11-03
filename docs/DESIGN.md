@@ -115,7 +115,7 @@ without any CSS of its own.
 - Transitions use `--duration-fast` and `--ease-standard`, and are off under reduced motion.
 - **Penpot:** Button has a State variant for Primary, Secondary and Danger (Default, Hover,
   Pressed, Focus, Disabled) and Icon Button has Focus. Danger and the Focus rings are drawn with
-  the values above; the Button group's layout on the Components board still needs tidying.
+  the values above, in a 3 × 5 grid (kind by state) on the Components board.
 
 ## UX rules
 
