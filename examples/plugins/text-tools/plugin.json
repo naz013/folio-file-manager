@@ -1,0 +1,19 @@
+{
+  "id": "text-tools",
+  "name": "Text tools",
+  "version": "1.0.0",
+  "description": "Counts the words in text files, and shows CSV files as a table in Quick Look.",
+  "api": 1,
+  "entry": "index.html",
+  "permissions": ["selection", "read", "notify"],
+  "actions": [
+    {
+      "id": "count",
+      "title": "Count words and lines",
+      "kinds": ["file"],
+      "extensions": ["txt", "md", "log", "csv"],
+      "multiple": true
+    }
+  ],
+  "previews": [{ "id": "csv", "title": "CSV table", "extensions": ["csv"] }]
+}

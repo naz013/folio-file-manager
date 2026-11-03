@@ -11,6 +11,7 @@ use crate::cleanup_temp;
 use crate::fs::{self, Entry};
 use crate::journal::{self, Journal, Step};
 use crate::ops;
+use crate::plugins::{self, PluginsDir};
 use crate::queue::{self, Kind, Queue};
 use crate::scan::{self, BigFile, Measured, RootInfo, Scanner, Sized};
 use crate::search::{self, Hit, Query};
@@ -1200,6 +1201,20 @@ pub fn scan_start(app: tauri::AppHandle, root: String, fast: Option<bool>) -> Cm
         );
     });
     Ok(())
+}
+
+/// The plugins found in the plugins folder, each with its manifest as written.
+#[tauri::command]
+pub fn plugins_list(dir: tauri::State<'_, PluginsDir>) -> Vec<plugins::Found> {
+    dir.0.as_deref().map(plugins::list).unwrap_or_default()
+}
+
+/// The plugins folder, made if it isn't there yet, so it can be opened and filled.
+#[tauri::command]
+pub fn plugins_folder(dir: tauri::State<'_, PluginsDir>) -> CmdResult<String> {
+    let path = dir.0.as_deref().ok_or("There is no folder for plugins")?;
+    std::fs::create_dir_all(path).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
 }
 
 #[tauri::command]

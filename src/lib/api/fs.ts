@@ -103,6 +103,22 @@ export const releasePreview = () => invoke<void>("preview_allow", { path: null }
 /** What the core says for a file that is only in the cloud: it is not read until opened on purpose. */
 export const CLOUD_ONLY = "Only in the cloud";
 
+/** A plugin found in the plugins folder; see `load` in `$lib/plugins`. */
+export interface PluginFound {
+  id: string;
+  manifest: string | null;
+  error: string | null;
+}
+export const pluginsList = () => invoke<PluginFound[]>("plugins_list");
+/** The plugins folder (made if missing), for opening in the file manager. */
+export const pluginsFolder = () => invoke<string>("plugins_folder");
+
+/** Where a plugin's page is served from (the `plugin://` protocol): `<id>/<file>`. */
+export function pluginUrl(id: string, file: string): string {
+  const base = convertFileSrc("x", "plugin").slice(0, -1);
+  return base + id + "/" + file.split("/").map(encodeURIComponent).join("/");
+}
+
 /** The start of a text file; rejects for files that are not text. */
 export const readTextPreview = (path: string) =>
   invoke<{ text: string; truncated: boolean }>("read_text_preview", { path });

@@ -3,9 +3,12 @@
   import { CLOUD_ONLY, previewUrl, readTextPreview, releasePreview, type Entry } from "$lib/api/fs";
   import { formatDate, formatSize } from "$lib/format";
   import { previewKind } from "$lib/preview";
+  import { previewEvent, previewFor, type PreviewHit } from "$lib/plugins";
+  import { plugins } from "$lib/plugins.svelte";
   import FileIcon from "./FileIcon.svelte";
   import FolderIcon from "./FolderIcon.svelte";
   import PdfViewer from "./PdfViewer.svelte";
+  import PluginFrame from "./PluginFrame.svelte";
 
   let {
     entry,
@@ -31,12 +34,16 @@
 
   type Shown =
     | { kind: "loading" }
+    /** A plugin the person turned on draws this file in its own frame. */
+    | { kind: "plugin"; hit: PreviewHit }
     | { kind: "url"; media: "image" | "pdf" | "audio" | "video"; url: string }
     | { kind: "text"; text: string; truncated: boolean }
     /** `cloud`: the file is only in the cloud, and opening it would download it. */
     | { kind: "none"; why: string; cloud?: boolean };
 
   let shown = $state<Shown>({ kind: "loading" });
+  /** The file whose plugin preview the person chose to leave, to see it the usual way. */
+  let skipped = $state("");
   let dialog: HTMLElement;
 
   // ---- A picture is shown whole, then zoomed and moved by pinch, scroll and drag ----
@@ -188,7 +195,10 @@
     void version;
     let current = true;
     shown = { kind: "loading" };
-    if (kind === "other") {
+    const hit = skipped === path ? null : previewFor(plugins.list, { path, name, isDir });
+    if (hit) {
+      shown = { kind: "plugin", hit };
+    } else if (kind === "other") {
       shown = { kind: "none", why: isDir ? "Folder" : "No preview for this kind of file" };
     } else if (kind === "text") {
       readTextPreview(path)
@@ -276,6 +286,17 @@
         <!-- Files in a folder come without captions. -->
         <!-- svelte-ignore a11y_media_has_caption -->
         <video src={shown.url} controls autoplay></video>
+      {:else if shown.kind === "plugin"}
+        {#key path}
+          <PluginFrame
+            plugin={shown.hit.plugin}
+            onskip={() => (skipped = path)}
+            hello={{
+              event: previewEvent(shown.hit.preview.id, { path, name, isDir, size: entry.size }),
+              paths: [path],
+            }}
+          />
+        {/key}
       {:else if shown.kind === "text"}
         <pre>{shown.text}{#if shown.truncated}
             … the rest of the file is not shown{/if}</pre>

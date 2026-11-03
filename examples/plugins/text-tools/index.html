@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Text tools</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 12px;
+        font:
+          13px system-ui,
+          sans-serif;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+      }
+      th,
+      td {
+        padding: 4px 10px;
+        border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+        text-align: left;
+        white-space: nowrap;
+      }
+      th {
+        position: sticky;
+        top: 0;
+        background: Canvas;
+      }
+      p {
+        opacity: 0.7;
+      }
+    </style>
+  </head>
+  <body>
+    <p id="status">Waiting…</p>
+    <div id="out"></div>
+    <script>
+      // The page talks to Folio with messages: { folio: 1, id, method, params } and an
+      // answer { folio: 1, id, result | error }. See docs/PLUGINS.md.
+      let nextId = 1;
+      const pending = new Map();
+
+      function call(method, params) {
+        return new Promise((resolve, reject) => {
+          const id = nextId++;
+          pending.set(id, { resolve, reject });
+          parent.postMessage({ folio: 1, id, method, params }, "*");
+        });
+      }
+
+      window.addEventListener("message", (e) => {
+        const m = e.data;
+        if (!m || m.folio !== 1) return;
+        if (m.id !== undefined) {
+          const waiting = pending.get(m.id);
+          pending.delete(m.id);
+          if (m.error !== undefined) waiting?.reject(new Error(m.error));
+          else waiting?.resolve(m.result);
+        } else if (m.event === "action" && m.action === "count") {
+          count(m.paths);
+        } else if (m.event === "preview" && m.preview === "csv") {
+          showCsv(m.path);
+        }
+      });
+
+      async function count(paths) {
+        let words = 0;
+        let lines = 0;
+        for (const path of paths) {
+          const { text } = await call("read", { path });
+          words += text.split(/\s+/).filter(Boolean).length;
+          lines += text ? text.split("\n").length : 0;
+        }
+        const files = paths.length === 1 ? "1 file" : `${paths.length} files`;
+        await call("notify", { message: `${words} words, ${lines} lines in ${files}` });
+      }
+
+      /** Splits one CSV line, with "quoted, fields" and "" for a quote. */
+      function cells(line) {
+        const out = [];
+        let cell = "";
+        let quoted = false;
+        for (let i = 0; i < line.length; i++) {
+          const c = line[i];
+          if (quoted) {
+            if (c === '"' && line[i + 1] === '"') {
+              cell += '"';
+              i++;
+            } else if (c === '"') {
+              quoted = false;
+            } else {
+              cell += c;
+            }
+          } else if (c === '"') {
+            quoted = true;
+          } else if (c === ",") {
+            out.push(cell);
+            cell = "";
+          } else {
+            cell += c;
+          }
+        }
+        out.push(cell);
+        return out;
+      }
+
+      async function showCsv(path) {
+        const status = document.getElementById("status");
+        try {
+          const { text, truncated } = await call("read", { path });
+          const rows = text.split(/\r?\n/).filter(Boolean).slice(0, 500).map(cells);
+          const table = document.createElement("table");
+          rows.forEach((row, r) => {
+            const tr = table.insertRow();
+            for (const value of row) {
+              const cell = document.createElement(r === 0 ? "th" : "td");
+              // Text, never markup: a file's contents are not trusted either.
+              cell.textContent = value;
+              tr.append(cell);
+            }
+          });
+          document.getElementById("out").replaceChildren(table);
+          status.textContent = truncated || rows.length >= 500 ? "Start of the file only" : "";
+        } catch (e) {
+          status.textContent = e.message;
+        }
+      }
+
+      // Tell Folio the page is ready; it then sends the action or preview that opened it.
+      parent.postMessage({ folio: 1, event: "ready" }, "*");
+    </script>
+  </body>
+</html>

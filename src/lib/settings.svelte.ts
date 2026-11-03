@@ -6,6 +6,7 @@
 
 import { movedBy, movedTo, pinKey, withPinned } from "$lib/favorites";
 import { isMotion, motionReduced, type Motion } from "$lib/motion";
+import { cleanGrants, type Grant } from "$lib/plugins";
 
 const KEY = "folio.settings";
 
@@ -28,6 +29,8 @@ export interface Settings {
   showInspector: boolean;
   /** Windows: scans read the drive's file table through an elevated helper (needs a prompt each time). */
   fastScan: boolean;
+  /** Plugins the person has turned on, by id, with the version and permissions they agreed to. */
+  plugins: Record<string, Grant>;
   /** A second folder beside the first, for moving things between two places. */
   dualPane: boolean;
   /** The folder the second pane shows; empty until it is first opened. */
@@ -72,6 +75,7 @@ export const DEFAULTS: Settings = {
   showHidden: false,
   showInspector: false,
   fastScan: false,
+  plugins: {},
   dualPane: false,
   secondPath: "",
   defaultView: "grid",
@@ -115,6 +119,7 @@ function read(): Settings {
     showHidden: saved.showHidden === true,
     showInspector: saved.showInspector === true,
     fastScan: saved.fastScan === true,
+    plugins: cleanGrants(saved.plugins),
     dualPane: saved.dualPane === true,
     secondPath: typeof saved.secondPath === "string" ? saved.secondPath : "",
     defaultView:

@@ -4,6 +4,14 @@
     <meta charset="utf-8" />
     <link rel="icon" href="%sveltekit.assets%/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!--
+      Frames may only show plugin pages (the plugin:// protocol). This also stops a plugin's
+      frame from sending itself elsewhere, with data in the address.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="frame-src http://plugin.localhost https://plugin.localhost plugin:"
+    />
     <title>Folio</title>
     <script>
       // Set a forced theme before the first paint, so there is no flash of the other one.

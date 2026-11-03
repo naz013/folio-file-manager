@@ -119,6 +119,9 @@
   import { createSpring } from "$lib/spring";
   import { sideFolder, sideTarget } from "$lib/pane";
   import SidePane from "$lib/components/SidePane.svelte";
+  import PluginFrame from "$lib/components/PluginFrame.svelte";
+  import { actionEvent, actionsFor, type ActionHit } from "$lib/plugins";
+  import { plugins, reloadPlugins, setPluginNotifier } from "$lib/plugins.svelte";
   import {
     movePinned,
     pinFolders,
@@ -299,6 +302,45 @@
     columns(): number;
   }
   let fileView = $state<ListApi>();
+
+  // ---- Plugins ----
+
+  /** Plugins whose action has been run, so their unseen page exists; made on first use. */
+  const pluginsUsed = new SvelteSet<string>();
+  const pluginFrames = $state<Record<string, PluginFrame | undefined>>({});
+  const runningPlugins = $derived(
+    plugins.list.flatMap((p) =>
+      p.enabled && p.manifest && pluginsUsed.has(p.id) ? [{ ...p, manifest: p.manifest }] : [],
+    ),
+  );
+
+  async function runPluginAction(hit: ActionHit, paths: string[]) {
+    pluginsUsed.add(hit.plugin.id);
+    await tick();
+    pluginFrames[hit.plugin.id]?.send(actionEvent(hit.action.id, paths), paths);
+  }
+
+  /** Menu entries for the actions of enabled plugins that fit the selection. */
+  function pluginItems(): MenuItem[] {
+    const picked = selected();
+    const hits = actionsFor(
+      plugins.list,
+      picked.map((e) => ({ path: e.path, name: e.name, isDir: e.isDir })),
+    );
+    if (!hits.length) return [];
+    return [
+      "separator",
+      ...hits.map((hit) => ({
+        label: hit.action.title,
+        hint: hit.plugin.manifest.name,
+        run: () =>
+          runPluginAction(
+            hit,
+            picked.map((e) => e.path),
+          ),
+      })),
+    ];
+  }
 
   // ---- Second pane ----
 
@@ -2367,6 +2409,7 @@
         ? [{ label: "PDF tools…", run: () => openPdfTools(one ?? undefined) }]
         : []),
       ...(one && isEditable(one) ? [{ label: "Image tools…", run: () => (imageTools = one) }] : []),
+      ...pluginItems(),
       { label: "Move to Recycle Bin", hint: hintFor("trash"), danger: true, run: trashSelected },
       "separator",
       { label: "More options", run: () => nativeMenu([...selection]) },
@@ -2700,6 +2743,8 @@
         if (dest) dropPaths(payload.paths, dest);
       } else dragEnded();
     });
+    setPluginNotifier((text) => notify(text));
+    reloadPlugins();
     loadTagDefs();
     loadSmart();
     loadShelf();
@@ -3082,6 +3127,10 @@
   {/if}
 
   {#if !settings.nativeFrame}<WindowControls />{/if}
+
+  {#each runningPlugins as p (p.id)}
+    <PluginFrame bind:this={pluginFrames[p.id]} plugin={p} hidden />
+  {/each}
 
   <ShelfPanel
     items={shelf}

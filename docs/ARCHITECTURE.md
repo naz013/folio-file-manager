@@ -82,6 +82,11 @@ Smart folders (`smart.rs`) are saved searches kept in the same SQLite file as th
 - Cleanup detectors (duplicates, large/old, downloads, caches) run on top of the cache.
 - Temp files and caches (`cleanup_temp.rs`) are the one detector that reads inside `AppData`, which the protected-path rules otherwise keep out of reach, so it has its own rule: a short fixed list of named places, written in the code and never read from environment variables (a `TEMP` that points at Documents changes nothing). On Windows: the `Temp` folder under Local AppData (taken from the system, not the variable), crash dumps, error reports, the `Cache`, `Code Cache` and `GPUCache` folders of each Chrome, Edge and Brave profile, Firefox `cache2`, and the npm, pip and NuGet caches. On macOS and Linux: a few named cache folders (pip, Yarn, thumbnails, shader, font and Go build caches, Chrome and Firefox on macOS), not the whole `Library/Caches` or `~/.cache`. Each has a minimum age. A file is listed, and moved, only if it is a plain file strictly inside one of those places once its links are resolved, is not cloud-only, is not on a path of 260 characters or more (the Recycle Bin of Windows may not take it), is not something a person may have saved there (Outlook attachments, folders Explorer unzips into, AutoCAD autosaves), and has been left alone for that place's age. The window's list is never trusted: every item is checked again from disk when the move is asked for and when its job runs, and what is moved is the resolved path.
 
+### Plugins
+
+- A plugin is a folder (`plugin.json` and web files) under the app data `plugins` folder. Each runs in a `sandbox="allow-scripts"` iframe, served by the `plugin://` protocol (`plugins.rs`) from its own folder only, with a policy that blocks the network; the app page's `frame-src` keeps frames on that protocol.
+- The page talks to Folio through `postMessage` (`lib/plugins.ts`: manifest, permissions, matching, and the bridge). Folio answers only its own frame and only for permissions the person granted in Settings; there is no write API (ADR 0005). Authoring guide: [PLUGINS.md](PLUGINS.md).
+
 ### Native integration (Windows first)
 
 Implemented in `platform/windows` with the `windows` crate:

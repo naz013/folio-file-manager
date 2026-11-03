@@ -20,6 +20,7 @@ mod mft;
 mod ops;
 mod perf;
 mod platform;
+mod plugins;
 mod preview;
 mod queue;
 mod scan;
@@ -148,6 +149,11 @@ impl<R: tauri::Runtime> Protocols for tauri::Builder<R> {
                 });
             },
         )
+        .register_uri_scheme_protocol(plugins::SCHEME, |ctx, request| {
+            ctx.app_handle()
+                .try_state::<plugins::PluginsDir>()
+                .map_or_else(plugins::not_found, |dir| plugins::handle(&dir, &request))
+        })
         .register_asynchronous_uri_scheme_protocol(
             thumbs::SCHEME,
             |_ctx, request, responder| {
@@ -212,6 +218,9 @@ pub fn run() {
             // a journal that can't open is a failed start.
             app.manage(open_journal(journal_file.as_deref())?);
             manage_stores(app);
+            app.manage(plugins::PluginsDir(
+                app.path().app_data_dir().ok().map(|d| d.join("plugins")),
+            ));
             // Always managed, so the commands never meet missing state; without an app
             // data folder the files simply fail to write.
             let dir = app
@@ -325,6 +334,8 @@ pub fn run() {
             commands::bin_restore,
             commands::bin_purge,
             commands::scan_start,
+            commands::plugins_list,
+            commands::plugins_folder,
             commands::scan_cancel,
             commands::scan_children,
             commands::scan_large,
