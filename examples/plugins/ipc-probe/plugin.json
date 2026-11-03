@@ -1,0 +1,10 @@
+{
+  "id": "ipc-probe",
+  "name": "IPC probe",
+  "version": "1.0.0",
+  "description": "Security check: tries to reach Folio's own commands from a plugin page. Every line should say BLOCKED.",
+  "api": 1,
+  "entry": "index.html",
+  "permissions": [],
+  "previews": [{ "id": "probe", "title": "IPC probe", "extensions": ["probe"] }]
+}

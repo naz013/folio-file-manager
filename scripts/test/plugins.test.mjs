@@ -366,3 +366,11 @@ test("the example plugin's manifest is valid and does what its page claims", () 
   assert.match(page, /m\.preview === "csv"/);
   assert.match(page, /event: "ready"/);
 });
+
+test("the IPC probe plugin is a valid preview that asks for nothing", () => {
+  const dir = new URL("../../examples/plugins/ipc-probe/", import.meta.url);
+  const r = parseManifest("ipc-probe", readFileSync(new URL("plugin.json", dir), "utf8"));
+  assert.ok(r.ok, r.error);
+  assert.deepEqual(r.manifest.permissions, []);
+  assert.deepEqual(r.manifest.previews[0].extensions, ["probe"]);
+});

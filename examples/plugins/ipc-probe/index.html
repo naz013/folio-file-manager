@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="color-scheme" content="light dark" />
+    <title>IPC probe</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 12px;
+        font:
+          13px system-ui,
+          sans-serif;
+      }
+      li {
+        margin: 4px 0;
+      }
+      .bad {
+        color: #c00;
+        font-weight: 600;
+      }
+    </style>
+  </head>
+  <body>
+    <p>
+      Tries to reach Folio's commands from a plugin page. Each line must say BLOCKED; a line saying
+      REACHED is a hole in the sandbox.
+    </p>
+    <ul id="out"></ul>
+    <script>
+      const out = document.getElementById("out");
+      function report(name, reached, detail) {
+        const li = document.createElement("li");
+        li.textContent = `${reached ? "REACHED" : "BLOCKED"}: ${name} (${detail})`;
+        if (reached) li.className = "bad";
+        out.append(li);
+      }
+
+      /** Runs one attempt: it passes when it throws or fails, and fails when it goes through. */
+      async function attempt(name, fn) {
+        try {
+          const detail = await fn();
+          if (detail === undefined) report(name, false, "not there");
+          else report(name, true, String(detail));
+        } catch (e) {
+          report(name, false, e && e.name ? e.name : String(e));
+        }
+      }
+
+      // Folio's own page: cross-origin and sandboxed, so any access must throw.
+      attempt("parent.__TAURI_INTERNALS__", () => parent.__TAURI_INTERNALS__ && "object");
+      attempt("parent.document", () => parent.document && "document");
+      attempt("top.location.href", () => top.location.href);
+      // Tauri's helpers are injected into the main frame only.
+      attempt("window.__TAURI_INTERNALS__", () => window.__TAURI_INTERNALS__ && "object");
+      attempt("window.__TAURI__", () => window.__TAURI__ && "object");
+      // The webview's message channel, with a forged command and no valid invoke key.
+      attempt("chrome.webview.postMessage", () => {
+        const w = window.chrome && window.chrome.webview;
+        if (!w) return undefined;
+        w.postMessage(
+          JSON.stringify({
+            cmd: "plugins_folder",
+            callback: 1,
+            error: 2,
+            payload: {},
+            __TAURI_INVOKE_KEY__: "guess",
+          }),
+        );
+        // Not observable from here: check that nothing happens in Folio (no folder opens, no log).
+        const li = document.createElement("li");
+        li.textContent = "NOTE: a forged message was sent; Folio must ignore it (wrong invoke key)";
+        out.append(li);
+        return undefined;
+      });
+      // Tauri's custom-protocol channel: the policy must refuse the request.
+      for (const url of ["http://ipc.localhost/plugins_folder", "ipc://localhost/plugins_folder"]) {
+        attempt(`fetch ${url}`, async () => {
+          const r = await fetch(url, { method: "POST", body: "{}" });
+          return `status ${r.status}`;
+        });
+      }
+    </script>
+  </body>
+</html>
