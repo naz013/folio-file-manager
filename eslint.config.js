@@ -10,7 +10,14 @@ import svelteConfig from "./svelte.config.js";
 
 export default ts.config(
   {
-    ignores: ["build/", ".svelte-kit/", "node_modules/", "src-tauri/", "static/"],
+    ignores: [
+      "build/",
+      ".svelte-kit/",
+      "node_modules/",
+      "src-tauri/",
+      "static/",
+      ".claude/worktrees/",
+    ],
   },
   js.configs.recommended,
   ...ts.configs.recommended,

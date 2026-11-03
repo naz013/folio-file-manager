@@ -12,3 +12,6 @@ src/lib/licenses.json
 
 # Rust is formatted by rustfmt
 *.rs
+
+# Other checkouts of this repo made for agent sessions
+.claude/worktrees/
