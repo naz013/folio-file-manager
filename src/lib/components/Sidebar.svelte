@@ -1,4 +1,5 @@
 <script lang="ts">
+  import FolderIcon from "./FolderIcon.svelte";
   import Icon, { type IconName } from "./Icon.svelte";
   import { joinPath, listDrives, type Drive, type SmartFolder, type Tag } from "$lib/api/fs";
   import { formatSize } from "$lib/format";
@@ -201,7 +202,7 @@
               onpinmenu(pinned, e);
             }}
           >
-            <span class="icon" style:color={folderTint(pinned)}><Icon name="folder" /></span>
+            <span class="icon"><FolderIcon size={16} tint={folderTint(pinned)} /></span>
             <span>{baseName(pinned)}</span>
           </button>
         {/each}

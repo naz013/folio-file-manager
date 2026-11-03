@@ -1586,18 +1586,24 @@
   async function loadSideTags() {
     const seq = ++sideSeq;
     const up = parentOf(home);
-    const [inHome, inUp] = await Promise.all([
+    // The folders that hold the pinned favorites, so those icons take their tag colour too.
+    const holders = settings.pinnedFolders
+      .map((p) => parentOf(p))
+      .filter((d, i, all): d is string => !!d && all.indexOf(d) === i && d !== home && d !== up);
+    const [inHome, inUp, ...inHolders] = await Promise.all([
       fetchTagMap(home),
       up ? fetchTagMap(up) : Promise.resolve({}),
+      ...holders.map((d) => fetchTagMap(d).catch(() => ({}))),
     ]);
     // A newer read began meanwhile: it wins.
-    if (seq === sideSeq) sideTags = { ...inUp, ...inHome };
+    if (seq === sideSeq) sideTags = Object.assign({}, ...inHolders, inUp, inHome);
   }
 
   // Tags changed (here or in the listing): re-read the sidebar's folders.
   $effect(() => {
     void tagDefs;
     void tagMap;
+    void settings.pinnedFolders;
     if (home) void loadSideTags();
   });
 
