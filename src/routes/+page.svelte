@@ -114,10 +114,12 @@
   import WindowControls from "$lib/components/WindowControls.svelte";
   import TabBar from "$lib/components/TabBar.svelte";
   import Toolbar, { type View } from "$lib/components/Toolbar.svelte";
+  import { isPinned, pinName, slotOver } from "$lib/favorites";
   import { createSpring } from "$lib/spring";
   import {
     movePinned,
     pinFolders,
+    movePinnedTo,
     settings,
     startPath,
     unpinFolder,
@@ -262,8 +264,10 @@
 
   /** Folder under a native drag (from Folio itself or another app). */
   let dropTarget = $state<string | null>(null);
-  /** A folder drag is over the sidebar's Favorites, where dropping pins it. */
-  let pinHover = $state(false);
+  /** Where a dragged folder would be pinned in the Favorites, as a place in the list. */
+  let pinSlot = $state<number | null>(null);
+  /** A pinned folder is being dragged to a new place; it must never be moved or copied. */
+  let favDrag: string | null = null;
 
   let toast = $state<{ text: string; error: boolean } | null>(null);
   let toastTimer: ReturnType<typeof setTimeout>;
@@ -1248,9 +1252,50 @@
     }
   }
 
-  /** Whether a drag at this position is over the Favorites but not on one of them (pins). */
-  function pinZoneAt(el: Element | null): boolean {
-    return !el?.closest("[data-drop-path]") && !!el?.closest("[data-pin-drop]");
+  /**
+   * Where a folder dropped here would be pinned: a place in the Favorites list, or null when
+   * the pointer is not over the Favorites or is over the middle of an item (a drop there goes
+   * into that folder). Only the gaps between items, and the empty space below, pin.
+   */
+  function slotAt(el: Element | null, y: number): number | null {
+    const zone = el?.closest("[data-pin-drop]");
+    if (!zone) return null;
+    const pick = (item: HTMLElement, at: number) => {
+      const box = item.getBoundingClientRect();
+      const index = item.dataset.pinIndex;
+      return slotOver(
+        index === undefined
+          ? { fixed: true, last: "pinLast" in item.dataset }
+          : { index: Number(index) },
+        at,
+        box.top,
+        box.height,
+      );
+    };
+    const onItem = el?.closest<HTMLElement>("[data-drop-path]");
+    if (onItem) return pick(onItem, y);
+    // Not on an item: the heading (or a folded section) pins nothing, the gap between two
+    // items is the bottom of the one above, and below the last item is the end of the list.
+    const items = [...zone.querySelectorAll<HTMLElement>("[data-drop-path]")];
+    if (!items.length || y < items[0].getBoundingClientRect().top) return null;
+    const above = items.filter((i) => i.getBoundingClientRect().bottom <= y).pop();
+    if (!above) return null;
+    if (above === items[items.length - 1]) return settings.pinnedFolders.length;
+    return pick(above, above.getBoundingClientRect().bottom - 1);
+  }
+
+  /** Whether dropping at `slot` would change the list, so there is a line to show for it. */
+  function slotMatters(slot: number): boolean {
+    if (favDrag !== null) {
+      const from = settings.pinnedFolders.indexOf(favDrag);
+      return slot !== from && slot !== from + 1;
+    }
+    return foldersOf(dragPaths).some((p) => !isPinned(settings.pinnedFolders, p));
+  }
+
+  /** Whether what is being dragged can be pinned: a folder, or a favorite being moved. */
+  function pinnable(paths: string[]): boolean {
+    return favDrag !== null || foldersOf(paths).length > 0;
   }
 
   /** The dragged folders, for pinning; a drag of files (or from another app) pins nothing. */
@@ -1261,9 +1306,16 @@
   function hoverAt(pos: { x: number; y: number }) {
     dragPos = pos;
     const el = document.elementFromPoint(pos.x, pos.y);
-    dropTarget = el?.closest<HTMLElement>("[data-drop-path]")?.dataset.dropPath ?? null;
-    pinHover = !shelfDrag && pinZoneAt(el) && foldersOf(dragPaths).length > 0;
-    const target = dropTarget ?? el?.closest<HTMLElement>("[data-spring]")?.dataset.spring ?? null;
+    const slot = !shelfDrag && pinnable(dragPaths) ? slotAt(el, pos.y) : null;
+    pinSlot = slot !== null && slotMatters(slot) ? slot : null;
+    // A favorite being moved never drops into a folder; between items, nothing opens either.
+    const intoFolder = favDrag === null && slot === null;
+    dropTarget = intoFolder
+      ? (el?.closest<HTMLElement>("[data-drop-path]")?.dataset.dropPath ?? null)
+      : null;
+    const target = intoFolder
+      ? (dropTarget ?? el?.closest<HTMLElement>("[data-spring]")?.dataset.spring ?? null)
+      : null;
     if (target !== spent) spent = null;
     spring.hover(target);
   }
@@ -1316,7 +1368,8 @@
     dragPaths = [];
     spring.stop();
     dropTarget = null;
-    pinHover = false;
+    pinSlot = null;
+    favDrag = null;
     const started = trip;
     trip = null;
     if (!started) return;
@@ -1381,9 +1434,11 @@
     if (!(e.buttons & 1) || outside) {
       // Left the window with the button down: the OS takes the drag from here.
       const paths = inAppDrag.paths;
+      const moving = favDrag !== null;
       stopInAppDrag();
       void dragEnded();
-      if (e.buttons & 1) startDrag(paths).catch((err) => notify(String(err), true));
+      // A favorite is a shortcut, not the folder: it does not leave for Explorer.
+      if (e.buttons & 1 && !moving) startDrag(paths).catch((err) => notify(String(err), true));
       return;
     }
     inAppDrag.x = e.clientX;
@@ -1414,17 +1469,21 @@
     });
     const fromShelf = shelfDrag;
     // Decided from where the button was released, not from the last move.
-    const pin =
-      !fromShelf &&
-      pinZoneAt(document.elementFromPoint(e.clientX, e.clientY)) &&
-      foldersOf(paths).length > 0;
+    const fav = favDrag;
+    const slot =
+      !fromShelf && pinnable(paths)
+        ? slotAt(document.elementFromPoint(e.clientX, e.clientY), e.clientY)
+        : null;
     stopInAppDrag();
     void dragEnded();
-    // A shelf item is pasted only where it was dropped on a folder, never just "here".
-    if (fromShelf) {
+    if (fav) {
+      // Dropped between items it moves; anywhere else nothing happens.
+      if (slot !== null) movePinnedTo(fav, slot);
+    } else if (fromShelf) {
+      // A shelf item is pasted only where it was dropped on a folder, never just "here".
       if (onFolder) pasteShelfItem(fromShelf, onFolder);
-    } else if (pin) {
-      pinFolders(foldersOf(paths));
+    } else if (slot !== null) {
+      pinFolders(foldersOf(paths), slot);
     } else {
       const dest = onFolder ?? dropFallback();
       if (dest) dropPaths(paths, dest);
@@ -2080,6 +2139,21 @@
               ? [
                   { label: "Open in new tab", run: () => openTab(one.path, true) },
                   { label: "Open in terminal", run: () => terminalIn(one.path) },
+                  isPinned(settings.pinnedFolders, one.path)
+                    ? {
+                        label: "Remove from Favorites",
+                        run: () => {
+                          unpinFolder(one.path);
+                          notify(`Removed ${one.name} from Favorites`);
+                        },
+                      }
+                    : {
+                        label: "Add to Favorites",
+                        run: () => {
+                          pinFolders([one.path]);
+                          notify(`Added ${one.name} to Favorites`);
+                        },
+                      },
                 ]
               : []),
             "separator" as const,
@@ -2523,7 +2597,11 @@
     onbin={() => navigate(BIN_PATH)}
     binShown={inBin}
     folderTint={(p) => tintOf(sideTags[p])}
-    {pinHover}
+    {pinSlot}
+    onpindrag={(p) => {
+      favDrag = p;
+      dragOut([p]);
+    }}
     onpinmenu={(p, e) => {
       const list = settings.pinnedFolders;
       const i = list.indexOf(p);
@@ -2531,14 +2609,30 @@
         x: e.clientX,
         y: e.clientY,
         items: [
-          { label: "Move up", disabled: i <= 0, run: () => movePinned(p, -1) },
+          {
+            label: "Move up",
+            disabled: i <= 0,
+            run: () => {
+              movePinned(p, -1);
+              notify(`Moved ${pinName(p)} up: ${i} of ${list.length}`);
+            },
+          },
           {
             label: "Move down",
             disabled: i < 0 || i >= list.length - 1,
-            run: () => movePinned(p, 1),
+            run: () => {
+              movePinned(p, 1);
+              notify(`Moved ${pinName(p)} down: ${i + 2} of ${list.length}`);
+            },
           },
           "separator",
-          { label: "Unpin from Favorites", run: () => unpinFolder(p) },
+          {
+            label: "Remove from Favorites",
+            run: () => {
+              unpinFolder(p);
+              notify(`Removed ${pinName(p)} from Favorites`);
+            },
+          },
         ],
       };
     }}

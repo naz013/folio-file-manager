@@ -7,6 +7,25 @@
   import EmptyState from "./EmptyState.svelte";
   import { settings } from "$lib/settings.svelte";
 
+  /** A press on a pinned folder that moves far enough pulls it out as a drag to reorder. */
+  let press: { x: number; y: number; path: string } | null = null;
+
+  function pressPin(e: PointerEvent, path: string) {
+    if (e.button === 0) press = { x: e.clientX, y: e.clientY, path };
+  }
+
+  function movePress(e: PointerEvent) {
+    if (!press) return;
+    if (!(e.buttons & 1)) {
+      press = null;
+      return;
+    }
+    if (Math.hypot(e.clientX - press.x, e.clientY - press.y) < 5) return;
+    const { path } = press;
+    press = null;
+    onpindrag(path);
+  }
+
   const baseName = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
   const trimEnd = (p: string) => p.replace(/[\\/]+$/, "").toLowerCase();
   /** A drive this full or more shows its bar as a warning. */
@@ -33,8 +52,9 @@
     onbin,
     binShown = false,
     folderTint,
-    pinHover,
+    pinSlot,
     onpinmenu,
+    onpindrag,
   }: {
     home: string;
     current: string;
@@ -69,7 +89,9 @@
     /** The CSS colour a folder takes from its first colour tag, if it has one. */
     folderTint: (path: string) => string | null;
     /** A folder drag is over the Favorites section, where dropping pins it. */
-    pinHover: boolean;
+    pinSlot: number | null;
+    /** A pinned folder was pulled out: start dragging it to a new place in the list. */
+    onpindrag: (path: string) => void;
     /** Right-click on a pinned folder. */
     onpinmenu: (path: string, e: MouseEvent) => void;
   } = $props();
@@ -119,6 +141,8 @@
   </button>
 {/snippet}
 
+<svelte:window onpointermove={movePress} onpointerup={() => (press = null)} />
+
 <aside class="sidebar" aria-label="Places and tags">
   <!-- The window has no native title bar; the brand row is part of the drag area. -->
   <div class="brand" data-tauri-drag-region>
@@ -128,10 +152,10 @@
 
   <div class="places">
     <!-- Dropping a folder anywhere in here (not on a favorite) pins it. -->
-    <div class="favorites" class:pin={pinHover} data-pin-drop>
+    <div class="favorites" data-pin-drop>
       {@render heading("favorites")}
       {#if !folded("favorites")}
-        {#each favorites as fav (fav.label)}
+        {#each favorites as fav, at (fav.label)}
           {@const path = fav.sub ? joinPath(home, fav.sub) : home}
           <button
             class="item"
@@ -141,6 +165,11 @@
             class:springing={springPath === path}
             style:--spring-ms="{springMs}ms"
             data-drop-path={path}
+            data-pin-fixed
+            class:line-after={pinSlot === 0 &&
+              settings.pinnedFolders.length === 0 &&
+              at === favorites.length - 1}
+            data-pin-last={at === favorites.length - 1 ? "" : undefined}
             onclick={() => onnavigate(path)}
             onmousedown={(e) => e.button === 1 && e.preventDefault()}
             onauxclick={(e) => e.button === 1 && onopentab(path)}
@@ -149,7 +178,7 @@
             <span>{fav.label}</span>
           </button>
         {/each}
-        {#each settings.pinnedFolders as pinned (pinned)}
+        {#each settings.pinnedFolders as pinned, index (pinned)}
           <button
             class="item"
             class:selected={pinned === current}
@@ -158,7 +187,12 @@
             class:springing={springPath === pinned}
             style:--spring-ms="{springMs}ms"
             data-drop-path={pinned}
+            data-pin-index={index}
+            class:line-before={pinSlot === index}
+            class:line-after={pinSlot === settings.pinnedFolders.length &&
+              index === settings.pinnedFolders.length - 1}
             title={pinned}
+            onpointerdown={(e) => pressPin(e, pinned)}
             onclick={() => onnavigate(pinned)}
             onmousedown={(e) => e.button === 1 && e.preventDefault()}
             onauxclick={(e) => e.button === 1 && onopentab(pinned)}
@@ -380,9 +414,38 @@
     border-radius: var(--radius-sm);
   }
 
-  .favorites.pin {
-    outline: 2px solid var(--accent-default);
-    outline-offset: -2px;
+  /* Where a dragged folder will be pinned: a line in the gap above or below an item, drawn on
+     the item so it takes no room and nothing moves when it appears. */
+  .line-before,
+  .line-after {
+    position: relative;
+  }
+
+  .line-before::before,
+  .line-after::before {
+    content: "";
+    position: absolute;
+    right: var(--space-sm);
+    left: var(--space-sm);
+    height: 2px;
+    border-radius: 1px;
+    background: var(--accent-default);
+    pointer-events: none;
+  }
+
+  .line-before::before {
+    top: calc(-1 * var(--space-2xs));
+  }
+
+  .line-after::before {
+    bottom: calc(-1 * var(--space-2xs));
+  }
+
+  @media (forced-colors: active) {
+    .line-before::before,
+    .line-after::before {
+      background: Highlight;
+    }
   }
 
   .item .icon {

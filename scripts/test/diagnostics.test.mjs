@@ -29,7 +29,7 @@ test("what is not known is said so", () => {
 
 test("the diagnostics hold no path", () => {
   const text = diagnosticsText(line, env, null);
-  assert.doesNotMatch(text, /[A-Za-z]:\|\\|\/Users\//);
+  assert.doesNotMatch(text, /[A-Za-z]:\\|\\\\|\/Users\//);
 });
 
 test("the report address opens a new issue with the diagnostics in it", () => {

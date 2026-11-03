@@ -4,6 +4,8 @@
  * (`theme.ts`), because a script in app.html reads it before the first paint.
  */
 
+import { movedBy, movedTo, pinKey, withPinned } from "$lib/favorites";
+
 const KEY = "folio.settings";
 
 export const SPRING_DELAYS_MS = [500, 1000, 1500, 2000, 2500, 3000] as const;
@@ -166,31 +168,30 @@ if (typeof window !== "undefined") {
   });
 }
 
-/** Pins `paths` to the end of the Favorites; ones already pinned stay where they are. */
-export function pinFolders(paths: string[]) {
-  // Windows paths differ by case and trailing separators without being different folders.
-  const key = (p: string) => p.replace(/[\\/]+$/, "").toLowerCase();
-  const have = settings.pinnedFolders.map(key);
-  const fresh = paths.filter((p) => {
-    if (have.includes(key(p))) return false;
-    have.push(key(p));
-    return true;
-  });
-  if (fresh.length) updateSettings({ pinnedFolders: [...settings.pinnedFolders, ...fresh] });
+/**
+ * Pins `paths` in the Favorites at slot `at` (the end without one); ones already pinned stay
+ * where they are.
+ */
+export function pinFolders(paths: string[], at?: number) {
+  const next = withPinned(settings.pinnedFolders, paths, at);
+  if (next.length !== settings.pinnedFolders.length) updateSettings({ pinnedFolders: next });
 }
 
+/** Takes a folder off the Favorites. The folder itself is not touched. */
 export function unpinFolder(path: string) {
-  updateSettings({ pinnedFolders: settings.pinnedFolders.filter((p) => p !== path) });
+  updateSettings({
+    pinnedFolders: settings.pinnedFolders.filter((p) => pinKey(p) !== pinKey(path)),
+  });
 }
 
 /** Moves a pinned folder one place up (`-1`) or down (`1`). */
 export function movePinned(path: string, by: -1 | 1) {
-  const list = [...settings.pinnedFolders];
-  const from = list.indexOf(path);
-  const to = from + by;
-  if (from < 0 || to < 0 || to >= list.length) return;
-  [list[from], list[to]] = [list[to], list[from]];
-  updateSettings({ pinnedFolders: list });
+  updateSettings({ pinnedFolders: movedBy(settings.pinnedFolders, path, by) });
+}
+
+/** Moves a pinned folder to slot `slot`, counted in the list as it is now. */
+export function movePinnedTo(path: string, slot: number) {
+  updateSettings({ pinnedFolders: movedTo(settings.pinnedFolders, path, slot) });
 }
 
 /** The folder new tabs open in, given the user's home folder. */
