@@ -19,6 +19,22 @@ npm run tauri dev
    `cargo test --manifest-path src-tauri/Cargo.toml`.
 5. Commit with an imperative subject and `Closes #<n>` in the body.
 
+## Branches and `main`
+
+`main` is protected by the ruleset in [.github/rulesets/main.json](.github/rulesets/main.json):
+no deletion, no force-push, linear history. Everyone except the repository admin changes it
+through a pull request whose `frontend`, `rust-linux` and `rust-windows` checks pass. The admin
+may still push to `main` directly (the ruleset's bypass), which is how maintainer work lands:
+commit on the feature branch, rebase onto `main`, fast-forward `main`, push.
+
+Apply or refresh the ruleset (needs a public repository or GitHub Pro):
+
+```
+gh api -X POST repos/naz013/folio-file-manager/rulesets --input .github/rulesets/main.json
+```
+
+To update an existing one, use `PUT repos/naz013/folio-file-manager/rulesets/<id>` instead.
+
 ## Commands
 
 | Command                                           | What it does                                                  |
