@@ -285,8 +285,10 @@ mod tests {
             .clone();
         assert!(shown.is_some());
         // Another item takes the name before the operation runs.
+        // (Made first and renamed over, so it can't be handed the old file's inode.)
+        let other = file(&t.path().join("dest").join("other.txt"), "somebody else's");
         fs::remove_file(&existing).unwrap();
-        file(&existing, "somebody else's");
+        fs::rename(&other, &existing).unwrap();
 
         let chosen = [(src.clone(), shown)];
         let err = to_replace(std::slice::from_ref(&src), &chosen, &dest).unwrap_err();

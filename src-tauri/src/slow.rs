@@ -2,10 +2,11 @@
 //! sleeping NAS. Such a call can block for minutes and cannot be cancelled, so it runs on
 //! its own thread and the caller stops waiting after a limit; the window stays usable.
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
-use tokio::sync::Semaphore;
+use tokio::sync::oneshot;
 
 /// How long a folder listing may take before it is reported as not answering.
 pub const LISTING: Duration = Duration::from_secs(10);
@@ -39,8 +40,10 @@ pub static MEASURES: LazyLock<Lane> = LazyLock::new(|| Lane::new(2));
 pub static AUTO_MEASURES: LazyLock<Lane> = LazyLock::new(|| Lane::new(1));
 
 /// Where thumbnails are drawn: a big grid asks for a few hundred at once, and they are made a
-/// few dozen at a time.
-pub static THUMBNAILS: LazyLock<Lane> = LazyLock::new(|| Lane::new(32));
+/// few dozen at a time. The newest request goes first: the page cannot take back a request, so
+/// the ones it has since scrolled away from are left to sink to the back of the line, where
+/// they run out their time limit without ever starting.
+pub static THUMBNAILS: LazyLock<Lane> = LazyLock::new(|| Lane::newest_first(32));
 
 /// How a call in a [`Lane`] ended. The cause matters to the message: a call that never got a
 /// place says the app is busy, one that started and went quiet says its disk is not answering.
@@ -61,14 +64,135 @@ pub enum Outcome<T> {
 /// limit. Each kind has its own lane: a dead share's stuck thumbnails don't hold up the
 /// listing of a folder on a healthy disk.
 pub struct Lane {
-    permits: Arc<Semaphore>,
+    places: Arc<Places>,
+}
+
+/// Who gets a place when one comes free.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Order {
+    /// The call that has waited longest.
+    Oldest,
+    /// The call that asked last.
+    Newest,
+}
+
+/// The places of a lane and the calls waiting for one.
+struct Places {
+    order: Order,
+    state: Mutex<PlaceState>,
+}
+
+struct PlaceState {
+    free: usize,
+    next_id: u64,
+    waiting: VecDeque<(u64, oneshot::Sender<Place>)>,
+}
+
+/// A place in a lane, held by a running call; dropping it hands the place to the next waiter.
+struct Place {
+    places: Arc<Places>,
+}
+
+impl Drop for Place {
+    fn drop(&mut self) {
+        self.places.release();
+    }
+}
+
+/// A call waiting for a place. If it stops waiting (its time ran out), it leaves the line.
+struct Waiting {
+    places: Arc<Places>,
+    id: u64,
+}
+
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        let mut state = self.places.lock();
+        state.waiting.retain(|(id, _)| *id != self.id);
+    }
+}
+
+impl Places {
+    fn lock(&self) -> std::sync::MutexGuard<'_, PlaceState> {
+        // Nothing here can panic while holding the lock, but a poisoned one is still usable.
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Waits for a place. Never gives up by itself: the caller's time limit drops it.
+    async fn acquire(self: &Arc<Self>) -> Place {
+        let (id, line) = {
+            let mut state = self.lock();
+            if state.free > 0 {
+                state.free -= 1;
+                return Place {
+                    places: Arc::clone(self),
+                };
+            }
+            let (give, line) = oneshot::channel();
+            state.next_id += 1;
+            let id = state.next_id;
+            state.waiting.push_back((id, give));
+            (id, line)
+        };
+        let _waiting = Waiting {
+            places: Arc::clone(self),
+            id,
+        };
+        // A waiter's sender is only ever dropped by the waiter leaving, so this is a place.
+        line.await
+            .expect("a waiting call's place is sent, not dropped")
+    }
+
+    /// Gives a place that came free to the next waiter, or keeps it free.
+    fn release(self: &Arc<Self>) {
+        let mut state = self.lock();
+        loop {
+            let next = match self.order {
+                Order::Oldest => state.waiting.pop_front(),
+                Order::Newest => state.waiting.pop_back(),
+            };
+            let Some((_, give)) = next else {
+                state.free += 1;
+                return;
+            };
+            let place = Place {
+                places: Arc::clone(self),
+            };
+            match give.send(place) {
+                Ok(()) => return,
+                // A waiter leaves the line before its receiver closes (see `Waiting`), so this
+                // should not happen. If it does, dropping the place here would take the lock
+                // again: it is set aside, costing one reference count, and the next is tried.
+                Err(unused) => std::mem::forget(unused),
+            }
+        }
+    }
 }
 
 impl Lane {
-    fn new(most: usize) -> Self {
+    fn with_order(most: usize, order: Order) -> Self {
         Self {
-            permits: Arc::new(Semaphore::new(most)),
+            places: Arc::new(Places {
+                order,
+                state: Mutex::new(PlaceState {
+                    free: most,
+                    next_id: 0,
+                    waiting: VecDeque::new(),
+                }),
+            }),
         }
+    }
+
+    /// A lane where the call that has waited longest goes first.
+    fn new(most: usize) -> Self {
+        Self::with_order(most, Order::Oldest)
+    }
+
+    /// A lane where the call that asked last goes first.
+    fn newest_first(most: usize) -> Self {
+        Self::with_order(most, Order::Newest)
     }
 
     /// Runs `work` off the calling thread and waits at most `limit` for it, a wait for a free
@@ -92,15 +216,13 @@ impl Lane {
         limit: Duration,
         work: impl FnOnce() -> T + Send + 'static,
     ) -> Outcome<T> {
-        let permits = Arc::clone(&self.permits);
+        let places = Arc::clone(&self.places);
         // Set when the work begins, not when the place is taken: a call that holds a place but
         // never ran (the blocking pool was full) is busy, not timed out.
         let started = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&started);
         let turn = async move {
-            let Ok(place) = permits.acquire_owned().await else {
-                return Outcome::Failed;
-            };
+            let place = places.acquire().await;
             // The place goes with the work, so a stuck call keeps its place to the end.
             match tauri::async_runtime::spawn_blocking(move || {
                 let _place = place;
@@ -172,6 +294,81 @@ mod tests {
             "it waited for the first call's place"
         );
         assert_eq!(first.join().unwrap(), Some(1));
+    }
+
+    /// Holds the lane's only place for a while, queues three calls in a fixed order behind it,
+    /// and returns the order they ran in.
+    fn order_of_three(lane: &Arc<Lane>) -> Vec<&'static str> {
+        let ran = Arc::new(Mutex::new(Vec::new()));
+        let (started, running) = std::sync::mpsc::channel();
+        let holder = {
+            let lane = Arc::clone(lane);
+            std::thread::spawn(move || {
+                run(lane.within(Duration::from_secs(5), move || {
+                    started.send(()).unwrap();
+                    std::thread::sleep(Duration::from_millis(400));
+                }))
+            })
+        };
+        running.recv().unwrap();
+        let mut waiters = Vec::new();
+        for name in ["first", "second", "third"] {
+            let lane = Arc::clone(lane);
+            let ran = Arc::clone(&ran);
+            waiters.push(std::thread::spawn(move || {
+                run(lane.within(Duration::from_secs(5), move || {
+                    ran.lock().unwrap().push(name);
+                }))
+            }));
+            // Each one is in line before the next asks.
+            std::thread::sleep(Duration::from_millis(60));
+        }
+        holder.join().unwrap();
+        for w in waiters {
+            w.join().unwrap();
+        }
+        // Every thread has finished, so this is the last handle.
+        Arc::try_unwrap(ran).unwrap().into_inner().unwrap()
+    }
+
+    #[test]
+    fn a_newest_first_lane_serves_the_last_to_ask_first() {
+        assert_eq!(
+            order_of_three(&Arc::new(Lane::newest_first(1))),
+            ["third", "second", "first"]
+        );
+    }
+
+    #[test]
+    fn an_ordinary_lane_serves_the_longest_waiting_first() {
+        assert_eq!(
+            order_of_three(&Arc::new(Lane::new(1))),
+            ["first", "second", "third"]
+        );
+    }
+
+    #[test]
+    fn a_call_that_stopped_waiting_never_starts_and_loses_no_place() {
+        let lane = Arc::new(Lane::newest_first(1));
+        let busy = Arc::clone(&lane);
+        let (started, running) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            run(busy.within(Duration::from_secs(5), move || {
+                started.send(()).unwrap();
+                std::thread::sleep(Duration::from_millis(300));
+            }))
+        });
+        running.recv().unwrap();
+        let ran = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&ran);
+        let dropped = run(lane.within(Duration::from_millis(40), move || {
+            flag.store(true, Ordering::SeqCst);
+        }));
+        assert_eq!(dropped, None, "gave up waiting");
+        holder.join().unwrap();
+        assert!(!ran.load(Ordering::SeqCst), "and never ran");
+        // Its place in line did not swallow the place the holder gave back.
+        assert_eq!(run(lane.within(Duration::from_secs(5), || 9)), Some(9));
     }
 
     #[test]

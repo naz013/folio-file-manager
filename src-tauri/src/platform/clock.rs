@@ -64,24 +64,35 @@ mod imp {
 mod imp {
     pub fn offset_at_utc(utc: i64) -> Option<i64> {
         let t = libc::time_t::try_from(utc).ok()?;
-        // SAFETY: `tm` is plain data that `localtime_r` fills in; both pointers are live locals.
+        // SAFETY: `tm` is plain data, so all-zero is valid.
         let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+        // SAFETY: `localtime_r` fills in `tm`; both pointers are live locals.
         if unsafe { libc::localtime_r(&raw const t, &raw mut tm) }.is_null() {
             return None;
         }
+        #[expect(
+            clippy::useless_conversion,
+            reason = "`tm_gmtoff` is `i64` on 64-bit targets only"
+        )]
         i64::try_from(tm.tm_gmtoff).ok()
     }
 
     pub fn offset_at_wall(wall: i64) -> Option<i64> {
         let t = libc::time_t::try_from(wall).ok()?;
-        // SAFETY: as above; `gmtime_r` splits the time into fields, and `mktime` reads them
-        // back as local time (the zone decides whether summer time applies).
+        // SAFETY: `tm` is plain data, so all-zero is valid.
         let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+        // SAFETY: `gmtime_r` splits the time into fields of `tm`; both pointers are live locals.
         if unsafe { libc::gmtime_r(&raw const t, &raw mut tm) }.is_null() {
             return None;
         }
         tm.tm_isdst = -1;
+        // SAFETY: `mktime` reads the fields back as local time (the zone decides whether summer
+        // time applies); `tm` is a live local.
         let utc = unsafe { libc::mktime(&raw mut tm) };
+        #[expect(
+            clippy::useless_conversion,
+            reason = "`time_t` is `i64` on 64-bit targets only"
+        )]
         (utc != -1).then(|| wall - i64::from(utc))
     }
 }

@@ -831,9 +831,11 @@ mod tests {
         let a = file(&dir.path().join("a.txt"));
         let t = index();
         t.toggle(std::slice::from_ref(&a), 1).unwrap();
+        // A different file now has the name, so the tag does not belong to it. (Made first and
+        // renamed over, so it can't be handed the old file's inode.)
+        let other = file(&dir.path().join("other.txt"));
         fs::remove_file(&a).unwrap();
-        // A different file now has the name, so the tag does not belong to it.
-        file(&a);
+        fs::rename(&other, &a).unwrap();
         let (backup, left_out) = t.backup_counted(None).unwrap();
         assert!(backup.files.is_empty());
         assert_eq!(left_out, 1);
@@ -858,7 +860,11 @@ mod tests {
         let home = Some("C:\\Users\\Ann");
         let swap = |p: &str| rehome(p, home, Some(to));
         assert_eq!(swap("C:\\Users\\Ann"), Some(to.to_path_buf()));
-        assert!(swap("c:\\users\\ann\\docs\\a.txt").is_some());
+        // The same folder in another case: one folder only where the file system ignores case.
+        assert_eq!(
+            swap("c:\\users\\ann\\docs\\a.txt").is_some(),
+            cfg!(any(windows, target_os = "macos"))
+        );
         assert_eq!(swap("C:\\Users\\Anna\\a.txt"), None);
         assert_eq!(swap("D:\\other\\a.txt"), None);
         assert_eq!(rehome("C:\\Users\\Ann\\a.txt", None, Some(to)), None);
@@ -1044,8 +1050,10 @@ mod tests {
         t.toggle(std::slice::from_ref(&a), 1).unwrap();
 
         // Deleted and recreated: a different file now has the name.
+        // (Made first and renamed over, so it can't be handed the old file's inode.)
+        let other = file(&dir.path().join("other.txt"));
         fs::remove_file(&a).unwrap();
-        file(&a);
+        fs::rename(&other, &a).unwrap();
         assert!(matches!(t.in_dir(dir.path()).as_slice(), []));
     }
 

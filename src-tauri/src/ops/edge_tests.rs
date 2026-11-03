@@ -1414,7 +1414,11 @@ fn copy_recreates_links_instead_of_following_them() {
         fs::read_link(dest.join("src").join("door")).unwrap(),
         outside
     );
-    assert_eq!(fs::read_link(dest.join("src").join("loop")).unwrap(), src);
+    // A link to the folder being copied leads into the copy.
+    assert_eq!(
+        fs::read_link(dest.join("src").join("loop")).unwrap(),
+        dest.join("src")
+    );
 }
 
 #[cfg(windows)]
@@ -2388,7 +2392,13 @@ fn named_place_is_clean_and_not_verbatim_for_either_slash() {
     let t = tmp();
     let (shared, _) = relative_fixture(t.path());
     let link = t.path().join("proj").join("sub").join("l");
-    for target in ["../../shared/f.txt", r"..\..\shared\f.txt"] {
+    // `\` separates only on Windows.
+    let targets: &[&str] = if cfg!(windows) {
+        &["../../shared/f.txt", r"..\..\shared\f.txt"]
+    } else {
+        &["../../shared/f.txt"]
+    };
+    for target in targets {
         let place = named_place(&link, Path::new(target));
         let text = place.to_string_lossy();
         assert!(!text.contains(".."), "{text}");
@@ -2413,7 +2423,8 @@ fn a_link_copied_on_its_own_never_ends_up_pointing_at_itself() {
     copy_into(&one(&from.join("l")), &dest).unwrap();
 
     let target = fs::read_link(dest.join("l")).unwrap();
-    assert!(!same_folder(&target, &dest.join("l")), "{target:?}");
+    // Not `same_folder`: that follows the link, and a link always leads to what it points at.
+    assert_ne!(target, dest.join("l"), "{target:?}");
     assert_eq!(read(dest.join("l")), "outside");
 }
 

@@ -569,18 +569,12 @@ mod tests {
         let outside = f.env.home.join("Documents");
         let secret = file(&outside.join("keep.txt"), 90, 10);
         let link = f.temp.join("shortcut");
-        let made = if cfg!(windows) {
-            std::os::windows::fs::symlink_dir(&outside, &link)
-        } else {
-            #[cfg(unix)]
-            {
-                std::os::unix::fs::symlink(&outside, &link)
-            }
-            #[cfg(not(unix))]
-            {
-                Ok(())
-            }
-        };
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_dir(&outside, &link);
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&outside, &link);
+        #[cfg(not(any(windows, unix)))]
+        let made: std::io::Result<()> = Ok(());
         if made.is_err() {
             eprintln!("skipped: no permission to make a link");
             return;

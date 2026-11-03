@@ -93,6 +93,13 @@ mod tests {
         assert!(platform::thumbnail_png(&file, 48).is_err());
     }
 
+    /// The page adds `r=1` when it asks again after a failure; the size is still read.
+    #[test]
+    fn unknown_query_keys_are_ignored() {
+        let uri: Uri = "thumb://localhost/%2Fx.jpg?s=96&r=1".parse().unwrap();
+        assert_eq!(parse(&uri).unwrap(), (PathBuf::from("/x.jpg"), 96));
+    }
+
     #[test]
     fn defaults_and_clamps_size() {
         let uri: Uri = "thumb://localhost/%2Fhome%2Fme%2Fx.jpg?s=9999"

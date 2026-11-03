@@ -1946,8 +1946,11 @@ mod tests {
         assert_eq!(ok.len(), 1);
         assert!(keepers_still_there(&ok[0]));
         // A different file of the same size put at the kept path is not the kept copy.
+        // (Made first and renamed over, so it can't be handed the old file's inode.)
+        let other = dir.path().join("other.bin");
+        std::fs::write(&other, vec![1u8; 100]).unwrap();
         std::fs::remove_file(&b).unwrap();
-        std::fs::write(&b, vec![1u8; 100]).unwrap();
+        std::fs::rename(&other, &b).unwrap();
         assert!(!keepers_still_there(&ok[0]));
         std::fs::remove_file(&b).unwrap();
         assert!(!keepers_still_there(&ok[0]));

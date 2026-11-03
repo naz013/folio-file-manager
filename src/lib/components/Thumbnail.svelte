@@ -1,6 +1,8 @@
 <script lang="ts" module>
   /** How long a tile rests on a file before its picture is asked for: tiles that scroll past don't cost a request. */
   const SETTLE_MS = 80;
+  /** The wait before a failed picture is asked for once more. */
+  const RETRY_MS = 400;
 </script>
 
 <script lang="ts">
@@ -11,7 +13,17 @@
   let { path, name, size }: { path: string; name: string; size: number } = $props();
 
   // Thumbnails are requested at 2x for crisp rendering on HiDPI screens.
-  let src = $derived(thumbUrl(path, size * 2));
+  let base = $derived(thumbUrl(path, size * 2));
+  // The newest request is served first, so an older one for a tile still in view can run out
+  // its time while the page scrolls. A failed picture is asked for once more, as the newest.
+  let retrying = $state<string | null>(null);
+  let src = $derived(retrying === base ? `${base}&r=1` : base);
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  // A retry belongs to the file it was scheduled for: not to a recycled tile, nor a gone one.
+  $effect(() => {
+    void base;
+    return () => clearTimeout(retryTimer);
+  });
 
   // Remember which src loaded or failed, so a recycled row showing a new file starts fresh.
   let loadedSrc = $state<string | null>(null);
@@ -40,7 +52,13 @@
     decoding="async"
     draggable="false"
     onload={() => (loadedSrc = src)}
-    onerror={() => (failedSrc = src)}
+    onerror={() => {
+      if (retrying === base) failedSrc = src;
+      else {
+        const again = base;
+        retryTimer = setTimeout(() => (retrying = again), RETRY_MS);
+      }
+    }}
   />
 {:else}
   <span class="waiting" style:width="{size}px" style:height="{size}px"></span>

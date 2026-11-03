@@ -51,12 +51,16 @@ pub fn free_space(path: &Path) -> Option<u64> {
     {
         use std::os::unix::ffi::OsStrExt;
         let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
-        // SAFETY: `statvfs` is plain data that the call fills in; `c_path` is NUL-terminated
-        // and outlives the call.
+        // SAFETY: `statvfs` is plain data, so all-zero is valid.
         let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+        // SAFETY: the call fills in `stat`; `c_path` is NUL-terminated and outlives the call.
         if unsafe { libc::statvfs(c_path.as_ptr(), &raw mut stat) } != 0 {
             return None;
         }
+        #[expect(
+            clippy::useless_conversion,
+            reason = "the `statvfs` fields are `u64` on 64-bit Linux only"
+        )]
         u64::try_from(stat.f_bavail)
             .ok()?
             .checked_mul(u64::try_from(stat.f_frsize).ok()?)

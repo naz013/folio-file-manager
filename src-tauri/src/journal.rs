@@ -1242,8 +1242,11 @@ mod tests {
         let j = journal();
         done(&j, "New folder", &[Step::create_folder(folder.clone())]);
         // Another empty folder takes the name.
+        // (Made first and renamed into place, so it can't be handed the old folder's inode.)
+        let other = t.path().join("other");
+        std::fs::create_dir(&other).unwrap();
         std::fs::remove_dir(&folder).unwrap();
-        std::fs::create_dir(&folder).unwrap();
+        std::fs::rename(&other, &folder).unwrap();
 
         let e = j.undo().unwrap_err();
 

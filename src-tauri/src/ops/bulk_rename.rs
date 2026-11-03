@@ -261,7 +261,13 @@ mod tests {
     fn check_flags_invalid_names() {
         let dir = tmp();
         let a = file(dir.path(), "a.txt", "a");
-        for bad in ["", "x/y", "x\\y", "trailing.", "bad:name"] {
+        for bad in ["", "x/y"] {
+            let result = check(&plan(&[(&a, bad)]));
+            assert!(result[0].is_some(), "{bad:?} should be flagged");
+        }
+        // Only Windows refuses these.
+        #[cfg(windows)]
+        for bad in ["x\\y", "trailing.", "bad:name"] {
             let result = check(&plan(&[(&a, bad)]));
             assert!(result[0].is_some(), "{bad:?} should be flagged");
         }
