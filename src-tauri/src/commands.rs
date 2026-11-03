@@ -496,14 +496,16 @@ fn submit_trash(
         let mut left_alone = changed.len();
         // The room left in the bin is looked at now, not when the job was queued: other
         // jobs ahead of this one may have filled it.
-        let (targets, no_room, last_look) = match filter {
-            Some(pick) => {
-                let before = targets.len();
-                let picked = pick(targets);
-                left_alone += before - picked.paths.len() - picked.no_room;
-                (picked.paths, picked.no_room, picked.last_look)
-            }
-            None => (targets, 0, None),
+        let (targets, no_room, last_look, no_bin) = if let Some(pick) = filter {
+            let before = targets.len();
+            let picked = pick(targets);
+            left_alone += before - picked.paths.len() - picked.no_room;
+            (picked.paths, picked.no_room, picked.last_look, 0)
+        } else {
+            // A plain delete: what the bin can't take is held back, not left to the shell,
+            // which would delete it for good without asking.
+            let s = ops::bin_guard::screen(targets, crate::platform::recycle_limit);
+            (s.go, s.no_room, None, s.no_bin)
         };
         // Checking the files can take long; where the move depends on something staying
         // as it was, each one is looked at again right before it goes.
@@ -546,6 +548,7 @@ fn submit_trash(
                 "count": steps.len() - unconfirmed,
                 "leftAlone": left_alone,
                 "noRoom": no_room,
+                "noBin": no_bin,
                 "unconfirmed": unconfirmed,
             })),
             Err(e) if unconfirmed > 0 => Err(format!(

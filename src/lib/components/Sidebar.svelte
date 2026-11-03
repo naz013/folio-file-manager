@@ -1,7 +1,14 @@
 <script lang="ts">
   import FolderIcon from "./FolderIcon.svelte";
   import Icon, { type IconName } from "./Icon.svelte";
-  import { joinPath, listDrives, type Drive, type SmartFolder, type Tag } from "$lib/api/fs";
+  import {
+    BIN_PATH,
+    joinPath,
+    listDrives,
+    type Drive,
+    type SmartFolder,
+    type Tag,
+  } from "$lib/api/fs";
   import { formatSize } from "$lib/format";
   import { hintFor } from "$lib/shortcuts";
   import { tagColor } from "$lib/tags";
@@ -298,6 +305,8 @@
     <button
       class="item"
       class:selected={binShown}
+      class:drop={dropTarget === BIN_PATH}
+      data-drop-bin
       aria-current={binShown ? "page" : undefined}
       onclick={onbin}
     >

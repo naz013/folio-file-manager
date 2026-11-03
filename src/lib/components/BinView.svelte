@@ -6,9 +6,12 @@
 
   let {
     onrestored,
+    dropping = false,
   }: {
     /** Items were put back, so the folder shown may have changed. */
     onrestored: () => void;
+    /** Something is being dragged over the list, to be moved to the bin. */
+    dropping?: boolean;
   } = $props();
 
   let items = $state<BinItem[]>([]);
@@ -93,7 +96,7 @@
 
 <!-- Only answers Escape for the confirmation inside it. -->
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-<section class="bin" aria-label="Recycle Bin" {onkeydown}>
+<section class="bin" class:dropping aria-label="Recycle Bin" data-drop-bin {onkeydown}>
   <header>
     <span class="note">{items.length} {items.length === 1 ? "item" : "items"}</span>
     <span class="grow"></span>
@@ -161,6 +164,11 @@
     gap: var(--space-md);
     padding: var(--space-md) var(--space-lg);
     background: var(--bg-window);
+  }
+
+  .bin.dropping {
+    outline: 2px solid var(--accent-default);
+    outline-offset: -2px;
   }
 
   header {

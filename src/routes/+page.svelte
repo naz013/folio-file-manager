@@ -117,6 +117,7 @@
   import Toolbar, { type View } from "$lib/components/Toolbar.svelte";
   import { isPinned, pinName, slotOver } from "$lib/favorites";
   import { createSpring } from "$lib/spring";
+  import { trashable } from "$lib/trashDrop";
   import { sideFolder, sideTarget } from "$lib/pane";
   import SidePane from "$lib/components/SidePane.svelte";
   import PluginFrame from "$lib/components/PluginFrame.svelte";
@@ -1150,33 +1151,39 @@
 
   function reportDone(job: Job) {
     if (job.kind === "trash") {
-      const { count, leftAlone, unconfirmed, noRoom } = (job.result as {
+      const { count, leftAlone, unconfirmed, noRoom, noBin } = (job.result as {
         count: number;
         leftAlone: number;
         unconfirmed?: number;
         noRoom?: number;
+        noBin?: number;
       } | null) ?? { count: 0, leftAlone: 0 };
       const note = leftAlone
         ? ` ${plural(leftAlone, "item")} changed before it could be deleted and was left alone.`
         : "";
+      const full = noRoom
+        ? ` ${plural(noRoom, "item")} did not fit in the Recycle Bin and ${noRoom === 1 ? "was" : "were"} left alone: empty it and try again.`
+        : "";
+      // Never deleted for good in its place: Folio leaves alone what is on a drive with no
+      // Recycle Bin (network, removable, or set to delete at once), and what is in one already.
+      const nobin = noBin
+        ? ` ${plural(noBin, "item")} ${noBin === 1 ? "was" : "were"} left alone: not on a drive with a Recycle Bin, or already in one. Folio does not delete items on such a drive for good.`
+        : "";
       if (unconfirmed) {
         // Never say "moved" for what may be gone for good; keep the row so it is read.
         notify(
-          `${plural(unconfirmed, "item")} left without a Recycle Bin entry and may have been deleted permanently (the bin may be turned off or full).${count ? ` ${plural(count, "item")} moved to the Recycle Bin.` : ""}${note}`,
+          `${plural(unconfirmed, "item")} left without a Recycle Bin entry and may have been deleted permanently (the bin may be turned off or full).${count ? ` ${plural(count, "item")} moved to the Recycle Bin.` : ""}${note}${full}${nobin}`,
           true,
         );
         refresh([]);
         return;
       }
-      const full = noRoom
-        ? ` ${plural(noRoom, "item")} did not fit in the Recycle Bin and ${noRoom === 1 ? "was" : "were"} left alone: empty it and try again.`
-        : "";
       notify(
-        `Moved ${plural(count, "item")} to Recycle Bin.${note}${full}`,
-        leftAlone > 0 || !!noRoom,
+        `${count ? `Moved ${plural(count, "item")} to Recycle Bin.` : "Nothing was moved to the Recycle Bin."}${note}${full}${nobin}`,
+        leftAlone > 0 || !!noRoom || !!noBin,
       );
       // Finished and quiet: no need to keep the row around.
-      if (!leftAlone && !noRoom) dismissJob(job.id);
+      if (!leftAlone && !noRoom && !noBin) dismissJob(job.id);
       refresh([]);
       return;
     }
@@ -1325,6 +1332,20 @@
   function folderAt(pos: { x: number; y: number }): string | null {
     const el = document.elementFromPoint(pos.x / devicePixelRatio, pos.y / devicePixelRatio);
     return el?.closest<HTMLElement>("[data-drop-path]")?.dataset.dropPath ?? null;
+  }
+
+  /** The native drag in progress began as a shelf item's drag. */
+  let nativeFromShelf = false;
+
+  /** Whether an element is the Recycle Bin entry in the sidebar or the open Recycle Bin. */
+  const overBin = (el: Element | null | undefined) => !!el?.closest("[data-drop-bin]");
+
+  /** A drop on the Recycle Bin always trashes, whatever Ctrl or Shift say: it is the same as
+   *  Delete (a background job, in the undo history), without a question. */
+  async function dropOnBin(paths: string[]) {
+    dragKeys = { ctrl: false, shift: false };
+    const items = trashable(paths);
+    if (items.length) await run(() => trashPaths(items));
   }
 
   /** Explorer's rule: Ctrl copies, Shift moves, otherwise it follows the drive. */
@@ -1494,6 +1515,20 @@
   function hoverAt(pos: { x: number; y: number }) {
     dragPos = pos;
     const el = document.elementFromPoint(pos.x, pos.y);
+    // The Recycle Bin takes files only: not a favorite, nor an item pulled off the shelf.
+    if (
+      overBin(el) &&
+      favDrag === null &&
+      !shelfDrag &&
+      !nativeFromShelf &&
+      trashable(dragPaths).length
+    ) {
+      dropTarget = BIN_PATH;
+      pinSlot = null;
+      spent = null;
+      spring.hover(null);
+      return;
+    }
     const slot = !shelfDrag && pinnable(dragPaths) ? slotAt(el, pos.y) : null;
     pinSlot = slot !== null && slotMatters(slot) ? slot : null;
     // A favorite being moved never drops into a folder; between items, nothing opens either.
@@ -1645,8 +1680,11 @@
       // Left the window with the button down: the OS takes the drag from here.
       const paths = inAppDrag.paths;
       const moving = favDrag !== null;
+      // A shelf item taken out and brought back in is still a shelf item: not for the bin.
+      const fromShelf = shelfDrag !== null;
       stopInAppDrag();
       void dragEnded();
+      nativeFromShelf = fromShelf;
       // A favorite is a shortcut, not the folder: it does not leave for Explorer.
       if (e.buttons & 1 && !moving) startDrag(paths).catch((err) => notify(String(err), true));
       return;
@@ -1680,6 +1718,7 @@
     const fromShelf = shelfDrag;
     // Decided from where the button was released, not from the last move.
     const fav = favDrag;
+    const onBin = overBin(document.elementFromPoint(e.clientX, e.clientY));
     const slot =
       !fromShelf && pinnable(paths)
         ? slotAt(document.elementFromPoint(e.clientX, e.clientY), e.clientY)
@@ -1692,6 +1731,8 @@
     } else if (fromShelf) {
       // A shelf item is pasted only where it was dropped on a folder, never just "here".
       if (onFolder) pasteShelfItem(fromShelf, onFolder);
+    } else if (onBin) {
+      dropOnBin(paths);
     } else if (slot !== null) {
       pinFolders(foldersOf(paths), slot);
     } else {
@@ -2737,11 +2778,20 @@
       } else if (payload.type === "over") {
         hoverAt(at);
       } else if (payload.type === "drop") {
+        const onBin = overBin(document.elementFromPoint(at.x, at.y));
         const dest = folderAt(payload.position) ?? dropFallback(at);
+        const shelf = nativeFromShelf;
+        nativeFromShelf = false;
         // Settle the trip first: the drop's own transfer then lands in the folder shown.
         dragEnded();
-        if (dest) dropPaths(payload.paths, dest);
-      } else dragEnded();
+        // The bin takes no shelf item, and it is not a place to copy one into either.
+        if (onBin) {
+          if (!shelf) dropOnBin(payload.paths);
+        } else if (dest) dropPaths(payload.paths, dest);
+      } else {
+        nativeFromShelf = false;
+        dragEnded();
+      }
     });
     setPluginNotifier((text) => notify(text));
     reloadPlugins();
@@ -2981,7 +3031,7 @@
     <div class="panes">
       <div class="primary" class:active={!sideActive}>
         {#if place === "bin"}
-          <BinView onrestored={() => refresh()} />
+          <BinView onrestored={() => refresh()} dropping={dropTarget === BIN_PATH} />
         {:else if place === "storage"}
           <StorageView start={lastFolder || startPath(home)} onopen={(p) => navigate(p)} />
         {:else if place === "cleanup"}
@@ -3265,8 +3315,15 @@
   {/if}
 
   {#if inAppDrag}
-    <div class="ghost" style:left="{inAppDrag.x + 14}px" style:top="{inAppDrag.y + 14}px">
-      {plural(inAppDrag.paths.length, "item")}
+    <div
+      class="ghost"
+      class:trash={dropTarget === BIN_PATH}
+      style:left="{inAppDrag.x + 14}px"
+      style:top="{inAppDrag.y + 14}px"
+    >
+      {dropTarget === BIN_PATH
+        ? `Move ${plural(trashable(inAppDrag.paths).length, "item")} to Recycle Bin`
+        : plural(inAppDrag.paths.length, "item")}
     </div>
   {/if}
 
@@ -3377,6 +3434,11 @@
     box-shadow: var(--shadow-popover);
     font-weight: var(--font-weight-medium);
     pointer-events: none;
+  }
+
+  .ghost.trash {
+    background: var(--bg-danger);
+    color: var(--text-on-danger);
   }
 
   .toast {
