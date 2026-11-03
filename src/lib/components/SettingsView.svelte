@@ -11,6 +11,7 @@
     tagsExport,
     type CrashState,
   } from "$lib/api/fs";
+  import { SCALE_STOPS, nearestStop } from "$lib/gridScale";
   import type { Motion } from "$lib/motion";
   import { PERMISSIONS } from "$lib/plugins";
   import {
@@ -222,6 +223,20 @@
           aria-labelledby="frame-label"
           checked={settings.nativeFrame}
           onchange={(e) => updateSettings({ nativeFrame: e.currentTarget.checked })}
+        />
+      </div>
+
+      <div class="row">
+        <span id="tiles-label">Size of the tiles in the grid</span>
+        <input
+          type="range"
+          class="size"
+          min="0"
+          max={SCALE_STOPS.length - 1}
+          step="1"
+          aria-labelledby="tiles-label"
+          value={nearestStop(settings.gridScale)}
+          oninput={(e) => updateSettings({ gridScale: SCALE_STOPS[Number(e.currentTarget.value)] })}
         />
       </div>
 
@@ -617,6 +632,11 @@
 
   input:not(.switch) {
     width: 260px;
+  }
+
+  .size {
+    width: 160px;
+    accent-color: var(--accent-default);
   }
 
   .segments {

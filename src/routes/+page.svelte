@@ -301,6 +301,8 @@
     scrollToTop(): void;
     scrollElement(): HTMLElement;
     columns(): number;
+    /** Only the grid has tiles to size: bigger (1), smaller (-1), usual (0); false if not a grid. */
+    zoomGrid?(dir: number): boolean;
   }
   let fileView = $state<ListApi>();
 
@@ -2153,6 +2155,8 @@
 
     const any = selected().length > 0;
     const one = selected().length === 1;
+    // The tiles show in the grid, and in the gallery where it falls back to one (a search).
+    const gridOn = !place && (view === "grid" || (view === "gallery" && !!(resultView || search)));
     const action = (label: string, detail: string | undefined, run: () => void, when = true) =>
       when ? [{ kind: "action" as const, label, detail, run }] : [];
     const actions: PaletteItem[] = [
@@ -2171,6 +2175,14 @@
         !place,
       ),
       ...action("Move between the two panes", hintFor("paneSwitch"), switchPane, showSide),
+      ...action("Bigger tiles", hintFor("gridBigger"), () => fileView?.zoomGrid?.(1), gridOn),
+      ...action("Smaller tiles", hintFor("gridSmaller"), () => fileView?.zoomGrid?.(-1), gridOn),
+      ...action(
+        "Tiles at their usual size",
+        hintFor("gridReset"),
+        () => fileView?.zoomGrid?.(0),
+        gridOn,
+      ),
       ...action(
         "Copy to the other pane",
         hintFor("toOther"),
@@ -2624,6 +2636,11 @@
     up: () => goUp,
     upBackspace: () => goUp,
     newFolder: () => newFolder,
+    // The size of the grid's tiles. In another view the keys do nothing, and the webview's own
+    // page zoom, which would resize the whole window, stays off.
+    gridBigger: () => () => fileView?.zoomGrid?.(1),
+    gridSmaller: () => () => fileView?.zoomGrid?.(-1),
+    gridReset: () => () => fileView?.zoomGrid?.(0),
     // Copy to the other pane; Shift moves. Nothing selected, nothing to send.
     toOther: (e) =>
       showSide && selection.size && !e.repeat

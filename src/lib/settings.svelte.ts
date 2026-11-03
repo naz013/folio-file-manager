@@ -5,6 +5,7 @@
  */
 
 import { movedBy, movedTo, pinKey, withPinned } from "$lib/favorites";
+import { DEFAULT_SCALE, readScale } from "$lib/gridScale";
 import { isMotion, motionReduced, type Motion } from "$lib/motion";
 import { cleanGrants, type Grant } from "$lib/plugins";
 
@@ -36,6 +37,8 @@ export interface Settings {
   /** The folder the second pane shows; empty until it is first opened. */
   secondPath: string;
   defaultView: ViewMode;
+  /** How big the grid's tiles and pictures are, for every grid view (1 is the design's size). */
+  gridScale: number;
   /** How long a drag hovers over a folder or tab before it opens; null turns it off. */
   springDelayMs: number | null;
   /** After a drop or cancel in a spring-loaded trip, go back to the folder it began in. */
@@ -79,6 +82,7 @@ export const DEFAULTS: Settings = {
   dualPane: false,
   secondPath: "",
   defaultView: "grid",
+  gridScale: DEFAULT_SCALE,
   springDelayMs: 2000,
   returnAfterDrop: false,
   pinnedFolders: [],
@@ -128,6 +132,7 @@ function read(): Settings {
       saved.defaultView === "gallery"
         ? saved.defaultView
         : "grid",
+    gridScale: readScale(saved.gridScale),
     springDelayMs:
       delay === null
         ? null

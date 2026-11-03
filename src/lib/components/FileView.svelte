@@ -1,7 +1,6 @@
 <script lang="ts" module>
-  // Grid geometry (matches the Penpot "File Tile" component).
-  const TILE_W = 132;
-  const TILE_H = 150;
+  // Grid geometry (matches the Penpot "File Tile" component at scale 1; `$lib/gridScale` has
+  // the tile's size).
   const GAP_X = 6;
   const GAP_Y = 8;
   const GRID_PAD_X = 24;
@@ -20,11 +19,25 @@
 </script>
 
 <script lang="ts">
+  import { tick, untrack } from "svelte";
   import type { Entry } from "$lib/api/fs";
   import { fadeIn } from "$lib/animate";
   import { formatDate, formatSize } from "$lib/format";
+  import {
+    DEFAULT_SCALE,
+    MAX_SCALE,
+    MIN_SCALE,
+    STEP,
+    clampScale,
+    fetchSize,
+    scrollToKeep,
+    stepScale,
+    tileSize,
+    type Geometry,
+  } from "$lib/gridScale";
   import { animatesList } from "$lib/motion";
-  import { reducedMotion } from "$lib/settings.svelte";
+  import { reducedMotion, settings, updateSettings } from "$lib/settings.svelte";
+  import { createZoomEase, wheelFactor } from "$lib/zoom";
   import type { SortKey, SortState } from "$lib/sort";
   import { SORT_HEADERS as headers } from "$lib/sort";
   import FolderIcon from "./FolderIcon.svelte";
@@ -123,12 +136,176 @@
     if (was === null || was === grid) return;
     if (canvas && animatesList(entries.length, reducedMotion())) fadeIn(canvas);
   });
+  // ---- The size of the grid's tiles ----
+  //
+  // `live` follows a pinch or a key as it happens; the pictures are asked for at the size it had
+  // when it last held still (`settled`), so a gesture scales the ones on screen and asks for
+  // none, and a sharper size is loaded once it stops. The setting is saved at that point too.
+  let live = $state(settings.gridScale);
+  let settled = $state(settings.gridScale);
+  let tile = $derived(tileSize(live));
+  let ask = $derived(fetchSize(tileSize(settled).picture));
+
+  // The setting changed somewhere else (Settings, the other pane): follow it. What this view
+  // saves itself comes back equal and changes nothing.
+  $effect(() => {
+    const v = settings.gridScale;
+    untrack(() => {
+      if (v === live) return;
+      ease.stop();
+      // Around the middle of the window, so what is being looked at stays about where it was.
+      const before = geometry();
+      const point = { x: width / 2, y: scroller.scrollTop + height / 2 };
+      live = settled = v;
+      // A list has no tiles to keep in place. The grid's are re-placed first (flushSync is
+      // not for an effect).
+      if (!grid) return;
+      tick().then(() => {
+        scroller.scrollTop = scrollToKeep(
+          before,
+          geometry(),
+          point,
+          height / 2,
+          entries.length,
+          scroller.scrollHeight,
+          scroller.clientHeight,
+        );
+        scrollTop = scroller.scrollTop;
+      });
+    });
+  });
+
+  $effect(() => {
+    const scale = live;
+    const timer = setTimeout(() => {
+      settled = scale;
+      if (settings.gridScale !== scale) updateSettings({ gridScale: scale });
+    }, 200);
+    return () => clearTimeout(timer);
+  });
+
   let padX = $derived(grid ? GRID_PAD_X : LIST_PAD_X);
   let padY = $derived(grid ? GRID_PAD_Y : LIST_PAD_Y);
-  let rowH = $derived(grid ? TILE_H + GAP_Y : ROW_H);
+  let rowH = $derived(grid ? tile.h + GAP_Y : ROW_H);
   let cols = $derived(
-    grid ? Math.max(1, Math.floor((width - padX * 2 + GAP_X) / (TILE_W + GAP_X))) : 1,
+    grid ? Math.max(1, Math.floor((width - padX * 2 + GAP_X) / (tile.w + GAP_X))) : 1,
   );
+  const geometry = (): Geometry => ({
+    padX,
+    padY,
+    tileW: tile.w,
+    gapX: GAP_X,
+    rowH,
+    cols,
+  });
+
+  /** Sets the scale, keeping the item under (x, y), measured from the list's corner. */
+  function setScale(z: number, x: number, y: number) {
+    const next = clampScale(z);
+    const before = geometry();
+    // Where the list will be, worked out from the numbers: the tiles then render once, in the
+    // right window, instead of once for the new size and again for the new scroll.
+    const t = tileSize(next);
+    const after: Geometry = {
+      ...before,
+      tileW: t.w,
+      rowH: t.h + GAP_Y,
+      cols: Math.max(1, Math.floor((width - padX * 2 + GAP_X) / (t.w + GAP_X))),
+    };
+    const contentH = padY * 2 + Math.ceil(entries.length / after.cols) * after.rowH;
+    const top = scrollToKeep(
+      before,
+      after,
+      { x, y: scroller.scrollTop + y },
+      y,
+      entries.length,
+      contentH,
+      height,
+    );
+    live = next;
+    scrollTop = top;
+    // The list is as tall as it will be once it has rendered: only then can it scroll there.
+    tick().then(() => (scroller.scrollTop = top));
+  }
+
+  /** Pinch and Ctrl+wheel ask for a scale; it eases there over a few frames. */
+  const ease = createZoomEase({
+    get: () => live,
+    min: MIN_SCALE,
+    max: MAX_SCALE,
+    apply: setScale,
+  });
+
+  /** Bigger (1), smaller (-1) or the usual size (0), for the keys. False when the list is not a grid. */
+  export function zoomGrid(dir: number): boolean {
+    if (!grid) return false;
+    const [x, y] = [width / 2, height / 2];
+    const still = reducedMotion();
+    if (dir === 0) ease.to(DEFAULT_SCALE, x, y, still);
+    else if (still) ease.to(stepScale(live, dir), x, y, true);
+    else ease.by(dir > 0 ? STEP : 1 / STEP, x, y);
+    return true;
+  }
+
+  /** Pinch on a trackpad arrives as Ctrl+wheel; a touch screen pinches with two fingers. Only
+   *  the grid takes either: in a list the gestures are left alone. */
+  function pinch(node: HTMLElement) {
+    let spread = 0;
+    // Measured when a pinch starts, not at every touch move, which would force a layout each
+    // time the tiles have just been changed.
+    let box = node.getBoundingClientRect();
+    const at = (x: number, y: number): [number, number] => [x - box.left, y - box.top];
+    const onwheel = (e: WheelEvent) => {
+      if (!e.ctrlKey || !grid) return;
+      e.preventDefault();
+      // Fingers on the screen are pinching; a wheel event then must not pull against them.
+      if (spread) return;
+      box = node.getBoundingClientRect();
+      const [x, y] = at(e.clientX, e.clientY);
+      ease.by(wheelFactor(e, height), x, y);
+    };
+    const apart = (e: TouchEvent) =>
+      Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY,
+      );
+    const ontouchstart = (e: TouchEvent) => {
+      spread = grid && e.touches.length === 2 ? apart(e) : 0;
+      if (spread) {
+        ease.stop();
+        box = node.getBoundingClientRect();
+      }
+    };
+    const ontouchmove = (e: TouchEvent) => {
+      if (!grid || e.touches.length !== 2 || !spread) return;
+      e.preventDefault();
+      const d = apart(e);
+      const [x, y] = at(
+        (e.touches[0].clientX + e.touches[1].clientX) / 2,
+        (e.touches[0].clientY + e.touches[1].clientY) / 2,
+      );
+      setScale(live * (d / spread), x, y);
+      spread = d;
+    };
+    const onend = (e: TouchEvent) => {
+      if (e.touches.length < 2) spread = 0;
+    };
+    node.addEventListener("wheel", onwheel, { passive: false });
+    node.addEventListener("touchstart", ontouchstart, { passive: true });
+    node.addEventListener("touchmove", ontouchmove, { passive: false });
+    node.addEventListener("touchend", onend);
+    node.addEventListener("touchcancel", onend);
+    return {
+      destroy() {
+        ease.stop();
+        node.removeEventListener("wheel", onwheel);
+        node.removeEventListener("touchstart", ontouchstart);
+        node.removeEventListener("touchmove", ontouchmove);
+        node.removeEventListener("touchend", onend);
+        node.removeEventListener("touchcancel", onend);
+      },
+    };
+  }
   let rows = $derived(Math.ceil(entries.length / cols));
   let firstRow = $derived(Math.max(0, Math.floor((scrollTop - padY) / rowH) - OVERSCAN));
   let lastRow = $derived(Math.min(rows, Math.ceil((scrollTop + height - padY) / rowH) + OVERSCAN));
@@ -208,11 +385,11 @@
     const last = Math.min(rows - 1, Math.floor((bottom - padY) / rowH));
     for (let r = first; r <= last; r++) {
       const itemTop = padY + r * rowH;
-      if (bottom < itemTop || top > itemTop + (grid ? TILE_H : ROW_H)) continue;
+      if (bottom < itemTop || top > itemTop + (grid ? tile.h : ROW_H)) continue;
       for (let c = 0; c < cols; c++) {
         if (grid) {
-          const itemLeft = padX + c * (TILE_W + GAP_X);
-          if (right < itemLeft || left > itemLeft + TILE_W) continue;
+          const itemLeft = padX + c * (tile.w + GAP_X);
+          if (right < itemLeft || left > itemLeft + tile.w) continue;
         }
         const index = r * cols + c;
         if (index < entries.length) found.push(index);
@@ -283,7 +460,7 @@
     const row = Math.floor(index / cols);
     const col = index % cols;
     return grid
-      ? `top:${padY + row * rowH}px;left:${padX + col * (TILE_W + GAP_X)}px;width:${TILE_W}px;height:${TILE_H}px`
+      ? `top:${padY + row * rowH}px;left:${padX + col * (tile.w + GAP_X)}px;width:${tile.w}px;height:${tile.h}px`
       : `top:${padY + row * rowH}px;left:${padX}px;right:${padX}px;height:${ROW_H}px`;
   }
 
@@ -343,6 +520,11 @@
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <div
   class="scroller"
+  class:grid
+  style={grid
+    ? `--thumb-w:${tile.thumbW}px;--thumb-h:${tile.thumbH}px;--tile-name:${tile.thumbW + 8}px`
+    : undefined}
+  use:pinch
   role="listbox"
   aria-label="Files"
   aria-multiselectable="true"
@@ -406,10 +588,14 @@
       >
         {#if grid}
           <span class="thumb">
-            {#if entry.isDir}<FolderIcon size={64} tint={folderTint(entry.path)} />{:else}<Thumbnail
+            {#if entry.isDir}<FolderIcon
+                size={tile.folder}
+                tint={folderTint(entry.path)}
+              />{:else}<Thumbnail
                 path={entry.path}
                 name={entry.name}
-                size={72}
+                size={tile.picture}
+                {ask}
               />{/if}
           </span>
         {:else}
@@ -473,6 +659,11 @@
     overflow-x: hidden;
   }
 
+  /* One finger scrolls; the two-finger pinch is the grid's. */
+  .scroller.grid {
+    touch-action: pan-y;
+  }
+
   .band {
     position: absolute;
     z-index: 2;
@@ -530,8 +721,8 @@
     display: grid;
     place-items: center;
     flex-shrink: 0;
-    width: 112px;
-    height: 88px;
+    width: var(--thumb-w, 112px);
+    height: var(--thumb-h, 88px);
     border-radius: 10px;
     transition: background-color var(--duration-fast) var(--ease-standard);
   }
@@ -546,7 +737,7 @@
   }
 
   .tile .name {
-    max-width: 120px;
+    max-width: var(--tile-name, 120px);
     padding: 2px 6px;
     border-radius: var(--radius-sm);
     font-size: 12px;
@@ -570,7 +761,7 @@
   }
 
   .rename {
-    width: 120px;
+    width: var(--tile-name, 120px);
     padding: 2px 4px;
     border: 1px solid var(--accent-default);
     border-radius: var(--radius-sm);
