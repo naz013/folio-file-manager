@@ -316,6 +316,8 @@
   /** The screen the tab shows instead of a folder: the Recycle Bin, Storage, Cleanup or Settings. */
   const place = $derived(placeOf(path));
   const inBin = $derived(place === "bin");
+  /** Folders and the Recycle Bin have an inspector; the other screens do not. */
+  const inspectorAvailable = $derived(!place || inBin);
   /** There is no folder to create in, paste into or open a terminal in. */
   const noFolder = $derived(!!resultView || !!search || place !== null);
   /** The last real folder a tab showed, for Storage to open on. */
@@ -1990,10 +1992,10 @@
         selected().length === 1 && isTagsFile(selected()[0]),
       ),
       ...action("Clear recent folders", undefined, clearRecent),
-      ...action("Grid view", undefined, () => setView("grid"), view !== "grid"),
-      ...action("List view", undefined, () => setView("list"), view !== "list"),
-      ...action("Column view", undefined, () => setView("columns"), view !== "columns"),
-      ...action("Gallery view", undefined, () => setView("gallery"), view !== "gallery"),
+      ...action("Grid view", undefined, () => setView("grid"), !place && view !== "grid"),
+      ...action("List view", undefined, () => setView("list"), !place && view !== "list"),
+      ...action("Column view", undefined, () => setView("columns"), !place && view !== "columns"),
+      ...action("Gallery view", undefined, () => setView("gallery"), !place && view !== "gallery"),
       ...action(
         settings.showHidden ? "Hide hidden files" : "Show hidden files",
         hintFor("hidden"),
@@ -2003,6 +2005,7 @@
         settings.showInspector ? "Hide the inspector" : "Show the inspector",
         hintFor("inspector"),
         () => updateSettings({ showInspector: !settings.showInspector }),
+        inspectorAvailable,
       ),
       ...action("Light theme", undefined, () => chooseTheme("light"), theme !== "light"),
       ...action("Dark theme", undefined, () => chooseTheme("dark"), theme !== "dark"),
@@ -2298,7 +2301,11 @@
   const keyHandlers: Record<ScopeId<"tabs" | "files">, (e: KeyboardEvent) => Action | null> = {
     // Tabs: these work everywhere, including while a text field has focus.
     settings: () => () => showScreen(SETTINGS_PATH),
-    inspector: () => () => updateSettings({ showInspector: !settings.showInspector }),
+    // The toolbar draws the inspector button only where an inspector shows (folders, the bin).
+    inspector: () =>
+      inspectorAvailable
+        ? () => updateSettings({ showInspector: !settings.showInspector })
+        : ignore,
     palette: (e) =>
       renaming || (e.target as HTMLElement).tagName === "INPUT" ? ignore : openPalette,
     goTo: () => () => !noFolder && toolbar?.edit(),
@@ -2674,6 +2681,7 @@
       {searchOpen}
       resultLabel={resultView ? { name: resultView.name, smart: "smart" in resultView } : null}
       placeTitle={placeTitle(path)}
+      {place}
       inspectorOpen={settings.showInspector}
       oninspector={() => updateSettings({ showInspector: !settings.showInspector })}
     />
@@ -2803,7 +2811,7 @@
     </footer>
   </main>
 
-  {#if settings.showInspector && (!place || inBin)}
+  {#if settings.showInspector && inspectorAvailable}
     <Inspector
       folder={noFolder ? null : path}
       entries={visible}

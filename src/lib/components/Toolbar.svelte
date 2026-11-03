@@ -22,6 +22,7 @@
     searchOpen = false,
     resultLabel,
     placeTitle = null,
+    place = null,
     inspectorOpen,
     oninspector,
   }: {
@@ -46,11 +47,18 @@
     resultLabel: { name: string; smart: boolean } | null;
     /** The name of the screen the tab shows instead of a folder, if it does. */
     placeTitle?: string | null;
+    /** Which screen the tab shows (`"bin"`, `"settings"`...), null for a folder. */
+    place?: string | null;
     inspectorOpen: boolean;
     oninspector: () => void;
   } = $props();
 
   let segments = $derived(pathSegments(path));
+
+  // A screen has no folder to view, search or inspect, so those controls are not drawn there:
+  // a disabled button looks broken. The Recycle Bin has an inspector for the item picked in it.
+  const folderControls = $derived(!place);
+  const inspectorControl = $derived(!place || place === "bin");
 
   // ---- Sibling menus ----
 
@@ -326,62 +334,66 @@
     </nav>
   {/if}
 
-  <div class="switcher" role="group" aria-label="View">
-    <button
-      class:active={view === "grid"}
-      aria-pressed={view === "grid"}
-      onclick={() => onview("grid")}
-      aria-label="Grid view"
-    >
-      <Icon name="grid" size={15} />
-    </button>
-    <button
-      class:active={view === "list"}
-      aria-pressed={view === "list"}
-      onclick={() => onview("list")}
-      aria-label="List view"
-    >
-      <Icon name="list" size={15} />
-    </button>
-    <button
-      class:active={view === "columns"}
-      aria-pressed={view === "columns"}
-      onclick={() => onview("columns")}
-      aria-label="Column view"
-    >
-      <Icon name="columns" size={15} />
-    </button>
-    <button
-      class:active={view === "gallery"}
-      aria-pressed={view === "gallery"}
-      onclick={() => onview("gallery")}
-      aria-label="Gallery view"
-    >
-      <Icon name="gallery" size={15} />
-    </button>
-  </div>
+  {#if folderControls}
+    <div class="switcher" role="group" aria-label="View">
+      <button
+        class:active={view === "grid"}
+        aria-pressed={view === "grid"}
+        onclick={() => onview("grid")}
+        aria-label="Grid view"
+      >
+        <Icon name="grid" size={15} />
+      </button>
+      <button
+        class:active={view === "list"}
+        aria-pressed={view === "list"}
+        onclick={() => onview("list")}
+        aria-label="List view"
+      >
+        <Icon name="list" size={15} />
+      </button>
+      <button
+        class:active={view === "columns"}
+        aria-pressed={view === "columns"}
+        onclick={() => onview("columns")}
+        aria-label="Column view"
+      >
+        <Icon name="columns" size={15} />
+      </button>
+      <button
+        class:active={view === "gallery"}
+        aria-pressed={view === "gallery"}
+        onclick={() => onview("gallery")}
+        aria-label="Gallery view"
+      >
+        <Icon name="gallery" size={15} />
+      </button>
+    </div>
 
-  <button
-    class="icon-btn"
-    class:on={searchOpen}
-    aria-pressed={searchOpen}
-    disabled={!!placeTitle || !!resultLabel}
-    onclick={onsearch}
-    aria-label="Search (Ctrl+F)"
-    title="Search (Ctrl+F)"
-  >
-    <Icon name="search" size={16} />
-  </button>
-  <button
-    class="icon-btn"
-    class:on={inspectorOpen}
-    aria-pressed={inspectorOpen}
-    onclick={oninspector}
-    aria-label="Inspector (Ctrl+I)"
-    title="Inspector (Ctrl+I)"
-  >
-    <Icon name="panelRight" size={16} />
-  </button>
+    <button
+      class="icon-btn"
+      class:on={searchOpen}
+      aria-pressed={searchOpen}
+      disabled={!!resultLabel}
+      onclick={onsearch}
+      aria-label="Search (Ctrl+F)"
+      title="Search (Ctrl+F)"
+    >
+      <Icon name="search" size={16} />
+    </button>
+  {/if}
+  {#if inspectorControl}
+    <button
+      class="icon-btn"
+      class:on={inspectorOpen}
+      aria-pressed={inspectorOpen}
+      onclick={oninspector}
+      aria-label="Inspector (Ctrl+I)"
+      title="Inspector (Ctrl+I)"
+    >
+      <Icon name="panelRight" size={16} />
+    </button>
+  {/if}
   <button
     class="icon-btn"
     onclick={onsettings}
