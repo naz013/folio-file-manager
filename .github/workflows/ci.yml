@@ -66,6 +66,25 @@ jobs:
       - name: Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+  # macOS differs from Linux in file system case rules and in libc type widths, and Docker
+  # can't run macOS, so it is checked here. Pull requests run it too, to catch breakage
+  # before merge.
+  rust-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: mkdir -p build
+      - name: Rust clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
   # Windows-only code (shell thumbnails, context menu, drag) is only compiled here,
   # so it also runs on PRs to catch FFI breakage before merge.
   rust-windows:

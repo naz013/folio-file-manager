@@ -11,7 +11,87 @@ permissions:
   contents: write
 
 jobs:
+  # Every platform job adds its files to the same draft release. They run at once, so the
+  # draft is made here first; otherwise each could create its own.
+  draft:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Create the draft unless one exists for the tag
+        run: |
+          if gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate --jq '.[].tag_name' \
+            | grep -qx "${GITHUB_REF_NAME}"; then
+            echo "A release for ${GITHUB_REF_NAME} exists."
+          else
+            gh release create "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
+              --draft --title "Folio ${GITHUB_REF_NAME}" --notes ""
+          fi
+
+  # macOS (Apple silicon and Intel) and Linux. These are not code-signed or notarized: macOS
+  # shows a Gatekeeper warning until an Apple Developer ID is set up.
+  unix:
+    needs: draft
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm
+            os: macos-latest
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+          - name: macos-intel
+            os: macos-latest
+            target: x86_64-apple-darwin
+            bundles: app,dmg
+          - name: linux
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Tauri system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev patchelf
+      - run: npm ci
+      - name: Tag matches the app version
+        run: |
+          v=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          [ "${GITHUB_REF_NAME}" = "v$v" ] || { echo "tag ${GITHUB_REF_NAME} != v$v"; exit 1; }
+      - name: Bundle the release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/release-notes.mjs "${GITHUB_REF_NAME}"
+      - name: Collect the third-party licenses
+        run: npm run licenses
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: Folio ${{ github.ref_name }}
+          releaseDraft: true
+          uploadUpdaterJson: true
+          # --bundles replaces the Windows-only "nsis" target of the release config.
+          args: --config src-tauri/tauri.release.conf.json --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
   windows:
+    needs: draft
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7

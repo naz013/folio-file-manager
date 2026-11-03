@@ -66,7 +66,10 @@ regenerate them, and the CI `licenses` job runs `npm run licenses:check` on ever
 1. Set the new version in `package.json`, `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`.
 2. Optional: write the release notes as the body of a draft release for the tag first. The app shows them once after an update, so write for users. Without one, GitHub's generated notes are used, and they only list merged pull requests: if there are none, the app shows no notes. Do not edit the draft after pushing the tag; the app carries the text as it was then.
 3. Commit, then tag and push: `git tag v0.5.0 && git push origin main v0.5.0`.
-4. The **Release** workflow builds the installer and `latest.json` into a **draft** release.
+4. The **Release** workflow builds the Windows installer, the macOS apps (`.dmg` for Apple
+   silicon and Intel) and the Linux packages (`.AppImage`, `.deb`), with `latest.json`, into one
+   **draft** release. Only the Windows installer is code-signed; macOS builds are not signed or
+   notarized, so Gatekeeper warns until an Apple Developer ID is set up.
 5. Install the draft's installer on a clean Windows machine and check it starts. Then publish
    the release. Running copies find it within a day.
 
