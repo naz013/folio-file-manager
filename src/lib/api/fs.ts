@@ -100,6 +100,9 @@ export async function previewUrl(path: string): Promise<string> {
 
 export const releasePreview = () => invoke<void>("preview_allow", { path: null });
 
+/** What the core says for a file that is only in the cloud: it is not read until opened on purpose. */
+export const CLOUD_ONLY = "Only in the cloud";
+
 /** The start of a text file; rejects for files that are not text. */
 export const readTextPreview = (path: string) =>
   invoke<{ text: string; truncated: boolean }>("read_text_preview", { path });

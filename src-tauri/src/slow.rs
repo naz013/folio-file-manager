@@ -39,6 +39,13 @@ pub static MEASURES: LazyLock<Lane> = LazyLock::new(|| Lane::new(2));
 /// person asks for by selecting a folder, so those never wait behind it.
 pub static AUTO_MEASURES: LazyLock<Lane> = LazyLock::new(|| Lane::new(1));
 
+/// How long Quick Look may wait for a file before saying it is not answering.
+pub const PREVIEW: Duration = Duration::from_secs(15);
+
+/// Where Quick Look reads: the start of a text file, and the byte ranges of the picture, sound
+/// or video being shown. A few at once, so a dead share cannot take the blocking pool.
+pub static PREVIEWS: LazyLock<Lane> = LazyLock::new(|| Lane::new(8));
+
 /// Where thumbnails are drawn: a big grid asks for a few hundred at once, and they are made a
 /// few dozen at a time. The newest request goes first: the page cannot take back a request, so
 /// the ones it has since scrolled away from are left to sink to the back of the line, where

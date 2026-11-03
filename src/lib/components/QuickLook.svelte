@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { previewUrl, readTextPreview, releasePreview, type Entry } from "$lib/api/fs";
+  import { CLOUD_ONLY, previewUrl, readTextPreview, releasePreview, type Entry } from "$lib/api/fs";
   import { formatDate, formatSize } from "$lib/format";
   import { previewKind } from "$lib/preview";
   import FileIcon from "./FileIcon.svelte";
@@ -33,7 +33,8 @@
     | { kind: "loading" }
     | { kind: "url"; media: "image" | "pdf" | "audio" | "video"; url: string }
     | { kind: "text"; text: string; truncated: boolean }
-    | { kind: "none"; why: string };
+    /** `cloud`: the file is only in the cloud, and opening it would download it. */
+    | { kind: "none"; why: string; cloud?: boolean };
 
   let shown = $state<Shown>({ kind: "loading" });
   let dialog: HTMLElement;
@@ -193,14 +194,22 @@
       readTextPreview(path)
         .then((t) => current && (shown = { kind: "text", ...t }))
         .catch(
-          () => current && (shown = { kind: "none", why: "No preview for this kind of file" }),
+          (e) =>
+            current &&
+            (shown =
+              String(e) === CLOUD_ONLY
+                ? { kind: "none", why: CLOUD_ONLY, cloud: true }
+                : { kind: "none", why: "No preview for this kind of file" }),
         );
     } else {
       previewUrl(path)
         .then(
           (url) => current && (shown = { kind: "url", media: kind, url: `${url}?v=${version}` }),
         )
-        .catch((e) => current && (shown = { kind: "none", why: String(e) }));
+        .catch(
+          (e) =>
+            current && (shown = { kind: "none", why: String(e), cloud: String(e) === CLOUD_ONLY }),
+        );
     }
     return () => (current = false);
   });
@@ -277,6 +286,10 @@
               size={96}
             />{/if}
           <span class="note">{shown.why}</span>
+          {#if shown.cloud}
+            <!-- Looking never downloads; this does, because the person asked. -->
+            <button class="open" onclick={onopen}>Download and open</button>
+          {/if}
         </div>
       {/if}
     </div>

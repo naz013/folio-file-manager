@@ -227,16 +227,72 @@ pub async fn start_drag(window: tauri::WebviewWindow, paths: Vec<String>) -> Cmd
 
 /// Names the one file the webview may read through `preview://`, replacing the last. `None`
 /// closes Quick Look's access altogether.
+///
+/// Refuses a file that is only in the cloud, with [`crate::preview::CLOUD_ONLY`] as the error:
+/// the neighbours Quick Look passes over must not be downloaded. Opening it is the person's call.
+/// Looking at the file's attributes can stall on a share that went away, so it runs in the
+/// preview lane with a limit, and access stays closed unless the answer came back in time.
 #[tauri::command]
-pub fn preview_allow(current: tauri::State<'_, crate::preview::Current>, path: Option<String>) {
-    current.set(path.map(PathBuf::from));
+pub async fn preview_allow(
+    current: tauri::State<'_, crate::preview::Current>,
+    path: Option<String>,
+) -> CmdResult<()> {
+    let Some(path) = path.map(PathBuf::from) else {
+        current.set(None);
+        return Ok(());
+    };
+    let probe = path.clone();
+    let outcome = slow::PREVIEWS
+        .run(slow::PREVIEW, move || crate::preview::cloud_only(&probe))
+        .await;
+    let answer = allow_answer(&path.to_string_lossy(), &outcome);
+    current.set(answer.is_ok().then_some(path));
+    answer
 }
 
-/// The start of a text file for Quick Look; fails for files that are not text.
-#[tauri::command(async)]
-pub fn read_text_preview(path: String) -> CmdResult<crate::preview::TextPreview> {
-    crate::preview::read_text_preview(&PathBuf::from(&path))
-        .map_err(|e| format!("Cannot preview {path}: {e}"))
+/// Whether a file may be shown, from what looking at it found.
+fn allow_answer(path: &str, outcome: &slow::Outcome<bool>) -> CmdResult<()> {
+    match outcome {
+        slow::Outcome::Done(false) => Ok(()),
+        slow::Outcome::Done(true) => Err(crate::preview::CLOUD_ONLY.into()),
+        slow::Outcome::TimedOut => Err(format!("{path} is not answering")),
+        slow::Outcome::Busy => {
+            Err("Folio is busy with slow folders. Try again in a moment.".into())
+        }
+        slow::Outcome::Failed => Err(format!("Cannot preview {path}: the check failed")),
+    }
+}
+
+/// The start of a text file for Quick Look; fails for files that are not text, and for ones
+/// that are only in the cloud. Gives up after a while, like a listing.
+#[tauri::command]
+pub async fn read_text_preview(path: String) -> CmdResult<crate::preview::TextPreview> {
+    let file = PathBuf::from(&path);
+    let outcome = slow::PREVIEWS
+        .run(slow::PREVIEW, move || {
+            crate::preview::read_text_preview(&file)
+        })
+        .await;
+    preview_result(&path, outcome)
+}
+
+/// What the outcome of reading a preview means to the person.
+fn preview_result(
+    path: &str,
+    outcome: slow::Outcome<std::io::Result<crate::preview::TextPreview>>,
+) -> CmdResult<crate::preview::TextPreview> {
+    match outcome {
+        slow::Outcome::Done(Ok(text)) => Ok(text),
+        slow::Outcome::Done(Err(e)) if e.to_string() == crate::preview::CLOUD_ONLY => {
+            Err(crate::preview::CLOUD_ONLY.into())
+        }
+        slow::Outcome::Done(Err(e)) => Err(format!("Cannot preview {path}: {e}")),
+        slow::Outcome::TimedOut => Err(format!("{path} is not answering")),
+        slow::Outcome::Busy => {
+            Err("Folio is busy with slow folders. Try again in a moment.".into())
+        }
+        slow::Outcome::Failed => Err(format!("Cannot preview {path}: the read failed")),
+    }
 }
 
 /// Which modifier keys are held down right now.
@@ -2303,6 +2359,34 @@ pub fn perf_report(event: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_preview_that_was_refused_for_the_cloud_says_so_plainly() {
+        let refused = slow::Outcome::Done(Err(std::io::Error::other(crate::preview::CLOUD_ONLY)));
+        assert_eq!(
+            preview_result("C:/x.txt", refused).unwrap_err(),
+            crate::preview::CLOUD_ONLY
+        );
+    }
+
+    #[test]
+    fn a_file_is_allowed_only_when_the_check_came_back_and_said_it_is_here() {
+        assert!(allow_answer("C:/x.png", &slow::Outcome::Done(false)).is_ok());
+        assert_eq!(
+            allow_answer("C:/x.png", &slow::Outcome::Done(true)).unwrap_err(),
+            crate::preview::CLOUD_ONLY
+        );
+        // A check that never finished is not a yes.
+        for outcome in [slow::Outcome::TimedOut, slow::Outcome::Busy] {
+            assert!(allow_answer("C:/x.png", &outcome).is_err());
+        }
+    }
+
+    #[test]
+    fn a_preview_that_timed_out_says_the_file_is_not_answering() {
+        let msg = preview_result("C:/x.txt", slow::Outcome::TimedOut).unwrap_err();
+        assert!(msg.contains("C:/x.txt is not answering"), "{msg}");
+    }
 
     #[test]
     fn a_listing_that_started_and_timed_out_names_the_folder() {

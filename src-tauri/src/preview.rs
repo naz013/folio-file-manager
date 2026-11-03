@@ -34,6 +34,17 @@ impl Current {
     }
 }
 
+/// What Quick Look says for a file that is only in the cloud (a `OneDrive` placeholder, say).
+/// The page matches on this text, so it is one string in both places.
+pub const CLOUD_ONLY: &str = "Only in the cloud";
+
+/// Whether reading `path` would download it. Showing a file is something the person chose; the
+/// neighbours Quick Look moves over on the way are not. A file whose attributes cannot be read
+/// is not counted: opening it fails on its own.
+pub fn cloud_only(path: &Path) -> bool {
+    crate::cleanup::might_download(path) && fs::metadata(path).is_ok()
+}
+
 /// How much of a text file Quick Look reads: enough to read, never the whole of a huge log.
 const PREVIEW_LIMIT: usize = 256 * 1024;
 /// The most one ranged response carries, and the most a response without a range does.
@@ -52,6 +63,9 @@ pub struct TextPreview {
 /// for files that look binary (a NUL byte in the first 8 KiB), so the caller can show
 /// something else.
 pub fn read_text_preview(path: &Path) -> io::Result<TextPreview> {
+    if cloud_only(path) {
+        return Err(io::Error::other(CLOUD_ONLY));
+    }
     let file = fs::File::open(path)?;
     if !file.metadata()?.is_file() {
         return Err(io::Error::new(
@@ -131,7 +145,7 @@ fn parse_range(header: &str, len: u64) -> Option<(u64, u64)> {
     (start <= end).then_some((start, end))
 }
 
-fn status(code: StatusCode) -> Response<Vec<u8>> {
+pub fn status(code: StatusCode) -> Response<Vec<u8>> {
     Response::builder().status(code).body(Vec::new()).unwrap()
 }
 
@@ -145,6 +159,10 @@ pub fn handle(current: &Current, request: &Request<Vec<u8>>) -> Response<Vec<u8>
     let path = PathBuf::from(Cow::into_owned(decoded));
     if !current.is(&path) {
         return status(StatusCode::FORBIDDEN);
+    }
+    // 409: the file is not here to read. The page has been told before it asked.
+    if cloud_only(&path) {
+        return status(StatusCode::CONFLICT);
     }
     let Ok(mut file) = fs::File::open(&path) else {
         return status(StatusCode::NOT_FOUND);
@@ -182,6 +200,60 @@ pub fn handle(current: &Current, request: &Request<Vec<u8>>) -> Response<Vec<u8>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Marks `path` as a file the sync provider has not downloaded. Only OFFLINE can be set from
+    /// user mode; the RECALL_* bits `OneDrive` uses are read the same way.
+    #[cfg(windows)]
+    fn mark_offline(path: &Path) {
+        use windows::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_OFFLINE, SetFileAttributesW};
+        use windows::core::HSTRING;
+        // SAFETY: the path is an owned HSTRING that outlives the call.
+        unsafe { SetFileAttributesW(&HSTRING::from(path.as_os_str()), FILE_ATTRIBUTE_OFFLINE) }
+            .unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_cloud_only_file_is_not_read_for_a_text_preview() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("note.txt");
+        fs::write(&file, "hello").unwrap();
+        assert!(read_text_preview(&file).is_ok(), "a local file still reads");
+        mark_offline(&file);
+        let err = read_text_preview(&file).unwrap_err();
+        assert_eq!(err.to_string(), CLOUD_ONLY);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_cloud_only_file_is_not_served_through_the_protocol() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.png");
+        fs::write(&file, b"0123456789").unwrap();
+        let current = Current::default();
+        current.set(Some(file.clone()));
+        let encoded: String = percent_encoding::utf8_percent_encode(
+            &file.to_string_lossy(),
+            percent_encoding::NON_ALPHANUMERIC,
+        )
+        .to_string();
+        let get = || {
+            let request = Request::builder()
+                .uri(format!("preview://localhost/{encoded}"))
+                .body(Vec::new())
+                .unwrap();
+            handle(&current, &request).status()
+        };
+        assert_eq!(get(), StatusCode::OK);
+        mark_offline(&file);
+        assert_eq!(get(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn a_missing_file_is_not_called_cloud_only() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!cloud_only(&dir.path().join("gone.txt")));
+    }
 
     #[test]
     fn text_preview_reads_the_start_and_says_when_it_stopped() {

@@ -124,9 +124,19 @@ impl<R: tauri::Runtime> Protocols for tauri::Builder<R> {
             preview::SCHEME,
             |ctx, request, responder| {
                 let app = ctx.app_handle().clone();
-                tauri::async_runtime::spawn_blocking(move || {
-                    let current = app.state::<preview::Current>();
-                    responder.respond(preview::handle(&current, &request));
+                tauri::async_runtime::spawn(async move {
+                    // Read in the preview lane, with a limit: a file on a share that has gone
+                    // away must not hold the window's media waiting for ever.
+                    let answer = slow::PREVIEWS
+                        .within(slow::PREVIEW, move || {
+                            let current = app.state::<preview::Current>();
+                            preview::handle(&current, &request)
+                        })
+                        .await
+                        .unwrap_or_else(|| {
+                            preview::status(tauri::http::StatusCode::GATEWAY_TIMEOUT)
+                        });
+                    responder.respond(answer);
                 });
             },
         )
