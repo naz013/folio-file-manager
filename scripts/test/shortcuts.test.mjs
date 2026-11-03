@@ -189,5 +189,7 @@ test("on a Mac the list says Cmd and Option, except where the keys really are Ct
   assert.equal(keysOf("Zoom a picture"), "Pinch  /  Ctrl+scroll");
   assert.ok(rows.some((r) => r.keys === "Ctrl+Tab  /  Ctrl+Shift+Tab"));
   assert.equal(keysOf("Keyboard shortcuts"), "F1  /  ⌘+/");
-  assert.equal(matchShortcut(press("Shift+F1"), "tabs"), null, "F1 alone");
+  // F1 is the shortcuts list and Shift+F1 is Help: neither takes the other's key.
+  assert.equal(matchShortcut(press("F1"), "tabs")?.id, "shortcuts");
+  assert.equal(matchShortcut(press("Shift+F1"), "tabs")?.id, "help");
 });

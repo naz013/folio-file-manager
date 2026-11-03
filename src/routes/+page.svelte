@@ -123,6 +123,7 @@
     updateSettings,
   } from "$lib/settings.svelte";
   import SettingsView from "$lib/components/SettingsView.svelte";
+  import HelpDialog from "$lib/components/HelpDialog.svelte";
   import OnboardingTour from "$lib/components/OnboardingTour.svelte";
   import ImageToolsDialog from "$lib/components/ImageToolsDialog.svelte";
   import PdfToolsDialog from "$lib/components/PdfToolsDialog.svelte";
@@ -1457,6 +1458,7 @@
   let aboutOpen = $state(false);
   /** The keyboard shortcuts list. */
   let shortcutsOpen = $state(false);
+  let helpOpen = $state(false);
 
   // Nothing selected (it was moved or deleted meanwhile): nothing to tag.
   $effect(() => {
@@ -1909,6 +1911,7 @@
       ),
       ...action("Settings", hintFor("settings"), () => showScreen(SETTINGS_PATH)),
       ...action("Keyboard shortcuts", hintFor("shortcuts"), () => (shortcutsOpen = true)),
+      ...action("Help", hintFor("help"), () => (helpOpen = true)),
       ...action("About Folio", undefined, () => (aboutOpen = true)),
       ...action("Recycle Bin", "", () => navigate(BIN_PATH)),
       ...action("Storage breakdown", "", () => showScreen(STORAGE_PATH)),
@@ -2183,6 +2186,7 @@
     goTo: () => () => !noFolder && toolbar?.edit(),
     search: () => openSearch,
     shortcuts: () => () => (shortcutsOpen = true),
+    help: () => () => (helpOpen = true),
     // Held-down Ctrl+T / Ctrl+W must not open or close tabs in a burst.
     tabNew: (e) => (!restored || e.repeat ? ignore : () => openTab(startPath(home))),
     tabClose: (e) => (!restored || e.repeat ? ignore : () => closeTab(active)),
@@ -2281,6 +2285,7 @@
       smartDialog ||
       aboutOpen ||
       shortcutsOpen ||
+      helpOpen ||
       bulkOpen ||
       paletteOpen
     )
@@ -2568,6 +2573,7 @@
         }}
         onabout={() => (aboutOpen = true)}
         onshortcuts={() => (shortcutsOpen = true)}
+        onhelp={() => (helpOpen = true)}
       />
     {:else if view === "columns" && !resultView && !search}
       <ColumnView
@@ -2702,6 +2708,16 @@
       oncreate={createTag}
       ondelete={removeTag}
       onclose={() => (tagsOpen = false)}
+    />
+  {/if}
+
+  {#if helpOpen}
+    <HelpDialog
+      onclose={() => (helpOpen = false)}
+      onshortcuts={() => {
+        helpOpen = false;
+        shortcutsOpen = true;
+      }}
     />
   {/if}
 

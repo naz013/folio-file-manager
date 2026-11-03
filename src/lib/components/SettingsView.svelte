@@ -19,6 +19,7 @@
     ontheme,
     onabout,
     onshortcuts,
+    onhelp,
   }: {
     theme: Theme;
     ontheme: (theme: Theme) => void;
@@ -26,6 +27,8 @@
     onabout: () => void;
     /** Open the list of keyboard shortcuts. */
     onshortcuts: () => void;
+    /** Open the help topics. */
+    onhelp: () => void;
   } = $props();
 
   let dialog: HTMLElement;
@@ -324,6 +327,11 @@
 
     <section>
       <h3>Help</h3>
+
+      <div class="row">
+        <span>Help</span>
+        <button onclick={onhelp}>Open</button>
+      </div>
 
       <div class="row">
         <span>Keyboard shortcuts</span>

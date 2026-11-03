@@ -329,6 +329,14 @@ export const SHORTCUTS = [
       { key: "/", ctrl: true },
     ],
   },
+  {
+    id: "help",
+    scope: "tabs",
+    group: "Window",
+    keys: "Shift+F1",
+    does: "Help",
+    chords: [{ key: "F1", shift: true, alt: false }],
+  },
 
   {
     id: "lookStep",
