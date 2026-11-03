@@ -89,6 +89,7 @@
     placeOf,
     placeTitle,
   } from "$lib/api/fs";
+  import { dragScroll, scrollableAxes } from "$lib/autoscroll";
   import { formatSize } from "$lib/format";
   import { editableImage, previewKind } from "$lib/preview";
   import { sizeKey, sortEntries, type SortKey, type SortState } from "$lib/sort";
@@ -204,6 +205,8 @@
     forward: string[];
     selection: string[];
     scrollTop: number;
+    /** The gallery's filmstrip scrolls sideways. */
+    scrollLeft: number;
   }
   let tabs = $state<Tab[]>([]);
   let active = $state(-1);
@@ -576,6 +579,7 @@
       forward: [...forward],
       selection: live ? [...selection] : (prev?.selection ?? []),
       scrollTop: live ? (fileView?.scrollElement().scrollTop ?? 0) : (prev?.scrollTop ?? 0),
+      scrollLeft: live ? (fileView?.scrollElement().scrollLeft ?? 0) : (prev?.scrollLeft ?? 0),
     });
   }
 
@@ -602,15 +606,25 @@
     const gen = navGen;
     await tick();
     if (gen !== navGen) return;
-    if (m.scrollTop && fileView) fileView.scrollElement().scrollTop = m.scrollTop;
-    if (!m.selection.length) return;
+    if (fileView) {
+      const el = fileView.scrollElement();
+      if (m.scrollTop) el.scrollTop = m.scrollTop;
+      if (m.scrollLeft) el.scrollLeft = m.scrollLeft;
+    }
+    if (!m.selection.length && !m.scrollLeft) return;
     // Restore the selection after the folder has painted; on a huge selection it is the slow part.
     await nextPaint();
     if (gen !== navGen) return;
+    // A filmstrip that was just mounted places itself at the start once it has a width, which
+    // undoes the position set above: set it again, now that it has.
+    if (m.scrollLeft && fileView) fileView.scrollElement().scrollLeft = m.scrollLeft;
+    if (!m.selection.length) return;
     const existing = new Set(entries.map((e) => e.path));
     const keep = m.selection.filter((p) => existing.has(p));
     keep.forEach((p) => selection.add(p));
     cursor = anchor = keep.length ? visible.findIndex((e) => e.path === keep[keep.length - 1]) : -1;
+    // The cursor tile is in view, at least.
+    if (m.scrollLeft && cursor >= 0) fileView?.scrollToIndex(cursor);
   }
 
   /** Opens `target` in a new tab right after the active one. */
@@ -1325,19 +1339,26 @@
   const EDGE = 48;
   const MAX_SCROLL = 24;
 
-  /** Scrolls the list while the drag is near its top or bottom edge. */
+  /**
+   * Scrolls the list while the drag is near an edge: its top or bottom, or, for the gallery's
+   * filmstrip, which scrolls sideways, its left or right.
+   */
   function autoScroll() {
     if (!dragPos || !fileView) return;
     const list = fileView.scrollElement();
-    const box = list.getBoundingClientRect();
-    if (dragPos.x < box.left || dragPos.x > box.right) return;
-    const above = box.top + EDGE - dragPos.y;
-    const below = dragPos.y - (box.bottom - EDGE);
-    const before = list.scrollTop;
-    if (above > 0) list.scrollBy(0, -Math.min(MAX_SCROLL, (above / EDGE) * MAX_SCROLL));
-    else if (below > 0) list.scrollBy(0, Math.min(MAX_SCROLL, (below / EDGE) * MAX_SCROLL));
+    const { dx, dy } = dragScroll(
+      dragPos.x,
+      dragPos.y,
+      list.getBoundingClientRect(),
+      scrollableAxes(list, getComputedStyle(list).overflowX),
+      EDGE,
+      MAX_SCROLL,
+    );
+    if (!dx && !dy) return;
+    const [x, y] = [list.scrollLeft, list.scrollTop];
+    list.scrollBy(dx, dy);
     // Different items are under the pointer now.
-    if (list.scrollTop !== before) hoverAt(dragPos);
+    if (list.scrollLeft !== x || list.scrollTop !== y) hoverAt(dragPos);
   }
 
   async function dragTick() {
