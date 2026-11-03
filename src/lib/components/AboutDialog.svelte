@@ -3,6 +3,7 @@
   import { onMount } from "svelte";
   import { appInfo, type AppInfo } from "$lib/api/fs";
   import { LICENSE, LINKS, versionLine } from "$lib/about";
+  import { trapFocus } from "$lib/focus";
   import { checkForUpdate, updateStatusText, updates } from "$lib/updates.svelte";
   import Icon from "./Icon.svelte";
 
@@ -68,6 +69,7 @@
   <div
     bind:this={dialog}
     class="dialog"
+    use:trapFocus
     role="dialog"
     aria-modal="true"
     aria-labelledby="about-title"

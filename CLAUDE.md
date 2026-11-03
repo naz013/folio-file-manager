@@ -36,5 +36,6 @@ Cross-platform file manager (Windows first). Tauri 2 + Rust core + SvelteKit SPA
 - `npm run format` — format everything (Prettier + rustfmt)
 - `npm run lint` — all checks: Prettier, ESLint, svelte-check, rustfmt, clippy (`-D warnings`)
 - `npm run check` — type-check frontend only
+- `npm run test:js` — frontend unit tests (Node runs them directly, no framework)
 - `npm run linux -- <fmt|clippy|test|all|shell>` — Linux Rust checks in Docker (mirrors the rust-linux CI job)
 - `cargo test --manifest-path src-tauri/Cargo.toml` — Rust tests

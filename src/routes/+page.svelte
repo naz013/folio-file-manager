@@ -91,10 +91,12 @@
   import { formatSize } from "$lib/format";
   import { editableImage, previewKind } from "$lib/preview";
   import { sizeKey, sortEntries, type SortKey, type SortState } from "$lib/sort";
+  import { forSystem, hintFor, matchShortcut, type ScopeId } from "$lib/shortcuts";
   import ConflictDialog from "$lib/components/ConflictDialog.svelte";
   import ContextMenu, { type MenuItem } from "$lib/components/ContextMenu.svelte";
   import QuickLook from "$lib/components/QuickLook.svelte";
   import AboutDialog from "$lib/components/AboutDialog.svelte";
+  import ShortcutsDialog from "$lib/components/ShortcutsDialog.svelte";
   import SmartFolderDialog from "$lib/components/SmartFolderDialog.svelte";
   import TagDialog from "$lib/components/TagDialog.svelte";
   import BulkRenameDialog from "$lib/components/BulkRenameDialog.svelte";
@@ -1445,6 +1447,8 @@
   let tagsOpen = $state(false);
   /** The About dialog. */
   let aboutOpen = $state(false);
+  /** The keyboard shortcuts list. */
+  let shortcutsOpen = $state(false);
 
   // Nothing selected (it was moved or deleted meanwhile): nothing to tag.
   $effect(() => {
@@ -1786,25 +1790,30 @@
     const action = (label: string, detail: string | undefined, run: () => void, when = true) =>
       when ? [{ kind: "action" as const, label, detail, run }] : [];
     const actions: PaletteItem[] = [
-      ...action("New folder", "Ctrl+Shift+N", newFolder, !noFolder),
+      ...action("New folder", hintFor("newFolder"), newFolder, !noFolder),
       ...action("New text file", "", () => newFile(), !noFolder),
       ...action("New Markdown file", "", () => newFile("New file.md"), !noFolder),
       ...action("Open in terminal", "", () => terminalIn(path), !noFolder),
-      ...action("Copy", "Ctrl+C", copySelection, any),
-      ...action("Cut", "Ctrl+X", cutSelection, any),
-      ...action("Paste", "Ctrl+V", paste, !noFolder),
-      ...action("Open the clipboard shelf", "Ctrl+Shift+V", () => (shelfOpen = true)),
-      ...action("Open", "Enter", () => open(selected()[0]), one),
+      ...action("Copy", hintFor("copy"), copySelection, any),
+      ...action("Cut", hintFor("cut"), cutSelection, any),
+      ...action("Paste", hintFor("paste"), paste, !noFolder),
+      ...action("Open the clipboard shelf", hintFor("shelf"), () => (shelfOpen = true)),
+      ...action("Open", hintFor("open"), () => open(selected()[0]), one),
       ...action(
         "Open in new tab",
         undefined,
         () => openTab(selected()[0].path, true),
         one && selected()[0].isDir,
       ),
-      ...action("Rename", "F2", () => (renaming = selected()[0]?.path ?? null), one),
-      ...action("Rename selected items…", "F2", () => (bulkOpen = true), selected().length > 1),
-      ...action("Move to Recycle Bin", "Del", trashSelected, any),
-      ...action("Quick Look", "Space", openQuickLook, any),
+      ...action("Rename", hintFor("rename"), () => (renaming = selected()[0]?.path ?? null), one),
+      ...action(
+        "Rename selected items…",
+        hintFor("rename"),
+        () => (bulkOpen = true),
+        selected().length > 1,
+      ),
+      ...action("Move to Recycle Bin", hintFor("trash"), trashSelected, any),
+      ...action("Quick Look", hintFor("quickLook"), openQuickLook, any),
       ...action("Tags…", undefined, () => (tagsOpen = true), any),
       ...action("New smart folder…", undefined, () => (smartDialog = { folder: null })),
       ...smartFolders.flatMap((s) =>
@@ -1819,23 +1828,23 @@
         () => nativeMenu(selected().map((e) => e.path)),
         any,
       ),
-      ...action("Clear selection", "Esc", clearSelectionAndClipboard, any),
+      ...action("Clear selection", hintFor("clear"), clearSelectionAndClipboard, any),
       ...action(
         "Select all",
-        "Ctrl+A",
+        hintFor("selectAll"),
         () => selectRange(0, visible.length - 1),
         visible.length > 0,
       ),
-      ...action("Search this folder", "Ctrl+F", openSearch, !place && !resultView),
-      ...action("Undo", "Ctrl+Z", () => stepHistory(false)),
-      ...action("Redo", "Ctrl+Y", () => stepHistory(true)),
-      ...action("Back", "Alt+←", goBack, back.length > 0 || !!resultView || !!search),
-      ...action("Forward", "Alt+→", goForward, forward.length > 0),
-      ...action("Up one folder", "Alt+↑", goUp),
+      ...action("Search this folder", hintFor("search"), openSearch, !place && !resultView),
+      ...action("Undo", hintFor("undo"), () => stepHistory(false)),
+      ...action("Redo", hintFor("redo"), () => stepHistory(true)),
+      ...action("Back", hintFor("back"), goBack, back.length > 0 || !!resultView || !!search),
+      ...action("Forward", hintFor("forward"), goForward, forward.length > 0),
+      ...action("Up one folder", hintFor("up"), goUp),
       ...action("Refresh", undefined, () => refresh()),
-      ...action("Go to a path…", "Ctrl+L", () => toolbar?.edit(), !noFolder),
-      ...action("New tab", "Ctrl+T", () => openTab(startPath(home))),
-      ...action("Close tab", "Ctrl+W", () => closeTab(active)),
+      ...action("Go to a path…", hintFor("goTo"), () => toolbar?.edit(), !noFolder),
+      ...action("New tab", hintFor("tabNew"), () => openTab(startPath(home))),
+      ...action("Close tab", hintFor("tabClose"), () => closeTab(active)),
       ...action(
         "Next tab",
         "Ctrl+Tab",
@@ -1851,7 +1860,7 @@
       ...tabs.flatMap((t, i) =>
         action(
           `Switch to tab: ${folderName(t.path)}`,
-          i < 9 ? `Ctrl+${i + 1}` : undefined,
+          i < 9 ? forSystem(`Ctrl+${i + 1}`) : undefined,
           () => activate(i),
           i !== active,
         ),
@@ -1870,12 +1879,14 @@
       ...action("List view", undefined, () => setView("list"), view !== "list"),
       ...action("Column view", undefined, () => setView("columns"), view !== "columns"),
       ...action("Gallery view", undefined, () => setView("gallery"), view !== "gallery"),
-      ...action(settings.showHidden ? "Hide hidden files" : "Show hidden files", "Ctrl+H", () =>
-        updateSettings({ showHidden: !settings.showHidden }),
+      ...action(
+        settings.showHidden ? "Hide hidden files" : "Show hidden files",
+        hintFor("hidden"),
+        () => updateSettings({ showHidden: !settings.showHidden }),
       ),
       ...action(
         settings.showInspector ? "Hide the inspector" : "Show the inspector",
-        "Ctrl+I",
+        hintFor("inspector"),
         () => updateSettings({ showInspector: !settings.showInspector }),
       ),
       ...action("Light theme", undefined, () => chooseTheme("light"), theme !== "light"),
@@ -1886,7 +1897,8 @@
         () => chooseTheme("system"),
         theme !== "system",
       ),
-      ...action("Settings", "Ctrl+,", () => showScreen(SETTINGS_PATH)),
+      ...action("Settings", hintFor("settings"), () => showScreen(SETTINGS_PATH)),
+      ...action("Keyboard shortcuts", hintFor("shortcuts"), () => (shortcutsOpen = true)),
       ...action("About Folio", undefined, () => (aboutOpen = true)),
       ...action("Recycle Bin", "", () => navigate(BIN_PATH)),
       ...action("Storage breakdown", "", () => showScreen(STORAGE_PATH)),
@@ -1964,21 +1976,16 @@
   }
 
   function lookKey(e: KeyboardEvent) {
-    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    // The registry says which keys are Quick Look's: none with Ctrl or Alt.
+    const found = matchShortcut(e, "look");
+    if (!found) return;
     // Holding Space (the key that opened it) must not close it again straight away.
-    if (e.repeat && (e.key === " " || e.key === "Escape")) {
+    if (e.repeat && found.id === "lookClose") {
       e.preventDefault();
       return;
     }
-    const step =
-      e.key === "ArrowLeft" || e.key === "ArrowUp"
-        ? -1
-        : e.key === "ArrowRight" || e.key === "ArrowDown"
-          ? 1
-          : 0;
-    if (e.key === " " || e.key === "Escape") look = null;
-    else if (step) lookStep(step);
-    else return;
+    if (found.id === "lookClose") look = null;
+    else lookStep(e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 1);
     e.preventDefault();
   }
 
@@ -2014,7 +2021,7 @@
     return [
       ...(one
         ? [
-            { label: "Open", hint: "Enter", run: () => open(one) },
+            { label: "Open", hint: hintFor("open"), run: () => open(one) },
             ...(one.isDir
               ? []
               : [{ label: "Quick Look", hint: "Space", run: () => (look = one.path) }]),
@@ -2027,8 +2034,8 @@
             "separator" as const,
           ]
         : []),
-      { label: "Cut", hint: "Ctrl+X", run: cutSelection },
-      { label: "Copy", hint: "Ctrl+C", run: copySelection },
+      { label: "Cut", hint: hintFor("cut"), run: cutSelection },
+      { label: "Copy", hint: hintFor("copy"), run: copySelection },
       ...(one ? [{ label: "Rename", hint: "F2", run: () => (renaming = one.path) }] : []),
       ...(picked.length > 1
         ? [{ label: "Rename…", hint: "F2", run: () => (bulkOpen = true) }]
@@ -2041,7 +2048,7 @@
         ? [{ label: "PDF tools…", run: () => openPdfTools(one ?? undefined) }]
         : []),
       ...(one && isEditable(one) ? [{ label: "Image tools…", run: () => (imageTools = one) }] : []),
-      { label: "Move to Recycle Bin", hint: "Del", danger: true, run: trashSelected },
+      { label: "Move to Recycle Bin", hint: hintFor("trash"), danger: true, run: trashSelected },
       "separator",
       { label: "More options", run: () => nativeMenu([...selection]) },
     ];
@@ -2049,13 +2056,17 @@
 
   function backgroundMenu(): MenuItem[] {
     return [
-      { label: "New folder", hint: "Ctrl+Shift+N", run: newFolder },
+      { label: "New folder", hint: hintFor("newFolder"), run: newFolder },
       { label: "New text file", run: () => newFile() },
       { label: "New Markdown file", run: () => newFile("New file.md") },
-      { label: "Paste", hint: "Ctrl+V", run: paste },
+      { label: "Paste", hint: hintFor("paste"), run: paste },
       "separator",
       { label: "Refresh", run: () => refresh() },
-      { label: "Select all", hint: "Ctrl+A", run: () => selectRange(0, visible.length - 1) },
+      {
+        label: "Select all",
+        hint: hintFor("selectAll"),
+        run: () => selectRange(0, visible.length - 1),
+      },
       "separator",
       { label: "Open in terminal", run: () => terminalIn(path) },
       { label: "More options", run: () => nativeMenu([path]) },
@@ -2148,124 +2159,103 @@
     menu = { items: itemMenu(), x: (box?.left ?? 0) + 16, y: (box?.bottom ?? 0) - 8 };
   }
 
-  /** Tab shortcuts. They work everywhere, including while a text field has focus. */
-  function tabShortcut(e: KeyboardEvent, ctrl: boolean): Action | null {
-    if (!ctrl) return null;
-    const key = e.key.toLowerCase();
-    if (key === "," && !e.shiftKey) return () => showScreen(SETTINGS_PATH);
-    if (key === "i" && !e.shiftKey && !e.altKey)
-      return () => updateSettings({ showInspector: !settings.showInspector });
-    if (key === "k" && !e.shiftKey && !e.altKey)
-      return renaming || (e.target as HTMLElement).tagName === "INPUT" ? ignore : openPalette;
-    if (key === "l" && !e.shiftKey) return () => !noFolder && toolbar?.edit();
-    if (key === "f" && !e.shiftKey && !e.altKey) return openSearch;
-    if (key === "t" || key === "w") {
-      // Held-down Ctrl+T / Ctrl+W must not open or close tabs in a burst.
-      if (!restored || e.repeat) return ignore;
-      return key === "t" ? () => openTab(startPath(home)) : () => closeTab(active);
-    }
-    if (e.key === "Tab") return () => cycleTab(e.shiftKey ? -1 : 1);
-    if (e.key === "PageDown") return () => cycleTab(1);
-    if (e.key === "PageUp") return () => cycleTab(-1);
-    if (!e.shiftKey && e.key >= "1" && e.key <= "9") {
+  /**
+   * What each shortcut does. The registry in `$lib/shortcuts` says which key press is which
+   * shortcut; the type insists on a handler for every one of them. A handler returns what to
+   * run, or null when the shortcut doesn't apply right now (nothing selected, say).
+   */
+  const keyHandlers: Record<ScopeId<"tabs" | "files">, (e: KeyboardEvent) => Action | null> = {
+    // Tabs: these work everywhere, including while a text field has focus.
+    settings: () => () => showScreen(SETTINGS_PATH),
+    inspector: () => () => updateSettings({ showInspector: !settings.showInspector }),
+    palette: (e) =>
+      renaming || (e.target as HTMLElement).tagName === "INPUT" ? ignore : openPalette,
+    goTo: () => () => !noFolder && toolbar?.edit(),
+    search: () => openSearch,
+    shortcuts: () => () => (shortcutsOpen = true),
+    // Held-down Ctrl+T / Ctrl+W must not open or close tabs in a burst.
+    tabNew: (e) => (!restored || e.repeat ? ignore : () => openTab(startPath(home))),
+    tabClose: (e) => (!restored || e.repeat ? ignore : () => closeTab(active)),
+    tabCycle: (e) => () => cycleTab(e.shiftKey ? -1 : 1),
+    tabPage: (e) => () => cycleTab(e.key === "PageDown" ? 1 : -1),
+    tabGo: (e) => {
       // Ctrl+9 is always the last tab, as in browsers.
       const last = tabs.length - 1;
       return () => activate(e.key === "9" ? last : Math.min(Number(e.key) - 1, last));
-    }
-    return null;
+    },
+
+    // Files and moving around: on the file list.
+    back: () => goBack,
+    forward: () => goForward,
+    up: () => goUp,
+    upBackspace: () => goUp,
+    newFolder: () => newFolder,
+    // Paste a few of the shelf's items: open the panel to pick them.
+    shelf: () => () => (shelfOpen = !shelfOpen),
+    // Holding the key must not undo one operation after another.
+    undo: (e) => (e.repeat ? null : () => stepHistory(false)),
+    redo: (e) => (e.repeat ? null : () => stepHistory(true)),
+    selectAll: () => () => selectRange(0, visible.length - 1),
+    copy: () => (selection.size ? copySelection : null),
+    cut: () => (selection.size ? cutSelection : null),
+    paste: () => paste,
+    hidden: () => () => updateSettings({ showHidden: !settings.showHidden }),
+    move: (e) => {
+      const shift = e.shiftKey;
+      const inColumns = view === "columns" && !resultView && !search && !place;
+      // The gallery's strip runs left to right, so its keys move one item at a time. Where it is
+      // not shown (a search, a tag view) the items are in a grid.
+      const inGallery = view === "gallery" && !resultView && !search;
+      const grid = view === "grid" || (view === "gallery" && !inGallery);
+      const row = grid ? (fileView?.columns() ?? 1) : 1;
+      switch (e.key) {
+        case "ArrowDown":
+          return () => moveCursor(row, shift);
+        case "ArrowUp":
+          return () => moveCursor(-row, shift);
+        case "ArrowRight":
+          if (inColumns) {
+            // Into the folder the cursor is on, as in Finder.
+            const here = cursor >= 0 ? visible[cursor] : null;
+            return here?.isDir && !shift ? () => goSelect(here.path, null) : null;
+          }
+          return grid || inGallery ? () => moveCursor(1, shift) : null;
+        case "ArrowLeft":
+          if (inColumns) {
+            const up = parentOf(path);
+            return up && !shift ? () => goSelect(up, path) : null;
+          }
+          return grid || inGallery ? () => moveCursor(-1, shift) : null;
+      }
+      return null;
+    },
+    ends: (e) => () => moveCursor(e.key === "Home" ? -visible.length : visible.length, e.shiftKey),
+    open: () => (cursor >= 0 ? () => open(visible[cursor]) : null),
+    quickLook: () => (selection.size ? openQuickLook : null),
+    // The colour tags, in the order of their keys. Held down, it must not flip the tag on and off.
+    tag: (e) => {
+      if (e.shiftKey || e.altKey || !selection.size) return null;
+      return e.repeat ? ignore : () => toggleTag(Number(e.key));
+    },
+    rename: () => {
+      if (selection.size > 1 && !noFolder) return () => (bulkOpen = true);
+      return cursor >= 0 ? () => (renaming = visible[cursor].path) : null;
+    },
+    trash: () => trashSelected,
+    menu: (e) => () => keyboardContextMenu(e.key === "F10" ? false : e.shiftKey),
+    clear: () => clearSelectionAndClipboard,
+  };
+
+  /** Tab shortcuts. They work everywhere, including while a text field has focus. */
+  function tabShortcut(e: KeyboardEvent): Action | null {
+    const found = matchShortcut(e, "tabs");
+    return found ? keyHandlers[found.id](e) : null;
   }
 
   /** File list shortcuts. */
-  function fileShortcut(e: KeyboardEvent, ctrl: boolean): Action | null {
-    const { key, shiftKey: shift } = e;
-    // Other Alt combinations fall through and act like the plain key (Alt+Backspace goes up).
-    if (e.altKey) {
-      if (key === "ArrowLeft") return goBack;
-      if (key === "ArrowRight") return goForward;
-      if (key === "ArrowUp") return goUp;
-    }
-    if (ctrl && shift && key.toLowerCase() === "n") return newFolder;
-    // Paste a few of the shelf's items: open the panel to pick them.
-    if (ctrl && shift && key.toLowerCase() === "v") return () => (shelfOpen = !shelfOpen);
-    // Holding the key must not undo one operation after another.
-    if (ctrl && key.toLowerCase() === "z") return e.repeat ? null : () => stepHistory(shift);
-    if (ctrl && !shift && key.toLowerCase() === "y")
-      return e.repeat ? null : () => stepHistory(true);
-    if (ctrl) {
-      // Exact lowercase match: Ctrl+Shift+letter combinations are left alone.
-      switch (key) {
-        case "a":
-          return () => selectRange(0, visible.length - 1);
-        case "c":
-          if (selection.size) return copySelection;
-          break;
-        case "x":
-          if (selection.size) return cutSelection;
-          break;
-        case "v":
-          return paste;
-        case "h":
-          return () => updateSettings({ showHidden: !settings.showHidden });
-      }
-    }
-    const inColumns = view === "columns" && !resultView && !search && !place;
-    // The gallery's strip runs left to right, so its keys move one item at a time. Where it is
-    // not shown (a search, a tag view) the items are in a grid.
-    const inGallery = view === "gallery" && !resultView && !search;
-    const grid = view === "grid" || (view === "gallery" && !inGallery);
-    const row = grid ? (fileView?.columns() ?? 1) : 1;
-    switch (key) {
-      case "Backspace":
-        return goUp;
-      case "ArrowDown":
-        return () => moveCursor(row, shift);
-      case "ArrowUp":
-        return () => moveCursor(-row, shift);
-      case "ArrowRight":
-        if (inColumns) {
-          // Into the folder the cursor is on, as in Finder.
-          const here = cursor >= 0 ? visible[cursor] : null;
-          return here?.isDir && !shift ? () => goSelect(here.path, null) : null;
-        }
-        return grid || inGallery ? () => moveCursor(1, shift) : null;
-      case "ArrowLeft":
-        if (inColumns) {
-          const up = parentOf(path);
-          return up && !shift ? () => goSelect(up, path) : null;
-        }
-        return grid || inGallery ? () => moveCursor(-1, shift) : null;
-      case "Home":
-        return () => moveCursor(-visible.length, shift);
-      case "End":
-        return () => moveCursor(visible.length, shift);
-      case "Enter":
-        return cursor >= 0 ? () => open(visible[cursor]) : null;
-      case " ":
-        return selection.size ? openQuickLook : null;
-      case "1":
-      case "2":
-      case "3":
-      case "4":
-      case "5":
-      case "6":
-      case "7":
-        // The colour tags, in the order of their keys.
-        // Held down, it must not flip the tag on and off.
-        if (shift || e.altKey || !selection.size) return null;
-        return e.repeat ? ignore : () => toggleTag(Number(key));
-      case "F2":
-        if (selection.size > 1 && !noFolder) return () => (bulkOpen = true);
-        return cursor >= 0 ? () => (renaming = visible[cursor].path) : null;
-      case "Delete":
-        return trashSelected;
-      case "F10":
-        return shift ? () => keyboardContextMenu(false) : null;
-      case "ContextMenu":
-        return () => keyboardContextMenu(shift);
-      case "Escape":
-        return clearSelectionAndClipboard;
-    }
-    return null;
+  function fileShortcut(e: KeyboardEvent): Action | null {
+    const found = matchShortcut(e, "files");
+    return found ? keyHandlers[found.id](e) : null;
   }
 
   function onkeydown(e: KeyboardEvent) {
@@ -2280,6 +2270,7 @@
       tagsOpen ||
       smartDialog ||
       aboutOpen ||
+      shortcutsOpen ||
       bulkOpen ||
       paletteOpen
     )
@@ -2291,7 +2282,6 @@
       else if (e.key === "Escape") lookKey(e);
       return;
     }
-    const ctrl = e.ctrlKey || e.metaKey;
     const target = e.target as HTMLElement;
     // File shortcuts don't apply while renaming or typing, or on a keyboard-focused tab
     // (it handles its own keys).
@@ -2301,7 +2291,7 @@
       (!place || inBin || (e.altKey && e.key.startsWith("Arrow"))) &&
       target.tagName !== "INPUT" &&
       !target.closest?.("[role=tablist]");
-    const action = tabShortcut(e, ctrl) ?? (fileKeys ? fileShortcut(e, ctrl) : null);
+    const action = tabShortcut(e) ?? (fileKeys ? fileShortcut(e) : null);
     if (!action) return;
     e.preventDefault();
     action();
@@ -2520,6 +2510,7 @@
           setTheme(t);
         }}
         onabout={() => (aboutOpen = true)}
+        onshortcuts={() => (shortcutsOpen = true)}
       />
     {:else if view === "columns" && !resultView && !search}
       <ColumnView
@@ -2649,6 +2640,10 @@
       ondelete={removeTag}
       onclose={() => (tagsOpen = false)}
     />
+  {/if}
+
+  {#if shortcutsOpen}
+    <ShortcutsDialog onclose={() => (shortcutsOpen = false)} />
   {/if}
 
   {#if aboutOpen}
