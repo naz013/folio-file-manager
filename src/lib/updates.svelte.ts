@@ -19,6 +19,22 @@ export const updates: {
   hidden: boolean;
 } = $state({ phase: "idle", version: "", percent: null, error: "", hidden: false });
 
+/** What a manual check found, in words; empty while there is nothing to say. */
+export function updateStatusText(): string {
+  switch (updates.phase) {
+    case "checking":
+      return "Checking…";
+    case "current":
+      return "Folio is up to date.";
+    case "available":
+      return `Folio ${updates.version} is available.`;
+    case "failed":
+      return updates.error;
+    default:
+      return "";
+  }
+}
+
 /** The update the check found. Not reactive: it is a handle, not something to show. */
 let pending: Update | null = null;
 /** The failure shown is about installing, not about a check. */

@@ -630,3 +630,18 @@ export async function searchDir(
   await invoke<void>("search_dir", { id, dir, query, events });
 }
 export const searchCancel = (id: number) => invoke<void>("search_cancel", { id });
+
+/** Which build this is and what it runs on (`about::AppInfo`). */
+export interface AppInfo {
+  version: string;
+  /** The commit the build was made from, or "unknown". */
+  commit: string;
+  /** The day it was built, `YYYY-MM-DD` in UTC. */
+  buildDate: string;
+  tauri: string;
+  /** The web view that draws the window, if it could be asked. */
+  webview: string | null;
+  os: string;
+  arch: string;
+}
+export const appInfo = () => invoke<AppInfo>("app_info");

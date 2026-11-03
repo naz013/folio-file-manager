@@ -13,14 +13,17 @@
   import { shortcutGroups } from "$lib/shortcuts";
   import { SPRING_DELAYS_MS, settings, updateSettings } from "$lib/settings.svelte";
   import { themes, type Theme } from "$lib/theme";
-  import { checkForUpdate, updates } from "$lib/updates.svelte";
+  import { checkForUpdate, updateStatusText, updates } from "$lib/updates.svelte";
 
   let {
     theme,
     ontheme,
+    onabout,
   }: {
     theme: Theme;
     ontheme: (theme: Theme) => void;
+    /** Open the About dialog. */
+    onabout: () => void;
   } = $props();
 
   let dialog: HTMLElement;
@@ -59,17 +62,7 @@
   });
 
   /** What the manual check found, in words. */
-  const updateStatus = $derived(
-    updates.phase === "checking"
-      ? "Checking…"
-      : updates.phase === "current"
-        ? "Folio is up to date."
-        : updates.phase === "available"
-          ? `Folio ${updates.version} is available.`
-          : updates.phase === "failed"
-            ? updates.error
-            : "",
-  );
+  const updateStatus = $derived(updateStatusText());
 
   let crash = $state<CrashState | null>(null);
   onMount(() => {
@@ -364,6 +357,11 @@
         <div class="row">
           <span>Welcome tour</span>
           <button onclick={() => updateSettings({ onboarded: false })}> Show again </button>
+        </div>
+
+        <div class="row">
+          <span>Version, license and links</span>
+          <button onclick={onabout}>About Folio</button>
         </div>
       </section>
 

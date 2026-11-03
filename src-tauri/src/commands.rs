@@ -882,6 +882,12 @@ pub fn tag_files(tags: tauri::State<'_, Tags>, tag: i64) -> Vec<(String, Entry, 
         .collect()
 }
 
+/// Which build this is and what it runs on, for the About dialog and bug reports.
+#[tauri::command]
+pub fn app_info(app: tauri::AppHandle) -> crate::about::AppInfo {
+    crate::about::AppInfo::collect(&app.package_info().version.to_string())
+}
+
 #[tauri::command]
 pub fn smart_list(tags: tauri::State<'_, Tags>) -> Vec<SmartFolder> {
     tags.smart_list()

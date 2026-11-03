@@ -94,6 +94,7 @@
   import ConflictDialog from "$lib/components/ConflictDialog.svelte";
   import ContextMenu, { type MenuItem } from "$lib/components/ContextMenu.svelte";
   import QuickLook from "$lib/components/QuickLook.svelte";
+  import AboutDialog from "$lib/components/AboutDialog.svelte";
   import SmartFolderDialog from "$lib/components/SmartFolderDialog.svelte";
   import TagDialog from "$lib/components/TagDialog.svelte";
   import BulkRenameDialog from "$lib/components/BulkRenameDialog.svelte";
@@ -1442,6 +1443,8 @@
   /** Tag ids of the tagged items in this folder, by item name. */
   let tagMap = $state<Record<string, number[]>>({});
   let tagsOpen = $state(false);
+  /** The About dialog. */
+  let aboutOpen = $state(false);
 
   // Nothing selected (it was moved or deleted meanwhile): nothing to tag.
   $effect(() => {
@@ -1884,6 +1887,7 @@
         theme !== "system",
       ),
       ...action("Settings", "Ctrl+,", () => showScreen(SETTINGS_PATH)),
+      ...action("About Folio", undefined, () => (aboutOpen = true)),
       ...action("Recycle Bin", "", () => navigate(BIN_PATH)),
       ...action("Storage breakdown", "", () => showScreen(STORAGE_PATH)),
       ...action("Clean up large and old files", "", () => {
@@ -2275,6 +2279,7 @@
       imageTools ||
       tagsOpen ||
       smartDialog ||
+      aboutOpen ||
       bulkOpen ||
       paletteOpen
     )
@@ -2514,6 +2519,7 @@
           theme = t;
           setTheme(t);
         }}
+        onabout={() => (aboutOpen = true)}
       />
     {:else if view === "columns" && !resultView && !search}
       <ColumnView
@@ -2643,6 +2649,10 @@
       ondelete={removeTag}
       onclose={() => (tagsOpen = false)}
     />
+  {/if}
+
+  {#if aboutOpen}
+    <AboutDialog onclose={() => (aboutOpen = false)} />
   {/if}
 
   {#if smartDialog}

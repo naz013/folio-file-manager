@@ -1,3 +1,4 @@
+mod about;
 mod bin;
 mod civil;
 mod cleanup;
@@ -252,6 +253,7 @@ pub fn run() {
             commands::tags_export,
             commands::tags_import,
             commands::tag_files,
+            commands::app_info,
             commands::smart_list,
             commands::smart_save,
             commands::smart_delete,
