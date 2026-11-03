@@ -144,7 +144,16 @@
   import ColumnView from "$lib/components/ColumnView.svelte";
   import FileView from "$lib/components/FileView.svelte";
   import GalleryView from "$lib/components/GalleryView.svelte";
-  import { measureJumps, measureScroll, nextPaint, perfConfig, perfReport } from "$lib/perf";
+  import {
+    jumpTo,
+    measureArrowHold,
+    measureJumps,
+    measureScroll,
+    nextPaint,
+    perfConfig,
+    perfReport,
+    settleTiles,
+  } from "$lib/perf";
 
   let home = $state("");
   let path = $state("");
@@ -2241,7 +2250,10 @@
       let t = performance.now();
       const count = (await listDir(dir)).length;
       const listMs = (performance.now() - t).toFixed(1);
-      for (const v of ["grid", "list"] as View[]) {
+      // A folder named photos-* is for the gallery: only the gallery is run on it, so the
+      // shell has not drawn its pictures in another view first. Other folders hold no pictures.
+      const pictures = /photos-/i.test(dir);
+      for (const v of (pictures ? ["gallery"] : ["grid", "list"]) as View[]) {
         await navigate(home);
         setView(v);
         await nextPaint();
@@ -2250,11 +2262,32 @@
         await nextPaint();
         const openMs = (performance.now() - t).toFixed(1);
         const el = fileView!.scrollElement();
-        const scroll = await measureScroll(el);
-        const jumpMs = await measureJumps(el);
+        // The gallery's filmstrip scrolls sideways, and has its own checks: a held arrow key,
+        // and whether any picture is left on the plain icon once the movement stops.
+        const axis = v === "gallery" ? "x" : "y";
+        const scroll = await measureScroll(el, 600, 60, axis);
+        const afterScroll = v === "gallery" ? await settleTiles(el) : null;
+        const jumpMs = await measureJumps(el, undefined, axis);
+        let gallery = "";
+        if (afterScroll) {
+          // Dragging the scrollbar to the middle and to the end: once each stops, no tile may
+          // be left without its picture.
+          let afterJump = 0;
+          for (const at of [0.5, 1]) {
+            await jumpTo(el, at, axis);
+            afterJump = Math.max(afterJump, (await settleTiles(el)).unpainted);
+          }
+          const held = await measureArrowHold();
+          const afterHold = await settleTiles(el);
+          gallery =
+            `	arrowFps=${held.avgFps}	arrowP95Ms=${held.p95Ms}	arrowMaxMs=${held.maxMs}` +
+            `	arrowSlow=${held.slow}/${held.frames}	unpaintedAfterScroll=${afterScroll.unpainted}` +
+            `	scrollSettleMs=${afterScroll.waitedMs}	unpaintedAfterJump=${afterJump}` +
+            `	unpaintedAfterHold=${afterHold.unpainted}/${afterHold.tiles}	settleMs=${afterHold.waitedMs}`;
+        }
         await perfReport(
-          `bench\titems=${count}\tview=${v}\tlistMs=${listMs}\topenMs=${openMs}\tavgFps=${scroll.avgFps}` +
-            `\tp95Ms=${scroll.p95Ms}\tmaxMs=${scroll.maxMs}\tslow=${scroll.slow}/${scroll.frames}\tjumpMaxMs=${jumpMs}`,
+          `bench	items=${count}	view=${v}	listMs=${listMs}	openMs=${openMs}	avgFps=${scroll.avgFps}` +
+            `	p95Ms=${scroll.p95Ms}	maxMs=${scroll.maxMs}	slow=${scroll.slow}/${scroll.frames}	jumpMaxMs=${jumpMs}${gallery}`,
         );
       }
     }

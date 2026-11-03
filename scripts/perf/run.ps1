@@ -3,11 +3,13 @@
   Measures Folio against the performance budgets in docs/PRODUCT.md.
 
 .DESCRIPTION
-  1. Creates fixture folders (10k and 50k items) under -FixtureRoot.
+  1. Creates fixture folders (10k and 50k items, and 10k distinct pictures) under -FixtureRoot.
   2. Builds a release binary (skip with -NoBuild).
   3. Cold start: launches the app -ColdRuns times and records time to first paint.
   4. Idle memory: Folio + its WebView2 processes, 10 s after first paint.
-  5. Benchmark: opens each fixture in grid and list view, scrolls and jumps.
+  5. Benchmark: opens each fixture in grid, list and gallery view, scrolls and jumps; in the
+     gallery also holds an arrow key and counts pictures left on the plain icon.
+  6. Gallery memory: browses the pictures alone, then samples memory.
 
 .EXAMPLE
   pwsh scripts/perf/run.ps1
@@ -63,6 +65,11 @@ function Start-Folio([string]$log, [string]$benchDirs) {
 Write-Host "== Fixtures" -ForegroundColor Cyan
 node (Join-Path $PSScriptRoot "make-fixtures.mjs") $FixtureRoot 10000 50000
 if ($LASTEXITCODE) { throw "Fixture generation failed ($LASTEXITCODE)" }
+# 10,000 different pictures: the shell caches thumbnails by content, so copies of one file
+# would measure nothing.
+node (Join-Path $PSScriptRoot "make-photos.mjs") $FixtureRoot 10000
+if ($LASTEXITCODE) { throw "Picture fixture generation failed ($LASTEXITCODE)" }
+$photos = Join-Path $FixtureRoot "photos-10000"
 $dirs = @((Join-Path $FixtureRoot "items-10000"), (Join-Path $FixtureRoot "items-50000"))
 
 if (-not $NoBuild) {
@@ -109,6 +116,21 @@ $bench = Get-Content $log | Where-Object { $_ -match "`tbench`t" } | ForEach-Obj
   foreach ($kv in ($_.Split("`t") | Select-Object -Skip 2)) { $k, $v = $kv.Split("=", 2); $row[$k] = $v }
   [pscustomobject]$row
 }
+Start-Sleep -Seconds 2
+
+# The pictures alone, so their memory is not mixed with the 50k folders' icons.
+Write-Host "== Gallery on 10k pictures" -ForegroundColor Cyan
+$galleryLog = Join-Path $FixtureRoot "perf-gallery.log"
+$proc = Start-Folio $galleryLog $photos
+if (-not (Wait-ForLine $galleryLog "bench-done" 600)) { $proc | Stop-Process -Force; throw "Gallery benchmark did not finish" }
+Start-Sleep -Seconds 10
+$galleryMemory = Get-FolioMemoryMB $proc.Id
+$galleryBench = Get-Content $galleryLog | Where-Object { $_ -match "`tbench`t" } | ForEach-Object {
+  $row = [ordered]@{}
+  foreach ($kv in ($_.Split("`t") | Select-Object -Skip 2)) { $k, $v = $kv.Split("=", 2); $row[$k] = $v }
+  [pscustomobject]$row
+}
+$proc | Stop-Process -Force
 
 $coldMedian = ($cold | Sort-Object)[[math]::Floor($cold.Count / 2)]
 Write-Host ""
@@ -118,5 +140,9 @@ Write-Host "== Results" -ForegroundColor Green
 "Idle memory: {0} MB working set, {1} MB private across {2} processes (host {3} MB)" -f `
   $memory.WorkingSetMB, $memory.PrivateMB, $memory.Processes, $memory.HostWorkingSetMB
 "Memory after benchmarks: {0} MB working set, {1} MB private" -f $benchMemory.WorkingSetMB, $benchMemory.PrivateMB
+"Memory 10 s after browsing 10k pictures in the gallery: {0} MB working set, {1} MB private (host {2} MB)" -f `
+  $galleryMemory.WorkingSetMB, $galleryMemory.PrivateMB, $galleryMemory.HostWorkingSetMB
 $bench | Format-Table -AutoSize | Out-String | Write-Host
-"Raw log: $log"
+Write-Host "== Gallery, 10k pictures (this run alone)" -ForegroundColor Green
+$galleryBench | Format-List | Out-String | Write-Host
+"Raw logs: $log, $galleryLog"
