@@ -56,14 +56,17 @@ a part of Windows, and its messages are shown as `Name (plugin): …`.
 | `entry`       | The page, an `.html` file in the folder. Default `index.html`.                    |
 | `permissions` | What it asks for; see below. Default none.                                        |
 | `actions`     | Menu items. At most 20. Needs the `selection` permission.                         |
-| `previews`    | Quick Look pages. At most 10.                                                     |
+| `previews`    | Quick Look pages. At most 10, and at most 20 file types claimed in all.           |
 
 An **action** has an `id` (lower-case letters, digits, `-`, `_`), a `title`, `kinds` (`"file"`,
 `"folder"`; default `["file"]`), `extensions` (files only; none means any file) and `multiple`
 (may run on several items at once; default one). It is offered when **every** selected item fits.
 
 A **preview** has an `id`, a `title` and the `extensions` it draws. It replaces Quick Look's own
-view for those files while the plugin is on.
+view for those files while the plugin is on. A preview opens on every such file you merely browse
+to, so it may not claim kinds of file that hold secrets (`kdbx`, `pem`, `key`, `pfx`, `p12`,
+`ppk`, `env`, `gpg`, `ovpn`, `rdp`, and a few more); an action may, because you run it on
+purpose.
 
 Unknown fields are ignored. Settings shows what is wrong with a manifest that can't be read.
 
@@ -85,8 +88,9 @@ storage and no access to Folio's page, cannot open windows, submit forms or navi
 its requests for scripts, data, images, fonts and frames are blocked except for its own files
 (`connect-src 'none'`; images and fonts from itself or `data:`). This stops it from sending what
 it reads to a server in the usual ways, but it is **not a guarantee**: the webview may still let a
-page leak a few bytes through a side channel such as a DNS lookup. Allow `read` only for plugins
-you trust. Its files come from its folder only, and only these types: `html`, `htm`,
+page leak a few bytes through a side channel such as a DNS lookup. WebRTC, which could carry data
+out past that policy, is removed from the page and switched off for direct connections in the
+webview. Allow `read` only for plugins you trust. Its files come from its folder only, and only these types: `html`, `htm`,
 `js`, `mjs`, `css`, `json`, `txt`, `md`, `svg`, `png`, `jpg`, `jpeg`, `gif`, `webp`, `woff2`, up to
 5 MB each. All plugins are served from one address, so a plugin's page can load another plugin's scripts and
 images; nothing a plugin holds is secret from another one that is on. Anything it needs from Folio
@@ -139,6 +143,9 @@ files are read when the page loads.
 ## Limits of this version
 
 - No way to change files, and no storage between runs.
+- Files are served only as they were when you approved the plugin: Folio hashes each file it
+  serves against that approval, so one changed afterwards (without Reload and approving again)
+  is refused.
 - A page that keeps sending more than 50 messages a second is turned off.
 - Two extension points: actions and previews. Toolbar buttons and sidebar sections are not there.
 - Plugins are not signed or reviewed, and there is no store; turn on only ones you trust.

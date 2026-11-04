@@ -59,6 +59,20 @@ refused. The app page allows frames only at `about:` (`frame-src about:`), so a 
 its frame to a plugin address either. Never add a plugin address to that policy, and run
 `examples/plugins/ipc-probe` after any change to how plugin pages are loaded.
 
+## Amendment — serving what was approved, and less to abuse
+
+- **Serve-time pin.** The page pins a plugin to the digest the person approved before loading
+  it (`plugins_pin`). The core reads the files once, checks they make that digest, and keeps each
+  file's hash; `plugin://` then serves a file only if its bytes still hash to that. Files
+  changed or added after approval are refused, and a plugin never pinned serves nothing.
+- **Frame hardening.** `pageDoc` runs a script ahead of the plugin's own that removes Tauri's
+  helpers and WebRTC from the frame. Tauri's refusal of a non-local frame stays the first lock;
+  this is the second. WebView2 is also started with
+  `--force-webrtc-ip-handling-policy=disable_non_proxied_udp`.
+- **Previews are limited**: at most 20 file types in all, and none that hold secrets (key stores,
+  certificates, `.env`), since a preview reads files without a click.
+- **Not closed**: a DNS lookup from a page may still leak a few bytes (see `docs/PLUGINS.md`).
+
 ## Consequences
 
 - A plugin can show anything on its own page, and may mislead a person by what it shows;
@@ -70,9 +84,8 @@ its frame to a plugin address either. Never add a plugin address to that policy,
   loops can't outlive its disabling.
 - All plugins share one address (`plugin.localhost`), so one plugin's page can load another's
   files; a plugin keeps nothing secret from another that is on.
-- Approval is of the version, the permissions and a hash of the files (taken when the folder is
-  read). Files changed afterwards, before the next Reload or start, still run; removing a
-  plugin's folder drops its approval at Reload.
+- Approval is of the version, the permissions and a hash of the files, and what is served is
+  checked against it file by file; removing a plugin's folder drops its approval at Reload.
 - A page can read a handed file for a minute, a few at a time; one that floods the bridge is
   turned off. Served pages also carry `sandbox allow-scripts` in their policy, and a plugin's
   own folder must not be a link or junction.

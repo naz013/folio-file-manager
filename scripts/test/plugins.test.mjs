@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import vm from "node:vm";
 import {
   actionsFor,
   cleanGrants,
   createBridge,
+  HARDEN,
   isGranted,
   isReady,
   load,
@@ -79,6 +81,73 @@ test("a manifest with something wrong says what, and unknown fields are ignored"
   );
   bad({ previews: [{ id: "p", title: "x", extensions: [] }] }, "extensions");
   bad({ previews: [{ id: "p", title: "x\ny", extensions: ["a"] }] }, "title");
+});
+
+test("a preview may not claim files that hold secrets, nor more than a few kinds", () => {
+  const withExts = (extensions) => ({
+    ...good,
+    previews: [{ id: "p", title: "x", extensions }],
+  });
+  for (const ext of ["kdbx", ".PEM", "env", "ppk", "pfx"]) {
+    const r = parse(withExts(["txt", ext]));
+    assert.ok(!r.ok && /secrets/.test(r.error), ext);
+  }
+  // Spread over previews or not, the kinds claimed in all are counted.
+  const many = Array.from({ length: 21 }, (_, i) => `a${i}`);
+  assert.ok(!parse(withExts(many)).ok);
+  const split = {
+    ...good,
+    previews: [
+      { id: "p", title: "x", extensions: many.slice(0, 11) },
+      { id: "q", title: "y", extensions: many.slice(11) },
+    ],
+  };
+  assert.ok(!parse(split).ok);
+  assert.ok(parse(withExts(many.slice(0, 20))).ok);
+  // Actions are run on purpose, on files that were picked: they may name any kind.
+  const act = {
+    ...good,
+    actions: [{ id: "a", title: "x", extensions: ["kdbx"] }],
+  };
+  assert.ok(parse(act).ok);
+});
+
+test("the page's first script removes the ways to Folio's commands and to WebRTC", () => {
+  const ctx = vm.createContext({});
+  ctx.window = ctx;
+  vm.runInContext(
+    `window.__TAURI_INTERNALS__ = { invoke() {} };
+     window.__TAURI__ = {};
+     window.ipc = { postMessage() {} };
+     window.chrome = { webview: { postMessage() {} } };
+     window.RTCPeerConnection = function () {};
+     window.webkitRTCPeerConnection = function () {};
+     window.keep = 1;`,
+    ctx,
+  );
+  vm.runInContext(HARDEN, ctx);
+  const seen = vm.runInContext(
+    `({ t: typeof window.__TAURI_INTERNALS__, t2: typeof window.__TAURI__,
+        ipc: typeof window.ipc, wv: typeof window.chrome.webview,
+        rtc: typeof window.RTCPeerConnection, rtc2: typeof window.webkitRTCPeerConnection,
+        keep: window.keep })`,
+    ctx,
+  );
+  assert.deepEqual(
+    { ...seen },
+    {
+      t: "undefined",
+      t2: "undefined",
+      ipc: "undefined",
+      wv: "undefined",
+      rtc: "undefined",
+      rtc2: "undefined",
+      keep: 1,
+    },
+  );
+  // A plugin can't put them back.
+  vm.runInContext("window.RTCPeerConnection = function () {}", ctx);
+  assert.equal(vm.runInContext("typeof window.RTCPeerConnection", ctx), "undefined");
 });
 
 test("a plugin is on only for the version and permissions that were agreed to", () => {
@@ -388,7 +457,9 @@ test("a page is given as a document with our base and policy ahead of its own ma
   assert.ok(doc.indexOf("Content-Security-Policy") < doc.indexOf(html));
   assert.ok(doc.endsWith(html));
   // A quote in the address can't close the attribute.
-  assert.ok(!pageDoc("", 'http://x/"><script>1</script>', origin).includes("<script>"));
+  const hostile = pageDoc("", 'http://x/"><script>1</script>', origin);
+  assert.equal(hostile.split("<script>").length - 1, 1, "only our own script");
+  assert.ok(doc.indexOf("<script>") < doc.indexOf(html), "hardening runs first");
   const csp = pageCsp(origin);
   for (const part of [
     "default-src 'none'",

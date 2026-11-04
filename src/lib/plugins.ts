@@ -53,6 +53,36 @@ const EXT = /^[a-z0-9]{1,10}$/;
 const MAX_ACTIONS = 20;
 const MAX_PREVIEWS = 10;
 const MAX_EXTENSIONS = 50;
+/** A preview runs on every file of its kind that is merely browsed to, so it may claim few. */
+const MAX_PREVIEW_EXTENSIONS = 20;
+/** Kinds of file that hold secrets: a preview, which needs no click, may not claim them. */
+const SENSITIVE = new Set([
+  "kdbx",
+  "kdb",
+  "keychain",
+  "key",
+  "pem",
+  "pfx",
+  "p12",
+  "ppk",
+  "pgp",
+  "gpg",
+  "asc",
+  "jks",
+  "keystore",
+  "env",
+  "ovpn",
+  "rdp",
+  "wallet",
+  "1pux",
+  "opvault",
+  "agilekeychain",
+  "crt",
+  "cer",
+  "der",
+  "p7b",
+  "aes",
+]);
 
 const fail = (error: string): Parsed => ({ ok: false, error });
 
@@ -186,7 +216,13 @@ export function parseManifest(id: string, source: string): Parsed {
     if (!title) return fail(`Preview "${p.id}" needs a "title"`);
     const exts = extensions(p.extensions);
     if (!exts?.length) return fail(`Preview "${p.id}" needs "extensions", like ["csv"]`);
+    const secret = exts.find((e) => SENSITIVE.has(e));
+    if (secret) return fail(`Preview "${p.id}" can't claim .${secret} files: they hold secrets`);
     previews.push({ id: p.id, title, extensions: exts });
+  }
+  const claimed = new Set(previews.flatMap((p) => p.extensions));
+  if (claimed.size > MAX_PREVIEW_EXTENSIONS) {
+    return fail(`Previews may claim at most ${MAX_PREVIEW_EXTENSIONS} file types in all`);
   }
 
   return {
@@ -389,9 +425,26 @@ export function pageDoc(html: string, base: string, origin: string): string {
   return (
     `<!doctype html><html><head><base href="${escapeAttr(base)}">` +
     `<meta http-equiv="Content-Security-Policy" content="${escapeAttr(pageCsp(origin))}">` +
+    `<script>${HARDEN}</script>` +
     html
   );
 }
+
+/**
+ * Runs before the plugin's own code. Tauri's helpers (the way to Folio's commands) are put in
+ * every frame on Windows, and WebRTC can reach the network past the page's policy; neither is
+ * of use to a plugin, so neither is left in its page. Tauri already refuses a frame that isn't
+ * Folio's own, so this is a second lock, not the first.
+ */
+export const HARDEN =
+  "(()=>{const w=window;" +
+  "for(const k of Object.getOwnPropertyNames(w)){" +
+  'if(/^__TAURI/.test(k)||k==="ipc"){try{delete w[k]}catch(e){}' +
+  "if(k in w){try{Object.defineProperty(w,k,{value:undefined,writable:false})}catch(e){}}}}" +
+  'for(const k of["RTCPeerConnection","webkitRTCPeerConnection","RTCDataChannel","RTCSessionDescription","RTCIceCandidate"]){' +
+  "try{Object.defineProperty(w,k,{value:undefined,writable:false,configurable:false})}catch(e){}}" +
+  "try{delete w.chrome.webview}catch(e){}" +
+  "})();";
 
 // ---- The conversation with a plugin's page ----
 

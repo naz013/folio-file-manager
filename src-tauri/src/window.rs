@@ -29,12 +29,21 @@ pub enum Place {
     Saved(Geometry),
 }
 
+/// What `WebView2` is started with: the defaults wry would pass, and no WebRTC traffic that
+/// doesn't go through a proxy. A plugin page can't open a connection (its policy forbids it),
+/// but WebRTC's STUN/TURN lookups ignore that policy and could carry data out in a request.
+#[cfg(windows)]
+const WEBVIEW_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection \
+    --force-webrtc-ip-handling-policy=disable_non_proxied_udp";
+
 pub fn open(app: &AppHandle, label: &str, place: &Place) -> tauri::Result<()> {
     let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()))
         .title("Folio")
         .inner_size(1280.0, 800.0)
         .min_inner_size(900.0, 560.0)
         .decorations(false);
+    #[cfg(windows)]
+    let builder = builder.additional_browser_args(WEBVIEW_ARGS);
     let builder = match place {
         Place::Default => builder.center(),
         Place::TornOff {

@@ -97,6 +97,13 @@
         }
         out.append(li);
       }
+      // WebRTC reaches the network past the page's policy (STUN/TURN lookups), so a plugin page
+      // must not have it.
+      for (const name of ["RTCPeerConnection", "webkitRTCPeerConnection"]) {
+        attempt(name, () =>
+          typeof window[name] === "function" ? "constructor available" : undefined,
+        );
+      }
       // Tauri's custom-protocol channel: the policy must refuse the request.
       for (const url of ["http://ipc.localhost/plugins_folder", "ipc://localhost/plugins_folder"]) {
         attempt(`fetch ${url}`, async () => {
