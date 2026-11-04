@@ -28,10 +28,11 @@ you turn them on and read what they can do, and are checked file by file when se
 the same id in your plugins folder replaces the built-in one, and has to be approved on its own
 files.
 
-| Plugin      | What it does                                                                                                                                                                                                                          |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Text viewer | Quick Look for text and code files: line numbers, wrapping, search (Ctrl+F). Loads more of a large file as you scroll, up to 2 MB                                                                                                     |
-| JSON viewer | Quick Look for `.json`, `.geojson`, `.jsonld`, `.har`: a tree to fold and search, copy a path or value, pretty and raw views, and where a syntax error is. Reads files up to 4 MB; a larger one shows its first 4 MB as raw text only |
+| Plugin          | What it does                                                                                                                                                                                                                                                                                     |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Text viewer     | Quick Look for text and code files: line numbers, wrapping, search (Ctrl+F). Loads more of a large file as you scroll, up to 2 MB                                                                                                                                                                |
+| Markdown viewer | Quick Look for `.md`, `.markdown`, `.mdown`, `.mkd`: headings, lists, tasks, tables, code, quotes, front matter, with search and a Source view. Links are shown with their address but not opened, remote images are not loaded, and any HTML in the file is shown as text. Reads the first 1 MB |
+| JSON viewer     | Quick Look for `.json`, `.geojson`, `.jsonld`, `.har`: a tree to fold and search, copy a path or value, pretty and raw views, and where a syntax error is. Reads files up to 4 MB; a larger one shows its first 4 MB as raw text only                                                            |
 
 ## The manifest
 

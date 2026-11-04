@@ -1,0 +1,16 @@
+{
+  "id": "markdown-viewer",
+  "name": "Markdown viewer",
+  "version": "1.0.0",
+  "description": "Quick Look for Markdown files, drawn safely, with search and a source view.",
+  "api": 1,
+  "entry": "index.html",
+  "permissions": ["read"],
+  "previews": [
+    {
+      "id": "md",
+      "title": "Markdown viewer",
+      "extensions": ["md", "markdown", "mdown", "mkd"]
+    }
+  ]
+}

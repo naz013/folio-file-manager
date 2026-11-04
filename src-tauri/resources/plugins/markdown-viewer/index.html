@@ -1,0 +1,612 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Markdown viewer</title>
+    <style>
+      :root {
+        --line: color-mix(in srgb, CanvasText 16%, transparent);
+        --dim: color-mix(in srgb, CanvasText 55%, transparent);
+        --soft: color-mix(in srgb, CanvasText 7%, transparent);
+        --hit: color-mix(in srgb, gold 45%, transparent);
+        --cur: color-mix(in srgb, orange 75%, transparent);
+        --link: light-dark(#0b5cad, #7cb7ff);
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+        background: Canvas;
+        color: CanvasText;
+        font:
+          14px/1.6 system-ui,
+          sans-serif;
+      }
+      .bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-bottom: 1px solid var(--line);
+        font-size: 13px;
+      }
+      .bar input[type="search"] {
+        flex: 1;
+        min-width: 80px;
+        max-width: 260px;
+        padding: 4px 8px;
+        font: inherit;
+        color: inherit;
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+      }
+      button {
+        padding: 3px 8px;
+        font: inherit;
+        color: inherit;
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      button[aria-pressed="true"] {
+        background: var(--hit);
+      }
+      .seg {
+        display: inline-flex;
+      }
+      .seg button {
+        border-radius: 0;
+        margin-left: -1px;
+      }
+      .seg button:first-child {
+        border-radius: 6px 0 0 6px;
+        margin-left: 0;
+      }
+      .seg button:last-child {
+        border-radius: 0 6px 6px 0;
+      }
+      .count {
+        color: var(--dim);
+        white-space: nowrap;
+      }
+      .callout {
+        margin: 0;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--line);
+        background: var(--soft);
+        font-size: 13px;
+      }
+      #view {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+      }
+      #doc {
+        max-width: 860px;
+        margin: 0 auto;
+        padding: 20px 28px 48px;
+        overflow-wrap: anywhere;
+      }
+      #doc > :first-child {
+        margin-top: 0;
+      }
+      h1,
+      h2,
+      h3,
+      h4,
+      h5,
+      h6 {
+        margin: 1.4em 0 0.5em;
+        line-height: 1.25;
+      }
+      h1 {
+        font-size: 1.9em;
+        padding-bottom: 0.25em;
+        border-bottom: 1px solid var(--line);
+      }
+      h2 {
+        font-size: 1.5em;
+        padding-bottom: 0.2em;
+        border-bottom: 1px solid var(--line);
+      }
+      h3 {
+        font-size: 1.25em;
+      }
+      h4 {
+        font-size: 1.05em;
+      }
+      h5,
+      h6 {
+        font-size: 0.95em;
+        color: var(--dim);
+      }
+      p,
+      ul,
+      ol,
+      blockquote,
+      pre,
+      table {
+        margin: 0.7em 0;
+      }
+      ul,
+      ol {
+        padding-left: 1.6em;
+      }
+      li > ul,
+      li > ol {
+        margin: 0.2em 0;
+      }
+      ul.tight > li > p {
+        margin: 0;
+      }
+      li.task {
+        list-style: none;
+        margin-left: -1.3em;
+      }
+      .cb {
+        display: inline-block;
+        width: 1.3em;
+        color: var(--dim);
+      }
+      blockquote {
+        padding: 0 1em;
+        color: var(--dim);
+        border-left: 3px solid var(--line);
+      }
+      code {
+        padding: 0.1em 0.35em;
+        border-radius: 4px;
+        background: var(--soft);
+        font:
+          0.9em ui-monospace,
+          "Cascadia Mono",
+          Consolas,
+          monospace;
+      }
+      pre {
+        position: relative;
+        padding: 10px 14px;
+        overflow: auto;
+        border-radius: 6px;
+        background: var(--soft);
+        font:
+          12.5px/1.5 ui-monospace,
+          "Cascadia Mono",
+          Consolas,
+          monospace;
+        tab-size: 4;
+      }
+      pre code {
+        padding: 0;
+        background: none;
+        font: inherit;
+      }
+      pre[data-lang]::before {
+        content: attr(data-lang);
+        position: absolute;
+        top: 2px;
+        right: 8px;
+        color: var(--dim);
+        font:
+          11px system-ui,
+          sans-serif;
+      }
+      pre.src {
+        margin: 0;
+        padding: 14px 18px;
+        border-radius: 0;
+        background: none;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      table {
+        display: block;
+        max-width: 100%;
+        overflow: auto;
+        border-collapse: collapse;
+      }
+      th,
+      td {
+        padding: 5px 12px;
+        border: 1px solid var(--line);
+      }
+      th {
+        background: var(--soft);
+      }
+      .r {
+        text-align: right;
+      }
+      .c {
+        text-align: center;
+      }
+      hr {
+        height: 1px;
+        margin: 1.4em 0;
+        border: 0;
+        background: var(--line);
+      }
+      .link {
+        color: var(--link);
+        text-decoration: underline;
+        text-underline-offset: 2px;
+        cursor: default;
+      }
+      .link.here {
+        cursor: pointer;
+      }
+      .img {
+        color: var(--dim);
+        font-style: italic;
+      }
+      img {
+        max-width: 100%;
+      }
+      mark {
+        color: inherit;
+        background: var(--hit);
+        border-radius: 2px;
+      }
+      mark.cur {
+        background: var(--cur);
+      }
+      .msg {
+        padding: 24px;
+        color: var(--dim);
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="bar">
+      <div class="seg" role="group" aria-label="View">
+        <button id="m-doc" aria-pressed="true">Rendered</button>
+        <button id="m-src" aria-pressed="false">Source</button>
+      </div>
+      <input id="q" type="search" placeholder="Search (Ctrl+F)" aria-label="Search" />
+      <button id="prev" title="Previous match (Shift+Enter)" aria-label="Previous match">↑</button>
+      <button id="next" title="Next match (Enter)" aria-label="Next match">↓</button>
+      <span id="count" class="count" role="status"></span>
+    </div>
+    <div id="top"></div>
+    <div id="view" tabindex="0"><p class="msg">Waiting…</p></div>
+    <script src="markdown.js"></script>
+    <script>
+      // A file's text is untrusted. Nothing from it is ever turned into markup: the tree from
+      // markdown.js is drawn with createElement and textContent, and a link is only shown.
+      const LIMIT = 1024 * 1024;
+      const MAX_HITS = 2000;
+      const $ = (id) => document.getElementById(id);
+      const view = $("view");
+      const query = $("q");
+
+      let source = "";
+      let tree = null;
+      let mode = "doc";
+      let hits = [];
+      let current = -1;
+      let needle = "";
+      let shown = "";
+      let note = "";
+
+      // The page talks to Folio with messages; see docs/PLUGINS.md.
+      let nextId = 1;
+      const pending = new Map();
+      function call(method, params) {
+        return new Promise((resolve, reject) => {
+          const id = nextId++;
+          pending.set(id, { resolve, reject });
+          parent.postMessage({ folio: 1, id, method, params }, "*");
+        });
+      }
+      window.addEventListener("message", (e) => {
+        const m = e.data;
+        if (!m || m.folio !== 1) return;
+        if (m.id !== undefined) {
+          const waiting = pending.get(m.id);
+          pending.delete(m.id);
+          if (m.error !== undefined) waiting?.reject(new Error(m.error));
+          else waiting?.resolve(m.result);
+        } else if (m.event === "preview" && m.preview === "md") {
+          open(m.path);
+        }
+      });
+
+      const el = (tag, cls, txt) => {
+        const e = document.createElement(tag);
+        if (cls) e.className = cls;
+        if (txt !== undefined) e.textContent = txt;
+        return e;
+      };
+      const fmt = (n) =>
+        n < 1048576 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1048576).toFixed(1)} MB`;
+
+      async function open(path) {
+        try {
+          const r = await call("readRange", { path, offset: 0, length: LIMIT });
+          source = r.text.charCodeAt(0) === 0xfeff ? r.text.slice(1) : r.text;
+          note = r.end < r.size ? `Showing the first ${fmt(r.end)} of ${fmt(r.size)}` : "";
+          tree = Markdown.parse(source);
+          render();
+        } catch (e) {
+          view.replaceChildren(el("p", "msg", e.message));
+        }
+      }
+
+      // ---- Drawing the tree ----
+
+      let slugs = new Map();
+      function slug(text) {
+        const base =
+          text
+            .toLowerCase()
+            .replace(/[^\p{L}\p{N}\s-]/gu, "")
+            .trim()
+            .replace(/\s+/g, "-") || "section";
+        const n = slugs.get(base) ?? 0;
+        slugs.set(base, n + 1);
+        return n ? `${base}-${n}` : base;
+      }
+
+      const SAFE_IMAGE = /^data:image\/(?:png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=]+$/;
+
+      function inlineTo(parent, nodes) {
+        for (const n of nodes) {
+          switch (n.t) {
+            case "text":
+              parent.append(n.v);
+              break;
+            case "code":
+              parent.append(el("code", null, n.v));
+              break;
+            case "em":
+            case "strong": {
+              const e = el(n.t === "em" ? "em" : "strong");
+              inlineTo(e, n.kids);
+              parent.append(e);
+              break;
+            }
+            case "del": {
+              const e = el("del");
+              inlineTo(e, n.kids);
+              parent.append(e);
+              break;
+            }
+            case "br":
+              parent.append(el("br"));
+              break;
+            case "link": {
+              // Never an <a>: this page can't open an address, so the address is only shown.
+              const e = el("span", "link");
+              e.title = n.title ? `${n.title} (${n.href})` : n.href;
+              inlineTo(e, n.kids);
+              if (n.href.startsWith("#")) {
+                e.classList.add("here");
+                e.onclick = () => {
+                  let id = n.href.slice(1);
+                  try {
+                    id = decodeURIComponent(id);
+                  } catch {
+                    // keep it as written
+                  }
+                  for (const h of view.querySelectorAll("[id]")) {
+                    if (h.id === id.toLowerCase()) h.scrollIntoView({ block: "start" });
+                  }
+                };
+              }
+              parent.append(e);
+              break;
+            }
+            case "img": {
+              if (SAFE_IMAGE.test(n.src)) {
+                const img = el("img");
+                img.src = n.src;
+                img.alt = n.alt;
+                parent.append(img);
+              } else {
+                // An image elsewhere can't be loaded from here.
+                parent.append(el("span", "img", `🖼 ${n.alt || n.src}`));
+              }
+              break;
+            }
+          }
+        }
+      }
+
+      const inlineOf = (text) => Markdown.inline(text, tree.defs, 0, false);
+
+      function blockTo(parent, b, tight) {
+        switch (b.t) {
+          case "h": {
+            const nodes = inlineOf(b.text);
+            const h = el(`h${b.level}`);
+            h.id = slug(Markdown.plain(nodes));
+            inlineTo(h, nodes);
+            parent.append(h);
+            break;
+          }
+          case "p": {
+            if (tight) {
+              inlineTo(parent, inlineOf(b.text));
+            } else {
+              const p = el("p");
+              inlineTo(p, inlineOf(b.text));
+              parent.append(p);
+            }
+            break;
+          }
+          case "code": {
+            const pre = el("pre");
+            if (b.lang) pre.dataset.lang = b.lang;
+            pre.append(el("code", null, b.text));
+            parent.append(pre);
+            break;
+          }
+          case "quote": {
+            const q = el("blockquote");
+            for (const k of b.kids) blockTo(q, k, false);
+            parent.append(q);
+            break;
+          }
+          case "hr":
+            parent.append(el("hr"));
+            break;
+          case "list": {
+            const list = el(b.ordered ? "ol" : "ul", b.tight ? "tight" : "");
+            if (b.ordered && b.start !== 1) list.start = b.start;
+            for (const item of b.items) {
+              const li = el("li", item.task === null ? "" : "task");
+              if (item.task !== null) li.append(el("span", "cb", item.task ? "☑" : "☐"));
+              item.kids.forEach((k) => blockTo(li, k, b.tight && k.t === "p"));
+              list.append(li);
+            }
+            parent.append(list);
+            break;
+          }
+          case "table": {
+            const table = el("table");
+            const cell = (tag, text, i) => {
+              const c = el(tag, b.align[i] === "right" ? "r" : b.align[i] === "center" ? "c" : "");
+              inlineTo(c, inlineOf(text));
+              return c;
+            };
+            const head = el("tr");
+            b.head.forEach((t, i) => head.append(cell("th", t, i)));
+            const thead = el("thead");
+            thead.append(head);
+            table.append(thead);
+            const body = el("tbody");
+            for (const row of b.rows) {
+              const tr = el("tr");
+              row.forEach((t, i) => tr.append(cell("td", t, i)));
+              body.append(tr);
+            }
+            table.append(body);
+            parent.append(table);
+            break;
+          }
+        }
+      }
+
+      // ---- Search ----
+
+      /** Marks every match inside `root`'s text; the marks are returned in order. */
+      function markText(root) {
+        const marks = [];
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        const nodes = [];
+        while (walker.nextNode()) nodes.push(walker.currentNode);
+        for (const node of nodes) {
+          if (marks.length >= MAX_HITS) break;
+          const text = node.nodeValue;
+          const hay = text.toLowerCase();
+          let from = 0;
+          let at = hay.indexOf(needle, from);
+          if (at === -1) continue;
+          const frag = document.createDocumentFragment();
+          while (at !== -1 && marks.length < MAX_HITS) {
+            if (at > from) frag.append(text.slice(from, at));
+            const m = el("mark", null, text.slice(at, at + needle.length));
+            frag.append(m);
+            marks.push(m);
+            from = at + needle.length;
+            at = hay.indexOf(needle, from);
+          }
+          frag.append(text.slice(from));
+          node.replaceWith(frag);
+        }
+        return marks;
+      }
+
+      function render() {
+        needle = query.value.toLowerCase();
+        shown = query.value;
+        const top = $("top");
+        top.replaceChildren();
+        let container;
+        if (mode === "doc") {
+          slugs = new Map();
+          container = el("article");
+          container.id = "doc";
+          for (const b of tree.blocks) blockTo(container, b, false);
+          if (!tree.blocks.length) container.append(el("p", "msg", "This file is empty."));
+        } else {
+          container = el("pre", "src", source);
+        }
+        hits = needle ? markText(container) : [];
+        current = -1;
+        view.replaceChildren(container);
+        view.scrollTop = 0;
+        if (hits.length) go(0);
+        else status();
+      }
+
+      function status() {
+        let t = "";
+        if (needle) {
+          const more = hits.length >= MAX_HITS ? "+" : "";
+          t = hits.length ? `${current + 1} of ${hits.length}${more}` : "No matches";
+        }
+        $("count").textContent = [t, note].filter(Boolean).join(" · ");
+      }
+
+      function go(index) {
+        if (!hits.length) return;
+        hits[current]?.classList.remove("cur");
+        current = (index + hits.length) % hits.length;
+        hits[current].classList.add("cur");
+        hits[current].scrollIntoView({ block: "center", inline: "nearest" });
+        status();
+      }
+
+      let timer = 0;
+      query.addEventListener("input", () => {
+        clearTimeout(timer);
+        timer = setTimeout(render, 150);
+      });
+      query.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          clearTimeout(timer);
+          if (hits.length && query.value === shown) go(current + (e.shiftKey ? -1 : 1));
+          else if (query.value !== shown) render();
+        } else if (e.key === "Escape" && query.value) {
+          e.preventDefault();
+          e.stopPropagation();
+          query.value = "";
+          render();
+        }
+      });
+      $("next").onclick = () => go(current + 1);
+      $("prev").onclick = () => go(current - 1);
+      for (const [id, m] of [
+        ["m-doc", "doc"],
+        ["m-src", "src"],
+      ]) {
+        $(id).onclick = () => {
+          if (!tree) return;
+          mode = m;
+          $("m-doc").setAttribute("aria-pressed", String(m === "doc"));
+          $("m-src").setAttribute("aria-pressed", String(m === "src"));
+          render();
+        };
+      }
+      document.addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+          e.preventDefault();
+          query.focus();
+          query.select();
+        }
+      });
+
+      parent.postMessage({ folio: 1, event: "ready" }, "*");
+    </script>
+  </body>
+</html>

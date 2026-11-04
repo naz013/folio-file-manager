@@ -525,6 +525,16 @@ test("every plugin shipped with the app is valid, answers its own events and ask
     for (const p of r.manifest.previews) {
       assert.ok(page.includes(`m.preview === "${p.id}"`), `${id} answers preview ${p.id}`);
     }
+    // The same for every script beside the page.
+    for (const f of readdirSync(dir).filter((n) => n.endsWith(".js"))) {
+      const js = readFileSync(new URL(f, dir), "utf8");
+      assert.ok(
+        !/\.innerHTML\s*=|\.outerHTML\s*=|insertAdjacentHTML|document\.write|\beval\(|new Function\(/.test(
+          js,
+        ),
+        `${id}/${f} builds markup or runs text`,
+      );
+    }
     // File contents are shown as text, never as markup.
     assert.ok(
       !/\.innerHTML\s*=|insertAdjacentHTML|document\.write/.test(page),
