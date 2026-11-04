@@ -1238,7 +1238,7 @@ pub fn scan_start(app: tauri::AppHandle, root: String, fast: Option<bool>) -> Cm
 /// The plugins found in the plugins folder, each with its manifest as written.
 #[tauri::command]
 pub fn plugins_list(dir: tauri::State<'_, PluginsDir>) -> Vec<plugins::Found> {
-    dir.path.as_deref().map(plugins::list).unwrap_or_default()
+    dir.list_all()
 }
 
 /// Approves a plugin for serving: only its files as they are now, and only if they are the code with

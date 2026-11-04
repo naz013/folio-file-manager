@@ -78,6 +78,7 @@
             <h3>
               <span class="name">{m?.name ?? p.id}</span>
               {#if m}<span class="version">v{m.version}</span>{/if}
+              {#if p.bundled}<span class="chip">Built in</span>{/if}
             </h3>
             {#if m?.description}<p class="desc">{m.description}</p>{/if}
           </div>

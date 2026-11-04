@@ -286,6 +286,8 @@ export interface Loaded {
   error: string | null;
   /** Hash of the plugin's files as they are now; null when they couldn't be read. */
   digest: string | null;
+  /** Shipped with Folio rather than put in the plugins folder. */
+  bundled: boolean;
   enabled: boolean;
   /** Approved before, but its version or permissions have changed since. */
   changed: boolean;
@@ -297,6 +299,7 @@ export interface Found {
   manifest: string | null;
   error: string | null;
   digest: string | null;
+  bundled: boolean;
 }
 
 /** Turns what is on disk and what was granted into the page's list. */
@@ -308,6 +311,7 @@ export function load(found: Found[], grants: Record<string, Grant>): Loaded[] {
         manifest: null,
         error: f.error ?? "No manifest",
         digest: null,
+        bundled: f.bundled,
         enabled: false,
         changed: false,
       };
@@ -319,6 +323,7 @@ export function load(found: Found[], grants: Record<string, Grant>): Loaded[] {
         manifest: null,
         error: parsed.error,
         digest: null,
+        bundled: f.bundled,
         enabled: false,
         changed: false,
       };
@@ -330,6 +335,7 @@ export function load(found: Found[], grants: Record<string, Grant>): Loaded[] {
       manifest: parsed.manifest,
       error: null,
       digest: f.digest,
+      bundled: f.bundled,
       enabled,
       changed: !!grant && !enabled,
     };

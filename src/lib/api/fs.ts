@@ -109,6 +109,7 @@ export interface PluginFound {
   manifest: string | null;
   error: string | null;
   digest: string | null;
+  bundled: boolean;
 }
 export const pluginsList = () => invoke<PluginFound[]>("plugins_list");
 /** Lets a plugin be served: its files as they are must be the code with `digest` (what was approved). */

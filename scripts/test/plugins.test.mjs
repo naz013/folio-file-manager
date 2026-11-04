@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import vm from "node:vm";
 import {
@@ -497,4 +497,34 @@ test("the frame pins the plugin to what was approved before it loads anything", 
   const pin = frame.indexOf("pluginsPin(plugin.id, plugin.digest)");
   const load = frame.indexOf("fetch(url");
   assert.ok(pin > 0 && load > pin, "pinned first, then fetched");
+});
+
+test("every plugin shipped with the app is valid, answers its own events and asks for little", () => {
+  const root = new URL("../../src-tauri/resources/plugins/", import.meta.url);
+  const ids = readdirSync(root, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name);
+  assert.ok(ids.includes("text-viewer"));
+  for (const id of ids) {
+    const dir = new URL(`${id}/`, root);
+    const r = parseManifest(id, readFileSync(new URL("plugin.json", dir), "utf8"));
+    assert.ok(r.ok, `${id}: ${r.error}`);
+    // Nothing built in may change anything or run on a click it wasn't given.
+    assert.deepEqual(
+      r.manifest.permissions.filter((p) => p !== "read" && p !== "selection" && p !== "notify"),
+      [],
+      id,
+    );
+    const page = readFileSync(new URL(r.manifest.entry, dir), "utf8");
+    assert.match(page, /event: "ready"/, id);
+    for (const p of r.manifest.previews) {
+      assert.ok(page.includes(`m.preview === "${p.id}"`), `${id} answers preview ${p.id}`);
+    }
+    // File contents are shown as text, never as markup.
+    assert.ok(
+      !/\.innerHTML\s*=|insertAdjacentHTML|document\.write/.test(page),
+      `${id} uses markup`,
+    );
+    assert.ok(!/https?:\/\//.test(page), `${id} names an address`);
+  }
 });

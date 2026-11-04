@@ -39,7 +39,8 @@
     "active": true,
     "targets": "all",
     "resources": {
-      "resources/THIRD-PARTY-LICENSES.txt": "THIRD-PARTY-LICENSES.txt"
+      "resources/THIRD-PARTY-LICENSES.txt": "THIRD-PARTY-LICENSES.txt",
+      "resources/plugins/": "plugins/"
     },
     "icon": [
       "icons/32x32.png",

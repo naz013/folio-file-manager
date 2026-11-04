@@ -20,6 +20,18 @@ folder is read (at start and on **Reload**); a plugin edited in place needs appr
 Turning it off, or removing its folder, forgets the approval. A `name` can't start like Folio or
 a part of Windows, and its messages are shown as `Name (plugin): …`.
 
+## Plugins that come with Folio
+
+Some plugins ship inside the app (source in `src-tauri/resources/plugins/`, shown on the Plugins
+screen as **Built in**). They are plugins like any other: they run in the same sandbox, are off until
+you turn them on and read what they can do, and are checked file by file when served. A plugin of
+the same id in your plugins folder replaces the built-in one, and has to be approved on its own
+files.
+
+| Plugin      | What it does                                                                |
+| ----------- | --------------------------------------------------------------------------- |
+| Text viewer | Quick Look for text and code files: line numbers, wrapping, search (Ctrl+F) |
+
 ## The manifest
 
 `plugin.json` in the plugin folder:

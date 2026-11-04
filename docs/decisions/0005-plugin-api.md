@@ -71,6 +71,10 @@ its frame to a plugin address either. Never add a plugin address to that policy,
   `--force-webrtc-ip-handling-policy=disable_non_proxied_udp`.
 - **Previews are limited**: at most 20 file types in all, and none that hold secrets (key stores,
   certificates, `.env`), since a preview reads files without a click.
+- **Bundled plugins.** Plugins can ship in the app's resources (`plugins/` next to the executable).
+  They go through the same listing, approval, pinning and sandbox as the person's own; one of
+  the same id in the person's folder replaces it. Nothing built in is trusted or approved by
+  default, and what it may ask for is limited to what the API gives any plugin.
 - **Not closed**: a DNS lookup from a page may still leak a few bytes (see `docs/PLUGINS.md`).
 
 ## Consequences

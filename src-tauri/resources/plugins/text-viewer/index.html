@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Text viewer</title>
+    <style>
+      :root {
+        --line: color-mix(in srgb, CanvasText 14%, transparent);
+        --dim: color-mix(in srgb, CanvasText 50%, transparent);
+        --hit: color-mix(in srgb, gold 45%, transparent);
+        --cur: color-mix(in srgb, orange 75%, transparent);
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+        background: Canvas;
+        color: CanvasText;
+        font:
+          13px system-ui,
+          sans-serif;
+      }
+      .bar {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-bottom: 1px solid var(--line);
+      }
+      .bar input[type="search"] {
+        flex: 1;
+        min-width: 80px;
+        max-width: 320px;
+        padding: 4px 8px;
+        font: inherit;
+        color: inherit;
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+      }
+      button {
+        padding: 3px 8px;
+        font: inherit;
+        color: inherit;
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      button[aria-pressed="true"] {
+        background: var(--hit);
+      }
+      .count,
+      .note {
+        color: var(--dim);
+        white-space: nowrap;
+      }
+      .spacer {
+        flex: 1;
+      }
+      #view {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        padding: 6px 0;
+        font:
+          12.5px/1.55 ui-monospace,
+          "Cascadia Mono",
+          Consolas,
+          monospace;
+        tab-size: 4;
+      }
+      .row {
+        display: flex;
+        min-height: 1.55em;
+      }
+      .n {
+        flex: none;
+        box-sizing: content-box;
+        width: calc(var(--digits, 3) * 1ch);
+        padding: 0 10px 0 12px;
+        text-align: right;
+        color: var(--dim);
+        user-select: none;
+      }
+      .t {
+        flex: 1;
+        padding-right: 12px;
+        white-space: pre;
+      }
+      .wrap .t {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .nonumbers .n {
+        display: none;
+      }
+      .nonumbers .t {
+        padding-left: 12px;
+      }
+      mark {
+        color: inherit;
+        background: var(--hit);
+        border-radius: 2px;
+      }
+      mark.cur {
+        background: var(--cur);
+      }
+      .msg {
+        padding: 24px;
+        color: var(--dim);
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="bar">
+      <input id="q" type="search" placeholder="Search (Ctrl+F)" aria-label="Search" />
+      <button id="case" aria-pressed="false" title="Match case">Aa</button>
+      <button id="prev" title="Previous match (Shift+Enter)" aria-label="Previous match">↑</button>
+      <button id="next" title="Next match (Enter)" aria-label="Next match">↓</button>
+      <span id="count" class="count" role="status"></span>
+      <span class="spacer"></span>
+      <button id="wrap" aria-pressed="false" title="Wrap long lines">Wrap</button>
+      <button id="nums" aria-pressed="true" title="Line numbers">Lines</button>
+    </div>
+    <div id="view" tabindex="0"><p class="msg">Waiting…</p></div>
+    <script>
+      // A file's text is untrusted: it is only ever put on the page with textContent.
+      const MAX_HITS = 5000;
+      const $ = (id) => document.getElementById(id);
+      const view = $("view");
+      const query = $("q");
+      let lines = [];
+      let marks = [];
+      let current = -1;
+      let note = "";
+      /** The search the page shows now, so Enter knows whether to move on or to search. */
+      let shown = "";
+
+      // The page talks to Folio with messages; see docs/PLUGINS.md.
+      let nextId = 1;
+      const pending = new Map();
+      function call(method, params) {
+        return new Promise((resolve, reject) => {
+          const id = nextId++;
+          pending.set(id, { resolve, reject });
+          parent.postMessage({ folio: 1, id, method, params }, "*");
+        });
+      }
+      window.addEventListener("message", (e) => {
+        const m = e.data;
+        if (!m || m.folio !== 1) return;
+        if (m.id !== undefined) {
+          const waiting = pending.get(m.id);
+          pending.delete(m.id);
+          if (m.error !== undefined) waiting?.reject(new Error(m.error));
+          else waiting?.resolve(m.result);
+        } else if (m.event === "preview" && m.preview === "text") {
+          open(m.path);
+        }
+      });
+
+      function message(text) {
+        const p = document.createElement("p");
+        p.className = "msg";
+        p.textContent = text;
+        view.replaceChildren(p);
+      }
+
+      async function open(path) {
+        try {
+          const { text, truncated } = await call("read", { path });
+          lines = text.split(/\r\n|\n|\r/);
+          note = truncated ? "Showing the start of a larger file" : "";
+          render();
+        } catch (e) {
+          message(e.message);
+        }
+      }
+
+      function render() {
+        const q = query.value;
+        const matchCase = $("case").getAttribute("aria-pressed") === "true";
+        const needle = matchCase ? q : q.toLowerCase();
+        shown = `${matchCase}|${q}`;
+        marks = [];
+        current = -1;
+        view.style.setProperty("--digits", String(String(lines.length).length));
+        const frag = document.createDocumentFragment();
+        for (let i = 0; i < lines.length; i++) {
+          const row = document.createElement("div");
+          row.className = "row";
+          const n = document.createElement("span");
+          n.className = "n";
+          n.textContent = String(i + 1);
+          const t = document.createElement("span");
+          t.className = "t";
+          const line = lines[i];
+          if (needle && marks.length < MAX_HITS) {
+            const hay = matchCase ? line : line.toLowerCase();
+            let from = 0;
+            let at;
+            while (marks.length < MAX_HITS && (at = hay.indexOf(needle, from)) !== -1) {
+              if (at > from) t.append(line.slice(from, at));
+              const mark = document.createElement("mark");
+              mark.textContent = line.slice(at, at + q.length);
+              t.append(mark);
+              marks.push(mark);
+              from = at + q.length;
+            }
+            t.append(line.slice(from));
+          } else {
+            t.textContent = line;
+          }
+          row.append(n, t);
+          frag.append(row);
+        }
+        view.replaceChildren(frag);
+        if (marks.length) go(0);
+        else status();
+      }
+
+      function status() {
+        const q = query.value;
+        let text = "";
+        if (q) {
+          const more = marks.length >= MAX_HITS ? "+" : "";
+          text = marks.length ? `${current + 1} of ${marks.length}${more}` : "No matches";
+        }
+        $("count").textContent = [text, note].filter(Boolean).join(" · ");
+      }
+
+      function go(index) {
+        if (!marks.length) return;
+        marks[current]?.classList.remove("cur");
+        current = (index + marks.length) % marks.length;
+        marks[current].classList.add("cur");
+        marks[current].scrollIntoView({ block: "center", inline: "nearest" });
+        status();
+      }
+
+      let timer = 0;
+      query.addEventListener("input", () => {
+        clearTimeout(timer);
+        timer = setTimeout(render, 120);
+      });
+      query.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          clearTimeout(timer);
+          const key = `${$("case").getAttribute("aria-pressed") === "true"}|${query.value}`;
+          if (marks.length && key === shown) go(current + (e.shiftKey ? -1 : 1));
+          else if (key !== shown) render();
+        } else if (e.key === "Escape" && query.value) {
+          e.preventDefault();
+          e.stopPropagation();
+          query.value = "";
+          render();
+        }
+      });
+      $("next").onclick = () => go(current + 1);
+      $("prev").onclick = () => go(current - 1);
+      $("case").onclick = (e) => {
+        const on = e.currentTarget.getAttribute("aria-pressed") !== "true";
+        e.currentTarget.setAttribute("aria-pressed", String(on));
+        render();
+      };
+      $("wrap").onclick = (e) => {
+        const on = e.currentTarget.getAttribute("aria-pressed") !== "true";
+        e.currentTarget.setAttribute("aria-pressed", String(on));
+        view.classList.toggle("wrap", on);
+      };
+      $("nums").onclick = (e) => {
+        const on = e.currentTarget.getAttribute("aria-pressed") !== "true";
+        e.currentTarget.setAttribute("aria-pressed", String(on));
+        view.classList.toggle("nonumbers", !on);
+      };
+      document.addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+          e.preventDefault();
+          query.focus();
+          query.select();
+        }
+      });
+
+      parent.postMessage({ folio: 1, event: "ready" }, "*");
+    </script>
+  </body>
+</html>

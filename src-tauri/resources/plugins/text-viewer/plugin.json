@@ -1,0 +1,36 @@
+{
+  "id": "text-viewer",
+  "name": "Text viewer",
+  "version": "1.0.0",
+  "description": "Quick Look for text and code files, with line numbers, wrapping and search.",
+  "api": 1,
+  "entry": "index.html",
+  "permissions": ["read"],
+  "previews": [
+    {
+      "id": "text",
+      "title": "Text viewer",
+      "extensions": [
+        "txt",
+        "log",
+        "ini",
+        "cfg",
+        "conf",
+        "yaml",
+        "yml",
+        "toml",
+        "xml",
+        "sh",
+        "bat",
+        "ps1",
+        "py",
+        "js",
+        "ts",
+        "rs",
+        "go",
+        "css",
+        "sql"
+      ]
+    }
+  ]
+}

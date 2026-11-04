@@ -220,6 +220,7 @@ pub fn run() {
             manage_stores(app);
             app.manage(plugins::PluginsDir::new(
                 app.path().app_data_dir().ok().map(|d| d.join("plugins")),
+                app.path().resource_dir().ok().map(|d| d.join("plugins")),
             ));
             // Always managed, so the commands never meet missing state; without an app
             // data folder the files simply fail to write.

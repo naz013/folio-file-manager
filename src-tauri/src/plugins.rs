@@ -34,31 +34,60 @@ const MAX_TOTAL: u64 = 64 << 20;
 /// What was approved for one plugin: the hash of each file it may serve, by relative path.
 type Pin = HashMap<String, String>;
 
-/// The folder plugins live in, and the files approved to be served; managed state. The path is
-/// `None` when the system has no app data folder.
+/// The folders plugins live in, and the files approved to be served; managed state. `path` is the
+/// person's plugins folder (`None` when the system has no app data folder); `bundled` holds the
+/// plugins shipped with the app. A plugin of the same id in the person's folder replaces the
+/// bundled one, which then has to be approved on its own files.
 pub struct PluginsDir {
     pub path: Option<PathBuf>,
+    bundled: Option<PathBuf>,
     /// A plugin serves nothing until the page pins it with the digest the person approved, and
     /// then only files whose bytes still hash to what the pin saw.
     pins: Mutex<HashMap<String, Pin>>,
 }
 
 impl PluginsDir {
-    pub fn new(path: Option<PathBuf>) -> Self {
+    pub fn new(path: Option<PathBuf>, bundled: Option<PathBuf>) -> Self {
         Self {
             path,
+            bundled,
             pins: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// The folder that holds plugin `id`: the person's, else the app's own. A link there counts
+    /// as holding it, so that it can't be walked around (see `plugin_home`).
+    fn root_of(&self, id: &str) -> Option<&Path> {
+        if !valid_id(id) {
+            return None;
+        }
+        [self.path.as_deref(), self.bundled.as_deref()]
+            .into_iter()
+            .flatten()
+            .find(|root| std::fs::symlink_metadata(root.join(id)).is_ok())
+    }
+
+    /// Every plugin to offer: the person's, and the bundled ones they haven't replaced.
+    pub fn list_all(&self) -> Vec<Found> {
+        let mut all = self.path.as_deref().map(list).unwrap_or_default();
+        if let Some(bundled) = self.bundled.as_deref() {
+            all.extend(list(bundled).into_iter().filter_map(|f| {
+                let replaced = self
+                    .path
+                    .as_deref()
+                    .is_some_and(|p| std::fs::symlink_metadata(p.join(&f.id)).is_ok());
+                (!replaced).then_some(Found { bundled: true, ..f })
+            }));
+        }
+        all.sort_by(|a, b| a.id.cmp(&b.id));
+        all
     }
 
     /// Approves plugin `id` as it is on disk now, if that is exactly the code with `digest` (what
     /// the person agreed to). The files are read once, and the hashes kept are the ones of the
     /// bytes that made the digest. A plugin that no longer matches is unpinned and serves nothing.
     pub fn pin(&self, id: &str, digest: &str) -> Result<(), String> {
-        let dir = self
-            .path
-            .as_deref()
-            .ok_or("There is no folder for plugins")?;
+        let dir = self.root_of(id).ok_or("There is no such plugin")?;
         let home = plugin_home(dir, id).ok_or("Not a plugin folder")?;
         let result = snapshot(&home);
         let Ok(mut pins) = self.pins.lock() else {
@@ -103,6 +132,8 @@ pub struct Found {
     /// A hash of the manifest and every file the plugin may serve, so an approval can be tied to
     /// the code that was approved and not only to its version.
     pub digest: Option<String>,
+    /// Shipped with the app (in its resources), not put in the plugins folder by the person.
+    pub bundled: bool,
 }
 
 /// An id is a short name of lower-case letters, digits and hyphens, not starting or ending in one.
@@ -136,6 +167,7 @@ pub fn list(dir: &Path) -> Vec<Found> {
                             .to_owned(),
                     ),
                     digest: None,
+                    bundled: false,
                 };
             }
             let read = read_manifest(&e.path().join(MANIFEST))
@@ -146,12 +178,14 @@ pub fn list(dir: &Path) -> Vec<Found> {
                     manifest: Some(text),
                     error: None,
                     digest: Some(digest),
+                    bundled: false,
                 },
                 Err(why) => Found {
                     id,
                     manifest: None,
                     error: Some(why),
                     digest: None,
+                    bundled: false,
                 },
             }
         })
@@ -290,14 +324,14 @@ fn status(code: StatusCode) -> Response<Vec<u8>> {
 
 /// Answers a `plugin://<id>/<file>` request.
 pub fn handle(plugins: &PluginsDir, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
-    let Some(dir) = plugins.path.as_deref() else {
-        return status(StatusCode::NOT_FOUND);
-    };
     let raw = request.uri().path().trim_start_matches('/');
     let Ok(path) = percent_encoding::percent_decode_str(raw).decode_utf8() else {
         return status(StatusCode::BAD_REQUEST);
     };
     let Some((id, rel)) = path.split_once('/') else {
+        return status(StatusCode::NOT_FOUND);
+    };
+    let Some(dir) = plugins.root_of(id) else {
         return status(StatusCode::NOT_FOUND);
     };
     let Some(file) = resolve(dir, id, rel) else {
@@ -357,7 +391,7 @@ mod tests {
         std::fs::write(demo.join("sub/app.js"), "1").unwrap();
         std::fs::write(demo.join("tool.exe"), "MZ").unwrap();
         std::fs::write(dir.path().join("secret.txt"), "nope").unwrap();
-        let plugins = PluginsDir::new(Some(dir.path().to_path_buf()));
+        let plugins = PluginsDir::new(Some(dir.path().to_path_buf()), None);
         // Approved as it is, the way the page does when it opens the plugin.
         plugins.pin("demo", &digest(&demo).unwrap()).unwrap();
         (dir, plugins)
@@ -519,7 +553,7 @@ mod tests {
         assert_eq!(code("/nope/index.html"), StatusCode::NOT_FOUND);
         assert_eq!(code("/demo/tool.exe"), StatusCode::FORBIDDEN);
         assert_eq!(code("/demo/%ff.html"), StatusCode::BAD_REQUEST);
-        let none = PluginsDir::new(None);
+        let none = PluginsDir::new(None, None);
         assert_eq!(
             handle(&none, &request("/demo/index.html")).status(),
             StatusCode::NOT_FOUND
@@ -530,7 +564,7 @@ mod tests {
     fn nothing_is_served_until_the_plugin_is_pinned_to_what_was_approved() {
         let (dir, plugins) = setup();
         let demo = dir.path().join("demo");
-        let fresh = PluginsDir::new(Some(dir.path().to_path_buf()));
+        let fresh = PluginsDir::new(Some(dir.path().to_path_buf()), None);
         let code = |p: &PluginsDir| handle(p, &request("/demo/index.html")).status();
         assert_eq!(code(&fresh), StatusCode::FORBIDDEN, "never pinned");
         // A pin for other code than what is on disk is refused, and serves nothing.
@@ -566,6 +600,63 @@ mod tests {
             StatusCode::FORBIDDEN
         );
         assert!(plugins.pin("../demo", &approved).is_err());
+    }
+
+    /// The app's own plugins: `text`, with a page, in a folder of their own.
+    fn bundle() -> tempfile::TempDir {
+        let b = tempfile::tempdir().unwrap();
+        std::fs::create_dir(b.path().join("text")).unwrap();
+        std::fs::write(b.path().join("text/plugin.json"), r#"{"id":"text"}"#).unwrap();
+        std::fs::write(b.path().join("text/index.html"), "<p>built in</p>").unwrap();
+        // The same id as the person's `demo`.
+        std::fs::create_dir(b.path().join("demo")).unwrap();
+        std::fs::write(b.path().join("demo/plugin.json"), r#"{"id":"demo"}"#).unwrap();
+        std::fs::write(b.path().join("demo/index.html"), "<p>bundled demo</p>").unwrap();
+        b
+    }
+
+    #[test]
+    fn bundled_plugins_are_listed_marked_and_served_like_any_other() {
+        let (dir, _) = setup();
+        let b = bundle();
+        let plugins = PluginsDir::new(Some(dir.path().to_path_buf()), Some(b.path().to_path_buf()));
+        let all = plugins.list_all();
+        let seen: Vec<(&str, bool)> = all.iter().map(|f| (f.id.as_str(), f.bundled)).collect();
+        // The person's `demo` replaces the bundled one of the same name.
+        assert_eq!(seen, [("demo", false), ("text", true)]);
+        let code = |p: &str| handle(&plugins, &request(p)).status();
+        assert_eq!(
+            code("/text/index.html"),
+            StatusCode::FORBIDDEN,
+            "not pinned yet"
+        );
+        let digest = all[1].digest.clone().unwrap();
+        plugins.pin("text", &digest).unwrap();
+        let answer = handle(&plugins, &request("/text/index.html"));
+        assert_eq!(answer.status(), StatusCode::OK);
+        assert_eq!(answer.body(), b"<p>built in</p>");
+        // Swapped after the approval, it is refused here too.
+        std::fs::write(b.path().join("text/index.html"), "<p>other</p>").unwrap();
+        assert_eq!(code("/text/index.html"), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn a_plugin_in_the_persons_folder_hides_the_bundled_one_of_its_name() {
+        let (dir, _) = setup();
+        let b = bundle();
+        let plugins = PluginsDir::new(Some(dir.path().to_path_buf()), Some(b.path().to_path_buf()));
+        // The bundled `demo`'s digest is not the one on disk in the person's folder.
+        let bundled_digest = digest(&b.path().join("demo")).unwrap();
+        assert!(plugins.pin("demo", &bundled_digest).is_err());
+        assert!(
+            plugins
+                .pin("demo", &digest(&dir.path().join("demo")).unwrap())
+                .is_ok()
+        );
+        assert_eq!(
+            handle(&plugins, &request("/demo/index.html")).body(),
+            b"<p>hi</p>"
+        );
     }
 
     #[test]
