@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Hex viewer</title>
+    <style>
+      :root {
+        --line: color-mix(in srgb, CanvasText 14%, transparent);
+        --dim: color-mix(in srgb, CanvasText 45%, transparent);
+        --soft: color-mix(in srgb, CanvasText 6%, transparent);
+        --hit: color-mix(in srgb, gold 55%, transparent);
+        --sel: color-mix(in srgb, CanvasText 22%, transparent);
+        --off: light-dark(#0b5cad, #7cb7ff);
+        --high: light-dark(#7c3aed, #c4a1ff);
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+        background: Canvas;
+        color: CanvasText;
+        font:
+          13px system-ui,
+          sans-serif;
+      }
+      .bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-bottom: 1px solid var(--line);
+      }
+      input,
+      select {
+        padding: 4px 8px;
+        font: inherit;
+        color: inherit;
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+      }
+      select option {
+        color: CanvasText;
+        background: Canvas;
+      }
+      #goto {
+        width: 120px;
+      }
+      #q {
+        flex: 1;
+        min-width: 120px;
+        max-width: 280px;
+      }
+      button {
+        padding: 3px 8px;
+        font: inherit;
+        color: inherit;
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+      .count {
+        color: var(--dim);
+        white-space: nowrap;
+      }
+      .spacer {
+        flex: 1;
+      }
+      .mono,
+      #grid {
+        font:
+          12.5px/20px ui-monospace,
+          "Cascadia Mono",
+          Consolas,
+          monospace;
+      }
+      .cols {
+        display: flex;
+        padding: 0 12px;
+        color: var(--dim);
+        border-bottom: 1px solid var(--line);
+        white-space: pre;
+        overflow: hidden;
+      }
+      #grid {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        position: relative;
+        outline: none;
+      }
+      #space {
+        position: relative;
+        width: 1px;
+      }
+      #win {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 0;
+        padding: 0 12px;
+        width: max-content;
+        min-width: calc(100% - 24px);
+      }
+      .row {
+        display: flex;
+        height: 20px;
+        white-space: pre;
+      }
+      .off {
+        color: var(--off);
+        margin-right: 1ch;
+      }
+      .hexes {
+        display: flex;
+      }
+      .b {
+        display: inline-block;
+        width: 2ch;
+        margin-right: 1ch;
+        text-align: center;
+        cursor: default;
+      }
+      .b.gap {
+        margin-right: 2ch;
+      }
+      .b.zero {
+        color: var(--dim);
+      }
+      .b.hi {
+        color: var(--high);
+      }
+      .b.none {
+        color: var(--dim);
+      }
+      .asc {
+        margin-left: 1ch;
+        display: flex;
+      }
+      .a {
+        display: inline-block;
+        width: 1ch;
+        cursor: default;
+      }
+      .sel {
+        background: var(--sel);
+        border-radius: 2px;
+      }
+      .hit {
+        background: var(--hit);
+        border-radius: 2px;
+      }
+      .info {
+        padding: 5px 12px;
+        border-top: 1px solid var(--line);
+        color: var(--dim);
+        min-height: 20px;
+        white-space: pre-wrap;
+      }
+      .msg {
+        padding: 24px;
+        color: var(--dim);
+        text-align: center;
+        font:
+          13px system-ui,
+          sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="bar">
+      <input id="goto" placeholder="Go to 0x…" aria-label="Go to offset" />
+      <select id="mode" aria-label="Search for">
+        <option value="hex">Hex</option>
+        <option value="text">Text</option>
+      </select>
+      <input id="q" type="search" placeholder="Find bytes (de ad be ef)" aria-label="Find" />
+      <button id="prev" title="Find previous (Shift+Enter)" aria-label="Find previous">↑</button>
+      <button id="next" title="Find next (Enter)" aria-label="Find next">↓</button>
+      <button id="stop" hidden>Stop</button>
+      <span id="count" class="count" role="status"></span>
+      <span class="spacer"></span>
+    </div>
+    <div class="cols mono" id="cols"></div>
+    <div id="grid" tabindex="0">
+      <div id="space"></div>
+      <div id="win"></div>
+    </div>
+    <div class="info mono" id="info" role="status"></div>
+    <script src="hex.js"></script>
+    <script>
+      // A file's bytes are untrusted: they are only ever put on the page with textContent.
+      const PER_ROW = 16;
+      const ROW_H = 20;
+      /** How tall the scroll area is allowed to be; a bigger file maps onto it. */
+      const MAX_PX = 8_000_000;
+      const PAGE = 64 * 1024;
+      const MAX_PAGES = 128;
+      /** How much a search reads at a time: the most the core gives. */
+      const CHUNK = 1024 * 1024;
+      const $ = (id) => document.getElementById(id);
+      const grid = $("grid");
+
+      let path = "";
+      let size = 0;
+      let map = Hex.rows(0, PER_ROW, ROW_H, MAX_PX);
+      /**
+       * The row a jump put at the top. On a huge file a pixel of scrolling is hundreds of rows,
+       * so a jump can't be said exactly by the scroll position; the view keeps this row until the
+       * scroll bar is moved.
+       */
+      let pinned = null;
+      const firstRow = () =>
+        pinned && Math.abs(grid.scrollTop - pinned.top) < 2
+          ? pinned.row
+          : map.rowAt(grid.scrollTop);
+      let digits = 8;
+      /** Pages of the file read so far, newest last: page number -> bytes. */
+      const pages = new Map();
+      const asked = new Set();
+      const failed = new Set();
+      let sel = null;
+      let hit = null;
+      let searching = false;
+      let cancel = false;
+
+      // The page talks to Folio with messages; see docs/PLUGINS.md.
+      let nextId = 1;
+      const pending = new Map();
+      function call(method, params) {
+        return new Promise((resolve, reject) => {
+          const id = nextId++;
+          pending.set(id, { resolve, reject });
+          parent.postMessage({ folio: 1, id, method, params }, "*");
+        });
+      }
+      window.addEventListener("message", (e) => {
+        const m = e.data;
+        if (!m || m.folio !== 1) return;
+        if (m.id !== undefined) {
+          const waiting = pending.get(m.id);
+          pending.delete(m.id);
+          if (m.error !== undefined) waiting?.reject(new Error(m.error));
+          else waiting?.resolve(m.result);
+        } else if (m.event === "preview" && m.preview === "hex") {
+          path = m.path;
+          open();
+        }
+      });
+
+      const el = (tag, cls, txt) => {
+        const e = document.createElement(tag);
+        if (cls) e.className = cls;
+        if (txt !== undefined) e.textContent = txt;
+        return e;
+      };
+      const fmtSize = (n) =>
+        n < 1024
+          ? `${n} bytes`
+          : n < 1048576
+            ? `${(n / 1024).toFixed(1)} KB`
+            : n < 1073741824
+              ? `${(n / 1048576).toFixed(1)} MB`
+              : `${(n / 1073741824).toFixed(2)} GB`;
+      const readBytes = (offset, length) => call("readBytes", { path, offset, length });
+
+      async function open() {
+        try {
+          const r = await readBytes(0, PAGE);
+          size = r.size;
+          pages.clear();
+          failed.clear();
+          pages.set(0, r.data);
+          map = Hex.rows(size, PER_ROW, ROW_H, MAX_PX, grid.clientHeight);
+          pinned = null;
+          digits = Hex.digits(size);
+          $("space").style.height = `${map.height}px`;
+          drawColumns();
+          grid.scrollTop = 0;
+          status();
+          draw();
+        } catch (e) {
+          grid.replaceChildren(el("p", "msg", e.message));
+        }
+      }
+
+      function drawColumns() {
+        const cols = $("cols");
+        let s = " ".repeat(digits + 1);
+        for (let i = 0; i < PER_ROW; i++) s += Hex.hex2(i).toUpperCase() + (i === 7 ? "  " : " ");
+        cols.textContent = `${s} ASCII`;
+      }
+
+      // ---- The bytes on hand ----
+
+      function byteAt(i) {
+        const page = pages.get(Math.floor(i / PAGE));
+        return page ? page[i - Math.floor(i / PAGE) * PAGE] : undefined;
+      }
+
+      /** Reads the pages of the bytes in view that aren't on hand, one at a time. */
+      let fetching = false;
+      async function fill() {
+        if (fetching) return;
+        const first = firstRow() * PER_ROW;
+        const last = Math.min(size - 1, first + visibleRows() * PER_ROW);
+        const want = [];
+        for (let p = Math.floor(first / PAGE); p <= Math.floor(last / PAGE); p++) {
+          if (!pages.has(p) && !asked.has(p) && !failed.has(p)) want.push(p);
+        }
+        if (!want.length) return;
+        fetching = true;
+        try {
+          for (const p of want) {
+            asked.add(p);
+            const r = await readBytes(p * PAGE, PAGE);
+            pages.set(p, r.data);
+            // Keep the pages in view and the newest; let the oldest go.
+            while (pages.size > MAX_PAGES) pages.delete(pages.keys().next().value);
+            asked.delete(p);
+            draw();
+          }
+        } catch (e) {
+          for (const p of want) asked.delete(p);
+          // Reads are limited in number: try again in a moment. Any other failure is final.
+          if (/Too many/.test(e.message)) setTimeout(fill, 1500);
+          else for (const p of want) failed.add(p);
+        } finally {
+          fetching = false;
+        }
+        // The view may have moved while this was read.
+        setTimeout(fill, 0);
+      }
+
+      const visibleRows = () => Math.ceil(grid.clientHeight / ROW_H) + 2;
+
+      // ---- Drawing ----
+
+      function draw() {
+        const win = $("win");
+        if (!size) {
+          win.replaceChildren(el("p", "msg", "This file is empty."));
+          return;
+        }
+        const top = firstRow();
+        const rows = Math.min(visibleRows(), map.count - top);
+        win.style.top = `${grid.scrollTop}px`;
+        const frag = document.createDocumentFragment();
+        for (let r = 0; r < rows; r++) {
+          const at = (top + r) * PER_ROW;
+          const row = el("div", "row");
+          row.append(el("span", "off", Hex.pad(at, digits)));
+          const hexes = el("div", "hexes");
+          const asc = el("div", "asc");
+          for (let k = 0; k < PER_ROW; k++) {
+            const i = at + k;
+            const past = i >= size;
+            const b = past ? undefined : byteAt(i);
+            const h = el("span", `b${k === 7 ? " gap" : ""}`);
+            const a = el("span", "a");
+            if (past) {
+              h.textContent = "  ";
+            } else if (b === undefined) {
+              h.textContent = "··";
+              h.classList.add("none");
+              a.textContent = "·";
+              a.classList.add("none");
+            } else {
+              h.textContent = Hex.hex2(b);
+              a.textContent = Hex.printable(b);
+              if (b === 0) h.classList.add("zero");
+              else if (b >= 0x80) h.classList.add("hi");
+              if (b === 0) a.classList.add("zero");
+            }
+            if (!past) {
+              if (hit && i >= hit.start && i < hit.start + hit.length) {
+                h.classList.add("hit");
+                a.classList.add("hit");
+              }
+              if (sel === i) {
+                h.classList.add("sel");
+                a.classList.add("sel");
+              }
+              const choose = () => select(i);
+              h.onclick = choose;
+              a.onclick = choose;
+            }
+            hexes.append(h);
+            asc.append(a);
+          }
+          row.append(hexes, asc);
+          frag.append(row);
+        }
+        win.replaceChildren(frag);
+        clearTimeout(settle);
+        settle = setTimeout(fill, 90);
+      }
+      let settle = 0;
+      grid.addEventListener("scroll", draw, { passive: true });
+      window.addEventListener("resize", () => {
+        // The bar maps onto the rows by the height of the view: keep the row at the top.
+        if (size) {
+          const row = firstRow();
+          map = Hex.rows(size, PER_ROW, ROW_H, MAX_PX, grid.clientHeight);
+          grid.scrollTop = map.topOf(row);
+          pinned = { row, top: grid.scrollTop };
+        }
+        draw();
+      });
+
+      function status() {
+        if (!searching) $("count").textContent = size ? fmtSize(size) : "";
+      }
+
+      // ---- Selection ----
+
+      function select(i) {
+        sel = Math.max(0, Math.min(size - 1, i));
+        const b = byteAt(sel);
+        const info = $("info");
+        let text = `Offset 0x${Hex.pad(sel, digits)} (${sel.toLocaleString("en-US")})`;
+        if (b !== undefined) {
+          // Wider numbers need the bytes after this one: the next page, if it is on hand.
+          const tail = [];
+          for (let k = 0; k < 4; k++) {
+            const v = byteAt(sel + k);
+            if (v === undefined) break;
+            tail.push(v);
+          }
+          text += ` · ${Hex.inspect(new Uint8Array(tail), 0).join(" · ")}`;
+        }
+        info.textContent = text;
+        draw();
+      }
+
+      /** Scrolls so that byte `i` is a few rows from the top, and selects it. */
+      function reveal(i, hitLength = 0) {
+        hit = hitLength ? { start: i, length: hitLength } : null;
+        const row = Math.max(0, Math.floor(i / PER_ROW) - 3);
+        grid.scrollTop = map.topOf(row);
+        pinned = { row, top: grid.scrollTop };
+        select(i);
+        fill();
+      }
+
+      // ---- Go to ----
+
+      $("goto").addEventListener("keydown", (e) => {
+        if (e.key !== "Enter") return;
+        const n = Hex.parseOffset($("goto").value);
+        if (n === null || n >= size) {
+          $("count").textContent = n === null ? "Not an offset" : `Past the end (${fmtSize(size)})`;
+          return;
+        }
+        reveal(n);
+        status();
+      });
+
+      // ---- Search ----
+
+      $("mode").onchange = () => {
+        $("q").placeholder = $("mode").value === "hex" ? "Find bytes (de ad be ef)" : "Find text";
+      };
+
+      let scanned = 0;
+      function progress() {
+        $("count").textContent = `Searching… ${Math.min(100, Math.round((scanned / size) * 100))}%`;
+      }
+
+      /**
+       * Looks for `pattern` in bytes `lo` to `hi` of the file, in pieces that overlap by what a
+       * match could straddle: forwards from `lo`, or backwards from `hi`. The byte a match starts
+       * at, -1 if there is none, -2 if it was stopped.
+       */
+      async function scan(pattern, lo, hi, backward) {
+        const overlap = pattern.length - 1;
+        if (!backward) {
+          for (let at = lo; at < hi;) {
+            if (cancel) return -2;
+            const len = Math.min(CHUNK, hi - at);
+            const r = await readBytes(at, len);
+            const i = Hex.indexOf(r.data, pattern);
+            if (i !== -1) return at + i;
+            scanned += len;
+            progress();
+            if (at + len >= hi) break;
+            at += len - overlap;
+          }
+        } else {
+          for (let end = hi; end > lo;) {
+            if (cancel) return -2;
+            const a = Math.max(lo, end - CHUNK);
+            const r = await readBytes(a, end - a);
+            const i = Hex.lastIndexOf(r.data, pattern);
+            if (i !== -1) return a + i;
+            scanned += end - a;
+            progress();
+            if (a <= lo) break;
+            end = a + overlap;
+          }
+        }
+        return -1;
+      }
+
+      /**
+       * The next match after byte `from` (or the previous one before it), going round the end of
+       * the file once: the first lap covers from there to the end (or the start), the second the
+       * part before it.
+       */
+      async function search(pattern, from, backward) {
+        const m = pattern.length;
+        scanned = 0;
+        const laps = backward
+          ? [
+              [0, Math.min(size, from + m)],
+              [from + 1, size],
+            ]
+          : [
+              [from, size],
+              [0, Math.min(size, from + m - 1)],
+            ];
+        for (const [lo, hi] of laps) {
+          if (hi - lo < m) continue;
+          const at = await scan(pattern, lo, hi, backward);
+          if (at !== -1) return at;
+        }
+        return -1;
+      }
+
+      async function find(backward) {
+        if (searching || !size) return;
+        const parsed = Hex.parsePattern($("q").value, $("mode").value);
+        if (parsed.error) {
+          $("count").textContent = parsed.error;
+          return;
+        }
+        searching = true;
+        cancel = false;
+        $("stop").hidden = false;
+        // From just after (or before) the last match or the chosen byte, else the first row in view.
+        const placed = hit ? hit.start : sel;
+        const here = placed ?? firstRow() * PER_ROW;
+        let from = backward ? here - 1 : placed === null ? here : here + 1;
+        if (from < 0) from = size - 1;
+        if (from >= size) from = 0;
+        try {
+          const at = await search(parsed.bytes, from, backward);
+          searching = false;
+          if (at === -2) $("count").textContent = "Stopped";
+          else if (at === -1) {
+            $("count").textContent = "Not found";
+            hit = null;
+            draw();
+          } else {
+            reveal(at, parsed.bytes.length);
+            $("count").textContent = `Found at 0x${Hex.pad(at, digits)}`;
+          }
+        } catch (e) {
+          $("count").textContent = e.message;
+        } finally {
+          searching = false;
+          $("stop").hidden = true;
+        }
+      }
+      $("next").onclick = () => find(false);
+      $("prev").onclick = () => find(true);
+      $("stop").onclick = () => (cancel = true);
+      $("q").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          find(e.shiftKey);
+        } else if (e.key === "Escape" && $("q").value) {
+          e.preventDefault();
+          e.stopPropagation();
+          $("q").value = "";
+          hit = null;
+          draw();
+        }
+      });
+      grid.addEventListener("keydown", (e) => {
+        if (sel === null) return;
+        const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -PER_ROW, ArrowDown: PER_ROW }[e.key];
+        if (!step) return;
+        e.preventDefault();
+        select(sel + step);
+        const row = Math.floor(sel / PER_ROW);
+        const first = firstRow();
+        if (row < first || row >= first + visibleRows() - 3) {
+          const to = Math.max(0, row - 3);
+          grid.scrollTop = map.topOf(to);
+          pinned = { row: to, top: grid.scrollTop };
+          draw();
+        }
+      });
+      document.addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+          e.preventDefault();
+          $("q").focus();
+          $("q").select();
+        }
+      });
+
+      parent.postMessage({ folio: 1, event: "ready" }, "*");
+    </script>
+  </body>
+</html>

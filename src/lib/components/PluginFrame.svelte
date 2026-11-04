@@ -1,6 +1,12 @@
 <script lang="ts">
   import { onDestroy, untrack } from "svelte";
-  import { pluginUrl, pluginsPin, readTextPreview, readTextRange } from "$lib/api/fs";
+  import {
+    pluginUrl,
+    pluginsPin,
+    readBytesRange,
+    readTextPreview,
+    readTextRange,
+  } from "$lib/api/fs";
   import {
     createBridge,
     isReady,
@@ -49,6 +55,7 @@
         notify: pluginNotify,
         readText: readTextPreview,
         readRange: readTextRange,
+        readBytes: readBytesRange,
         // A page that floods the bridge is turned off, which also removes its frame.
         abuse: () => {
           pluginNotify(

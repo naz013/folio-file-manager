@@ -79,6 +79,11 @@ its frame to a plugin address either. Never add a plugin address to that policy,
   character boundaries) instead of only the first 256 KB. It is the same permission (`read`), the
   same file allowance and the same rate limits as `read`, so it opens nothing new; a preview's files
   are kept readable while it is open, since paging goes on for as long as a person reads.
+- **Bytes.** `readBytes` gives a plugin a range of any regular file as bytes (at most 1 MB), for a
+  hex viewer. It is the same permission (`read`), file allowance and rate limits as `read` and
+  `readRange`, never reads a whole file and is refused for a file only in the cloud. The core
+  returns the bytes raw (the start and size in 16 bytes, then the data) rather than as text, so a
+  large range isn't inflated in transit.
 - **Not closed**: a DNS lookup from a page may still leak a few bytes (see `docs/PLUGINS.md`).
 
 ## Consequences

@@ -573,6 +573,12 @@ const isCall = (m: unknown): m is Call =>
 export interface Host {
   notify: (message: string) => void;
   readText: (path: string) => Promise<{ text: string; truncated: boolean }>;
+  /** A piece of a file as bytes; see `readBytes` in docs/PLUGINS.md. */
+  readBytes: (
+    path: string,
+    offset: number,
+    length: number,
+  ) => Promise<{ data: Uint8Array; start: number; end: number; size: number }>;
   /** A piece of a text file; see `readRange` in docs/PLUGINS.md. */
   readRange: (
     path: string,
@@ -600,6 +606,8 @@ const ABUSE_AFTER = 500;
 const MAX_READS_IN_FLIGHT = 2;
 /** The most bytes one `readRange` asks for (the core allows no more either). */
 const MAX_RANGE = 4 * 1024 * 1024;
+/** The most bytes one `readBytes` asks for: less than a text range, since bytes are raw. */
+const MAX_BYTES = 1024 * 1024;
 const READS_PER_WINDOW = 20;
 const READ_WINDOW_MS = 10_000;
 
@@ -653,7 +661,8 @@ export function createBridge(manifest: Manifest, host: Host) {
         return null;
       }
       case "read":
-      case "readRange": {
+      case "readRange":
+      case "readBytes": {
         need("read");
         const path = params.path;
         if (
@@ -663,7 +672,7 @@ export function createBridge(manifest: Manifest, host: Host) {
           throw new Error("That file was not given to this plugin");
         }
         let range: [number, number] | null = null;
-        if (call.method === "readRange") {
+        if (call.method === "readRange" || call.method === "readBytes") {
           const { offset, length } = params;
           if (!Number.isSafeInteger(offset) || (offset as number) < 0) {
             throw new Error('"offset" must be a whole number of bytes');
@@ -671,7 +680,10 @@ export function createBridge(manifest: Manifest, host: Host) {
           if (!Number.isSafeInteger(length) || (length as number) < 1) {
             throw new Error('"length" must be a whole number of bytes');
           }
-          range = [offset as number, Math.min(length as number, MAX_RANGE)];
+          range = [
+            offset as number,
+            Math.min(length as number, call.method === "readBytes" ? MAX_BYTES : MAX_RANGE),
+          ];
         }
         while (readStamps.length && t - readStamps[0] > READ_WINDOW_MS) readStamps.shift();
         if (reading >= MAX_READS_IN_FLIGHT || readStamps.length >= READS_PER_WINDOW) {
@@ -680,6 +692,9 @@ export function createBridge(manifest: Manifest, host: Host) {
         readStamps.push(t);
         reading++;
         try {
+          if (call.method === "readBytes" && range) {
+            return await host.readBytes(path, range[0], range[1]);
+          }
           return range ? await host.readRange(path, range[0], range[1]) : await host.readText(path);
         } finally {
           reading--;

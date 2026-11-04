@@ -141,6 +141,30 @@ export interface TextRange {
 export const readTextRange = (path: string, offset: number, length: number) =>
   invoke<TextRange>("read_text_range", { path, offset, length });
 
+/** A piece of a file as bytes: from byte `offset`, up to `length` bytes. */
+export interface BytesRange {
+  data: Uint8Array;
+  /** Where the bytes start in the file. */
+  start: number;
+  /** Where the next piece starts. */
+  end: number;
+  /** The file's size in bytes. */
+  size: number;
+}
+/** The core sends the start and the size (8 bytes each, little endian), then the bytes. */
+export async function readBytesRange(
+  path: string,
+  offset: number,
+  length: number,
+): Promise<BytesRange> {
+  const buf = await invoke<ArrayBuffer>("read_bytes_range", { path, offset, length });
+  const view = new DataView(buf);
+  const start = Number(view.getBigUint64(0, true));
+  const size = Number(view.getBigUint64(8, true));
+  const data = new Uint8Array(buf, 16);
+  return { data, start, end: start + data.length, size };
+}
+
 /** An item in the Recycle Bin. */
 export interface BinItem {
   id: string;

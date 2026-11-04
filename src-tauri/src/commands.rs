@@ -294,6 +294,24 @@ pub async fn read_text_range(
     preview_result(&path, outcome)
 }
 
+/// A piece of a file as raw bytes for a plugin that shows binary files: the start and the size
+/// (8 bytes each, little endian) and then the bytes, at most `BYTES_LIMIT`. Fails and gives up like
+/// `read_text_preview`.
+#[tauri::command]
+pub async fn read_bytes_range(
+    path: String,
+    offset: u64,
+    length: u64,
+) -> CmdResult<tauri::ipc::Response> {
+    let file = PathBuf::from(&path);
+    let outcome = slow::PREVIEWS
+        .run(slow::PREVIEW, move || {
+            crate::preview::read_bytes_range(&file, offset, length)
+        })
+        .await;
+    preview_result(&path, outcome).map(|r| tauri::ipc::Response::new(r.pack()))
+}
+
 /// What the outcome of reading a preview means to the person.
 fn preview_result<T>(path: &str, outcome: slow::Outcome<std::io::Result<T>>) -> CmdResult<T> {
     match outcome {

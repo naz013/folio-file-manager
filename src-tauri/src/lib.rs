@@ -312,6 +312,7 @@ pub fn run() {
             commands::tags_in_dir,
             commands::read_text_preview,
             commands::read_text_range,
+            commands::read_bytes_range,
             commands::show_context_menu,
             commands::trash_paths,
             commands::rename_path,

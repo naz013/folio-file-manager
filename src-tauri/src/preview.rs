@@ -170,6 +170,57 @@ pub fn read_text_range(path: &Path, offset: u64, length: u64) -> io::Result<Text
     })
 }
 
+/// The most one `read_bytes_range` returns.
+pub const BYTES_LIMIT: u64 = 1024 * 1024;
+
+/// A piece of a file as bytes, for a viewer of binary files.
+#[derive(Debug, PartialEq, Eq)]
+pub struct BytesRange {
+    /// Where the bytes start in the file (the asked offset, or the end of the file if that is
+    /// beyond it).
+    pub start: u64,
+    /// The file's size in bytes.
+    pub size: u64,
+    pub data: Vec<u8>,
+}
+
+impl BytesRange {
+    /// What goes to the page: the start and the size as 8 bytes each (little endian), then the
+    /// bytes. The end is `start` plus the number of bytes.
+    pub fn pack(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(16 + self.data.len());
+        out.extend_from_slice(&self.start.to_le_bytes());
+        out.extend_from_slice(&self.size.to_le_bytes());
+        out.extend_from_slice(&self.data);
+        out
+    }
+}
+
+/// Reads up to `length` bytes of `path` from byte `offset`, whatever they are. Only ranges are
+/// ever read (at most `BYTES_LIMIT`), never the whole of a file, and an offset beyond the end
+/// gives no bytes. Fails for a file only in the cloud, and for anything that is not a regular
+/// file, like `read_text_preview`.
+pub fn read_bytes_range(path: &Path, offset: u64, length: u64) -> io::Result<BytesRange> {
+    if cloud_only(path) {
+        return Err(io::Error::other(CLOUD_ONLY));
+    }
+    let mut file = fs::File::open(path)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "This is not a file",
+        ));
+    }
+    let size = meta.len();
+    let start = offset.min(size);
+    file.seek(SeekFrom::Start(start))?;
+    let mut data = Vec::new();
+    file.take(length.clamp(1, BYTES_LIMIT))
+        .read_to_end(&mut data)?;
+    Ok(BytesRange { start, size, data })
+}
+
 fn content_type(path: &Path) -> &'static str {
     let ext = path
         .extension()
@@ -304,6 +355,55 @@ mod tests {
             assert_eq!(all, text, "piece {piece}");
             assert!(calls >= 1);
         }
+    }
+
+    #[test]
+    fn bytes_are_read_as_they_are_in_ranges_and_never_past_the_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("b.bin");
+        let bytes: Vec<u8> = (0..=255u8).cycle().take(10_000).collect();
+        fs::write(&file, &bytes).unwrap();
+        // Binary bytes, NUL included, come back untouched, from any offset.
+        let r = read_bytes_range(&file, 250, 12).unwrap();
+        assert_eq!((r.start, r.size), (250, 10_000));
+        assert_eq!(r.data, bytes[250..262]);
+        // The last piece stops at the end of the file.
+        let r = read_bytes_range(&file, 9_990, 100).unwrap();
+        assert_eq!(r.data, bytes[9_990..]);
+        // An offset beyond the end gives nothing, and says where the end is.
+        let r = read_bytes_range(&file, 99_999, 10).unwrap();
+        assert_eq!((r.start, r.data.len()), (10_000, 0));
+        // No more than the limit, however much is asked, and at least a byte.
+        let big = dir.path().join("big.bin");
+        fs::write(&big, vec![7u8; usize::try_from(BYTES_LIMIT).unwrap() + 5]).unwrap();
+        assert_eq!(
+            read_bytes_range(&big, 0, u64::MAX).unwrap().data.len() as u64,
+            BYTES_LIMIT
+        );
+        assert_eq!(read_bytes_range(&file, 0, 0).unwrap().data.len(), 1);
+        // Not a file.
+        assert!(read_bytes_range(dir.path(), 0, 10).is_err());
+        assert!(read_bytes_range(&dir.path().join("missing"), 0, 10).is_err());
+    }
+
+    #[test]
+    fn bytes_are_packed_with_their_start_and_the_file_size_in_front() {
+        let r = BytesRange {
+            start: 0x0102_0304_0506,
+            size: 0x0A0B_0C0D_0E0F,
+            data: vec![9, 8, 7],
+        };
+        let packed = r.pack();
+        assert_eq!(packed.len(), 19);
+        assert_eq!(
+            u64::from_le_bytes(packed[0..8].try_into().unwrap()),
+            0x0102_0304_0506
+        );
+        assert_eq!(
+            u64::from_le_bytes(packed[8..16].try_into().unwrap()),
+            0x0A0B_0C0D_0E0F
+        );
+        assert_eq!(&packed[16..], &[9, 8, 7]);
     }
 
     #[test]

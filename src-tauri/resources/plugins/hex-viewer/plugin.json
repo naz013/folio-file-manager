@@ -1,0 +1,64 @@
+{
+  "id": "hex-viewer",
+  "name": "Hex viewer",
+  "version": "1.0.0",
+  "description": "Quick Look for binary files: offsets, bytes and text, with a search for bytes or words.",
+  "api": 1,
+  "entry": "index.html",
+  "permissions": ["read"],
+  "previews": [
+    {
+      "id": "hex",
+      "title": "Hex viewer",
+      "extensions": [
+        "bin",
+        "dat",
+        "exe",
+        "dll",
+        "sys",
+        "so",
+        "dylib",
+        "o",
+        "obj",
+        "lib",
+        "class",
+        "pyc",
+        "wasm",
+        "db",
+        "sqlite",
+        "sqlite3",
+        "iso",
+        "img",
+        "dmp",
+        "cab"
+      ]
+    }
+  ],
+  "thumbnails": [
+    {
+      "extensions": [
+        "bin",
+        "dat",
+        "dll",
+        "sys",
+        "so",
+        "dylib",
+        "o",
+        "obj",
+        "lib",
+        "class",
+        "pyc",
+        "wasm",
+        "db",
+        "sqlite",
+        "sqlite3",
+        "iso",
+        "img",
+        "dmp",
+        "cab"
+      ],
+      "image": "thumb.svg",
+      "color": "#5b6475"
+    }
+  ]
+}

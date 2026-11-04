@@ -255,6 +255,7 @@ function bridge(perms, extra = {}) {
   const shown = [];
   const read = [];
   const ranges = [];
+  const byteReads = [];
   let clock = 0;
   const manifest = parse({ ...good, permissions: perms, actions: [] }).manifest;
   const b = createBridge(manifest, {
@@ -267,10 +268,14 @@ function bridge(perms, extra = {}) {
       ranges.push([p, offset, length]);
       return { text: "piece", start: offset, end: offset + 5, size: 100 };
     },
+    readBytes: async (p, offset, length) => {
+      byteReads.push([p, offset, length]);
+      return { data: new Uint8Array([1, 2, 3]), start: offset, end: offset + 3, size: 100 };
+    },
     now: () => clock,
     ...extra,
   });
-  return { b, shown, read, ranges, tick: (ms) => (clock += ms) };
+  return { b, shown, read, ranges, byteReads, tick: (ms) => (clock += ms) };
 }
 const call = (method, params, id = 1) => ({ folio: 1, id, method, params });
 
@@ -595,4 +600,54 @@ test("a preview's files stay readable while it is kept alive, and not otherwise"
   assert.equal((await read()).error, undefined);
   tick(61_000);
   assert.match((await read()).error, /not given/);
+});
+
+test("readBytes needs read, a handed file, sane numbers, is capped lower than text, and shares the limits", async () => {
+  const none = bridge([]);
+  none.b.allow(["C:\\a"]);
+  assert.match(
+    (await none.b.handle(call("readBytes", { path: "C:\\a", offset: 0, length: 10 }))).error,
+    /not given/,
+  );
+  const { b, byteReads } = bridge(["read"]);
+  const bytes = (params) => b.handle(call("readBytes", params));
+  assert.match((await bytes({ path: "C:\\a", offset: 0, length: 10 })).error, /not given/);
+  b.allow(["C:\\a"]);
+  const ok = await bytes({ path: "C:\\a", offset: 40, length: 3 });
+  assert.deepEqual(ok.result.data, new Uint8Array([1, 2, 3]));
+  assert.deepEqual([ok.result.start, ok.result.end, ok.result.size], [40, 43, 100]);
+  for (const bad of [
+    { offset: -1, length: 4 },
+    { offset: 0.5, length: 4 },
+    { offset: 0, length: 0 },
+    { offset: "0", length: 4 },
+    { offset: 0 },
+  ]) {
+    assert.match(
+      (await bytes({ path: "C:\\a", ...bad })).error,
+      /whole number/,
+      JSON.stringify(bad),
+    );
+  }
+  assert.match((await bytes({ path: "C:\\other", offset: 0, length: 4 })).error, /not given/);
+  // However much is asked for, the host is asked for no more than a megabyte.
+  await bytes({ path: "C:\\a", offset: 0, length: 2 ** 40 });
+  assert.deepEqual(byteReads.at(-1), ["C:\\a", 0, 1024 * 1024]);
+  // It counts against the same limit as the other reads.
+  const lim = bridge(["read"]);
+  lim.b.allow(["C:\\a"]);
+  for (let i = 0; i < 20; i++) {
+    assert.equal(
+      (
+        await lim.b.handle(
+          call(i % 2 ? "readBytes" : "readRange", { path: "C:\\a", offset: 0, length: 4 }, i + 1),
+        )
+      ).error,
+      undefined,
+    );
+  }
+  assert.match(
+    (await lim.b.handle(call("readBytes", { path: "C:\\a", offset: 0, length: 4 }, 99))).error,
+    /Too many reads/,
+  );
 });
