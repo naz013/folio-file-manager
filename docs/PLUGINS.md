@@ -108,6 +108,14 @@ Unknown fields are ignored. Settings shows what is wrong with a manifest that ca
 A preview is always told the name and path of its file; reading it needs `read`. There is **no
 permission to change, move or delete files**: in this version a plugin can only look and say.
 
+## Who made a preview
+
+A plugin's preview fills Quick Look, and a plugin can draw anything on its page. So Folio always
+draws a bar of its own under the page, which the plugin cannot draw over: "Preview by <name>", a
+badge saying **Built-in plugin** (grey) or **Plugin** (amber, for one you installed), and a **Show
+normally** button that puts Folio's own view of the file in its place. The name is the one in the
+manifest, shown as plain text. The bar is a labelled group for screen readers.
+
 ## The sandbox
 
 The page runs in an iframe with `sandbox="allow-scripts"` and nothing more. It has no cookies or

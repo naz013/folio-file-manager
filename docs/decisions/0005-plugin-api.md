@@ -84,6 +84,7 @@ its frame to a plugin address either. Never add a plugin address to that policy,
   `readRange`, never reads a whole file and is refused for a file only in the cloud. The core
   returns the bytes raw (the start and size in 16 bytes, then the data) rather than as text, so a
   large range isn't inflated in transit.
+- **Who made a preview.** Quick Look draws a bar under a plugin's page ("Preview by <name>", a badge for built-in or installed, and "Show normally"), outside the frame, so the page cannot imitate Folio's own interface unmarked.
 - **Not closed**: a DNS lookup from a page may still leak a few bytes (see `docs/PLUGINS.md`).
 
 ## Consequences

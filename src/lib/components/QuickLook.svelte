@@ -244,6 +244,7 @@
   <div
     bind:this={dialog}
     class="window"
+    class:with-source={shown.kind === "plugin"}
     role="dialog"
     aria-modal="true"
     aria-label="Quick Look: {entry.name}"
@@ -329,6 +330,22 @@
         </div>
       {/if}
     </div>
+
+    {#if shown.kind === "plugin"}
+      <!-- Drawn by Folio, outside the plugin's page, so the plugin can't draw over it. -->
+      {@const who = shown.hit.plugin.manifest.name}
+      {@const builtIn = shown.hit.plugin.bundled}
+      <div
+        class="source"
+        role="group"
+        aria-label="Preview by {who}, {builtIn ? 'a built-in plugin' : 'a plugin'}"
+      >
+        <span class="by">Preview by</span>
+        <span class="who">{who}</span>
+        <span class="badge" class:builtin={builtIn}>{builtIn ? "Built-in plugin" : "Plugin"}</span>
+        <button class="open" onclick={() => (skipped = path)}>Show normally</button>
+      </div>
+    {/if}
 
     <footer>← → to move · Space or Esc to close</footer>
   </div>
@@ -456,5 +473,56 @@
     padding: var(--space-xs) var(--space-lg);
     border-top: 1px solid var(--border-default);
     text-align: center;
+  }
+
+  /* A plugin draws the preview; this bar says so and offers Folio's own view instead. */
+  .window.with-source {
+    grid-template-rows: auto 1fr auto auto;
+  }
+
+  .source {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    min-width: 0;
+    padding: var(--space-xs) var(--space-sm) var(--space-xs) var(--space-lg);
+    border-top: 1px solid var(--border-default);
+    color: var(--text-secondary);
+    font-size: var(--font-size-caption);
+  }
+
+  .who {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-primary);
+    font-weight: var(--font-weight-semibold);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .badge {
+    flex: none;
+    padding: 1px var(--space-xs);
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--status-warning) 18%, transparent);
+    color: color-mix(in srgb, var(--status-warning) 70%, var(--text-primary));
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+
+  .badge.builtin {
+    background: var(--bg-control);
+    color: var(--text-secondary);
+  }
+
+  .source .by {
+    flex: none;
+  }
+
+  .source .open {
+    flex: none;
+    margin-left: auto;
+    padding-block: 2px;
   }
 </style>
