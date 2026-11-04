@@ -246,12 +246,17 @@
       const MAX_HITS = 2000;
       const CHUNK = 200;
       const MAX_DEPTH = 400;
+      /** The most of a file the tree is built from: one read, and every node costs memory. */
+      const MAX_FILE = 4 * 1024 * 1024;
+      /** Lines drawn in the text views; each is an element on the page. */
+      const MAX_LINES = 20000;
       const $ = (id) => document.getElementById(id);
       const view = $("view");
       const query = $("q");
 
       let text = "";
       let truncated = false;
+      let fileSize = 0;
       let doc;
       let hasDoc = false;
       let error = null;
@@ -316,8 +321,9 @@
 
       async function open(path) {
         try {
-          const r = await call("read", { path });
-          load(r.text, r.truncated);
+          const r = await call("readRange", { path, offset: 0, length: MAX_FILE });
+          fileSize = r.size;
+          load(r.text, r.end < r.size);
         } catch (e) {
           message(e.message);
         }
@@ -489,7 +495,7 @@
             el(
               "div",
               "callout note",
-              "This file is larger than the part Folio hands to a preview, so only its start is shown as text.",
+              `This file is ${(fileSize / 1048576).toFixed(1)} MB, more than the ${MAX_FILE / 1048576} MB the tree can hold, so only its start is shown as text.`,
             ),
           );
         }
@@ -649,7 +655,8 @@
       // ---- Text (pretty and raw) ----
 
       function renderText(str) {
-        const lines = str.split(/\r\n|\n|\r/);
+        const all = str.split(/\r\n|\n|\r/);
+        const lines = all.slice(0, MAX_LINES);
         view.className = "text";
         view.style.setProperty("--digits", String(String(lines.length).length));
         const frag = document.createDocumentFragment();
@@ -661,6 +668,9 @@
           row.append(el("span", "n", String(i + 1)), t);
           frag.append(row);
         });
+        if (all.length > lines.length) {
+          frag.append(el("p", "msg", `… ${all.length - lines.length} more lines are not shown`));
+        }
         view.replaceChildren(frag);
         hits = marks;
         const bad = view.querySelector(".line.err");

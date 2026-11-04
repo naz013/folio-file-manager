@@ -28,10 +28,10 @@ you turn them on and read what they can do, and are checked file by file when se
 the same id in your plugins folder replaces the built-in one, and has to be approved on its own
 files.
 
-| Plugin      | What it does                                                                                                                                                                                                                     |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Text viewer | Quick Look for text and code files: line numbers, wrapping, search (Ctrl+F)                                                                                                                                                      |
-| JSON viewer | Quick Look for `.json`, `.geojson`, `.jsonld`, `.har`: a tree to fold and search, copy a path or value, pretty and raw views, and where a syntax error is. Files larger than the 256 KB a preview is given show as raw text only |
+| Plugin      | What it does                                                                                                                                                                                                                          |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Text viewer | Quick Look for text and code files: line numbers, wrapping, search (Ctrl+F). Loads more of a large file as you scroll, up to 2 MB                                                                                                     |
+| JSON viewer | Quick Look for `.json`, `.geojson`, `.jsonld`, `.har`: a tree to fold and search, copy a path or value, pretty and raw views, and where a syntax error is. Reads files up to 4 MB; a larger one shows its first 4 MB as raw text only |
 
 ## The manifest
 
@@ -135,16 +135,25 @@ cut each other off. A preview's page is made when the file is shown and removed 
 **The page asks Folio** `{ folio: 1, id, method, params }` and gets `{ folio: 1, id, result }` or
 `{ folio: 1, id, error }` (the error is a sentence):
 
-| Method      | Params        | Needs       | Result                                      |
-| ----------- | ------------- | ----------- | ------------------------------------------- |
-| `selection` |               | `selection` | the paths of the files of the last action   |
-| `read`      | `{ path }`    | `read`      | `{ text, truncated }`; start of a text file |
-| `notify`    | `{ message }` | `notify`    | `null`                                      |
+| Method      | Params                     | Needs       | Result                                               |
+| ----------- | -------------------------- | ----------- | ---------------------------------------------------- |
+| `selection` |                            | `selection` | the paths of the files of the last action            |
+| `read`      | `{ path }`                 | `read`      | `{ text, truncated }`; start of a text file          |
+| `readRange` | `{ path, offset, length }` | `read`      | `{ text, start, end, size }`; a piece of a text file |
+| `notify`    | `{ message }`              | `notify`    | `null`                                               |
 
 `read` works only for paths Folio gave the plugin in its last few `action` or `preview` events, for
 a minute after each, at most 2 at once and 20 per 10 seconds, as text,
 up to the size Quick Look reads, and not for files that are only in the cloud (the error then is
 `Only in the cloud`). A call without its permission is answered with an error naming it.
+
+`readRange` reads a piece of a text file, for pages that show a large file bit by bit. `offset` and
+`length` are in bytes; `length` is at most 4 MB. The piece never holds half a character: if `offset`
+falls inside one, `start` is the next character's byte, and if `length` would cut one, the piece
+stops before it. `end` is where to ask for the next piece (`offset: end`), and `end >= size` means the
+file is done. `size` is the file's size in bytes. It follows the rules of `read` (a file Folio gave
+the plugin, the same limits on reads), and the files of a **preview** stay readable for as long as it
+is open, not only for a minute. A file with NUL bytes (binary) is refused.
 
 ## Writing one
 

@@ -128,6 +128,19 @@ export function pluginUrl(id: string, file: string): string {
 export const readTextPreview = (path: string) =>
   invoke<{ text: string; truncated: boolean }>("read_text_preview", { path });
 
+/** A piece of a text file: from byte `offset`, up to `length` bytes, cut at characters. */
+export interface TextRange {
+  text: string;
+  /** Where the text starts in the file, in bytes. */
+  start: number;
+  /** Where the next piece starts. */
+  end: number;
+  /** The file's size in bytes. */
+  size: number;
+}
+export const readTextRange = (path: string, offset: number, length: number) =>
+  invoke<TextRange>("read_text_range", { path, offset, length });
+
 /** An item in the Recycle Bin. */
 export interface BinItem {
   id: string;

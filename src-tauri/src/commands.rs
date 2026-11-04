@@ -277,11 +277,25 @@ pub async fn read_text_preview(path: String) -> CmdResult<crate::preview::TextPr
     preview_result(&path, outcome)
 }
 
+/// A piece of a text file for a plugin that pages through one: from byte `offset`, up to
+/// `length` bytes, cut at character boundaries. Fails and gives up like `read_text_preview`.
+#[tauri::command]
+pub async fn read_text_range(
+    path: String,
+    offset: u64,
+    length: u64,
+) -> CmdResult<crate::preview::TextRange> {
+    let file = PathBuf::from(&path);
+    let outcome = slow::PREVIEWS
+        .run(slow::PREVIEW, move || {
+            crate::preview::read_text_range(&file, offset, length)
+        })
+        .await;
+    preview_result(&path, outcome)
+}
+
 /// What the outcome of reading a preview means to the person.
-fn preview_result(
-    path: &str,
-    outcome: slow::Outcome<std::io::Result<crate::preview::TextPreview>>,
-) -> CmdResult<crate::preview::TextPreview> {
+fn preview_result<T>(path: &str, outcome: slow::Outcome<std::io::Result<T>>) -> CmdResult<T> {
     match outcome {
         slow::Outcome::Done(Ok(text)) => Ok(text),
         slow::Outcome::Done(Err(e)) if e.to_string() == crate::preview::CLOUD_ONLY => {
@@ -2428,7 +2442,7 @@ mod tests {
     fn a_preview_that_was_refused_for_the_cloud_says_so_plainly() {
         let refused = slow::Outcome::Done(Err(std::io::Error::other(crate::preview::CLOUD_ONLY)));
         assert_eq!(
-            preview_result("C:/x.txt", refused).unwrap_err(),
+            preview_result::<crate::preview::TextPreview>("C:/x.txt", refused).unwrap_err(),
             crate::preview::CLOUD_ONLY
         );
     }
@@ -2448,7 +2462,9 @@ mod tests {
 
     #[test]
     fn a_preview_that_timed_out_says_the_file_is_not_answering() {
-        let msg = preview_result("C:/x.txt", slow::Outcome::TimedOut).unwrap_err();
+        let msg =
+            preview_result::<crate::preview::TextPreview>("C:/x.txt", slow::Outcome::TimedOut)
+                .unwrap_err();
         assert!(msg.contains("C:/x.txt is not answering"), "{msg}");
     }
 

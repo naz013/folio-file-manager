@@ -97,6 +97,79 @@ pub fn read_text_preview(path: &Path) -> io::Result<TextPreview> {
     })
 }
 
+/// The most one `read_text_range` returns.
+pub const RANGE_LIMIT: u64 = 4 * 1024 * 1024;
+/// The least it is asked for, so a page is never smaller than a character.
+const RANGE_MIN: u64 = 4096;
+
+/// A piece of a text file, cut at character boundaries.
+#[derive(Debug, serde::Serialize, PartialEq, Eq)]
+pub struct TextRange {
+    pub text: String,
+    /// Where the text starts in the file, in bytes (moved on from the asked offset if that was
+    /// inside a character).
+    pub start: u64,
+    /// Where the next piece starts: `start` plus the bytes `text` came from.
+    pub end: u64,
+    /// The file's size in bytes.
+    pub size: u64,
+}
+
+/// Reads up to `length` bytes of `path` from byte `offset`, as text. The start moves on past
+/// the rest of a character the offset fell in, and the end moves back before one the length cut,
+/// so a piece never holds half a character and the next piece starts where this one ends.
+/// Fails like `read_text_preview`: for a file in the cloud, one that is not a file, one that
+/// holds NUL bytes (binary).
+pub fn read_text_range(path: &Path, offset: u64, length: u64) -> io::Result<TextRange> {
+    if cloud_only(path) {
+        return Err(io::Error::other(CLOUD_ONLY));
+    }
+    let mut file = fs::File::open(path)?;
+    let meta = file.metadata()?;
+    if !meta.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "This is not a file",
+        ));
+    }
+    let size = meta.len();
+    let length = length.clamp(RANGE_MIN, RANGE_LIMIT);
+    let offset = offset.min(size);
+    file.seek(SeekFrom::Start(offset))?;
+    let mut buf = Vec::new();
+    file.take(length).read_to_end(&mut buf)?;
+    if buf.contains(&0) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "This file is not text",
+        ));
+    }
+    // An offset inside a character: skip its remaining bytes (at most three).
+    let skip = buf
+        .iter()
+        .take(3)
+        .take_while(|&&b| b & 0b1100_0000 == 0b1000_0000)
+        .count();
+    let mut start = offset + skip as u64;
+    let mut body = &buf[skip..];
+    // A length that cut a character: leave it for the next piece, unless it is the file's end.
+    if offset + (buf.len() as u64) < size
+        && let Err(e) = std::str::from_utf8(body)
+        && e.error_len().is_none()
+    {
+        body = &body[..e.valid_up_to()];
+    }
+    if offset == size {
+        start = size;
+    }
+    Ok(TextRange {
+        text: String::from_utf8_lossy(body).into_owned(),
+        start,
+        end: start + body.len() as u64,
+        size,
+    })
+}
+
 fn content_type(path: &Path) -> &'static str {
     let ext = path
         .extension()
@@ -200,6 +273,78 @@ pub fn handle(current: &Current, request: &Request<Vec<u8>>) -> Response<Vec<u8>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// All of `path` read in pieces of `piece` bytes, the way a page pages through it.
+    fn paged(path: &Path, piece: u64) -> (String, usize) {
+        let mut all = String::new();
+        let mut at = 0;
+        let mut calls = 0;
+        loop {
+            let r = read_text_range(path, at, piece).unwrap();
+            calls += 1;
+            assert_eq!(r.start, at, "each piece starts where the last one ended");
+            all.push_str(&r.text);
+            at = r.end;
+            if at >= r.size {
+                return (all, calls);
+            }
+            assert!(calls < 10_000, "no progress");
+        }
+    }
+
+    #[test]
+    fn pieces_of_a_file_join_into_the_file_even_across_multibyte_characters() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("big.txt");
+        // 2-, 3- and 4-byte characters, so a cut falls inside one at some piece size.
+        let text = "a\u{e9}\u{20ac}\u{1f600}z\n".repeat(3000);
+        fs::write(&file, &text).unwrap();
+        for piece in [4096, 4097, 5000, 7777, 100_000] {
+            let (all, calls) = paged(&file, piece);
+            assert_eq!(all, text, "piece {piece}");
+            assert!(calls >= 1);
+        }
+    }
+
+    #[test]
+    fn a_range_starting_inside_a_character_moves_on_to_the_next_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("t.txt");
+        fs::write(&file, "x\u{20ac}y").unwrap();
+        // Bytes: x, then the three of the euro sign (1..4), then y.
+        let r = read_text_range(&file, 2, 4096).unwrap();
+        assert_eq!((r.text.as_str(), r.start, r.end, r.size), ("y", 4, 5, 5));
+    }
+
+    #[test]
+    fn a_range_past_the_end_is_empty_and_the_size_is_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("t.txt");
+        fs::write(&file, "hello").unwrap();
+        let r = read_text_range(&file, 999, 4096).unwrap();
+        assert_eq!((r.text.as_str(), r.start, r.end, r.size), ("", 5, 5, 5));
+        let r = read_text_range(&file, 0, 4096).unwrap();
+        assert_eq!((r.text.as_str(), r.end, r.size), ("hello", 5, 5));
+    }
+
+    #[test]
+    fn a_range_is_limited_and_binary_files_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("t.txt");
+        fs::write(
+            &file,
+            vec![b'a'; usize::try_from(RANGE_LIMIT).unwrap() + 10],
+        )
+        .unwrap();
+        let r = read_text_range(&file, 0, u64::MAX).unwrap();
+        assert_eq!(r.end, RANGE_LIMIT, "no more than the limit in one piece");
+        let bin = dir.path().join("b.bin");
+        let mut bytes = vec![b'a'; 100];
+        bytes.push(0);
+        fs::write(&bin, bytes).unwrap();
+        assert!(read_text_range(&bin, 0, 4096).is_err());
+        assert!(read_text_range(dir.path(), 0, 4096).is_err(), "not a file");
+    }
 
     /// Marks `path` as a file the sync provider has not downloaded. Only OFFLINE can be set from
     /// user mode; the RECALL_* bits `OneDrive` uses are read the same way.

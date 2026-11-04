@@ -254,6 +254,7 @@ test("a preview is found by extension, for files only", () => {
 function bridge(perms, extra = {}) {
   const shown = [];
   const read = [];
+  const ranges = [];
   let clock = 0;
   const manifest = parse({ ...good, permissions: perms, actions: [] }).manifest;
   const b = createBridge(manifest, {
@@ -262,10 +263,14 @@ function bridge(perms, extra = {}) {
       read.push(p);
       return { text: `text of ${p}`, truncated: false };
     },
+    readRange: async (p, offset, length) => {
+      ranges.push([p, offset, length]);
+      return { text: "piece", start: offset, end: offset + 5, size: 100 };
+    },
     now: () => clock,
     ...extra,
   });
-  return { b, shown, read, tick: (ms) => (clock += ms) };
+  return { b, shown, read, ranges, tick: (ms) => (clock += ms) };
 }
 const call = (method, params, id = 1) => ({ folio: 1, id, method, params });
 
@@ -527,4 +532,57 @@ test("every plugin shipped with the app is valid, answers its own events and ask
     );
     assert.ok(!/https?:\/\//.test(page), `${id} names an address`);
   }
+});
+
+test("readRange needs read, a handed file, sane numbers, and is capped", async () => {
+  const none = bridge([]);
+  none.b.allow(["C:\\a"]);
+  assert.match(
+    (await none.b.handle(call("readRange", { path: "C:\\a", offset: 0, length: 10 }))).error,
+    /not given/,
+  );
+  const { b, ranges } = bridge(["read"]);
+  const range = (params) => b.handle(call("readRange", params));
+  assert.match((await range({ path: "C:\\a", offset: 0, length: 10 })).error, /not given/);
+  b.allow(["C:\\a"]);
+  const ok = await range({ path: "C:\\a", offset: 40, length: 10 });
+  assert.deepEqual(ok.result, { text: "piece", start: 40, end: 45, size: 100 });
+  for (const bad of [
+    { offset: -1, length: 10 },
+    { offset: 1.5, length: 10 },
+    { offset: "0", length: 10 },
+    { offset: 0, length: 0 },
+    { offset: 0, length: -5 },
+    { offset: 0 },
+    { offset: Number.MAX_VALUE, length: 10 },
+  ]) {
+    assert.match(
+      (await range({ path: "C:\\a", ...bad })).error,
+      /whole number/,
+      JSON.stringify(bad),
+    );
+  }
+  assert.match((await range({ path: "C:\\other", offset: 0, length: 10 })).error, /not given/);
+  // However much is asked for, the host is asked for no more than the cap.
+  await range({ path: "C:\\a", offset: 0, length: 2 ** 40 });
+  assert.deepEqual(ranges.at(-1), ["C:\\a", 0, 4 * 1024 * 1024]);
+});
+
+test("a preview's files stay readable while it is kept alive, and not otherwise", async () => {
+  const { b, tick } = bridge(["read"]);
+  const read = () => b.handle(call("readRange", { path: "C:\\a", offset: 0, length: 10 }));
+  b.allow(["C:\\a"]);
+  for (let i = 0; i < 5; i++) {
+    tick(30_000);
+    b.keepAlive(["C:\\a"]);
+    assert.equal((await read()).error, undefined, `after ${(i + 1) * 30} s`);
+  }
+  // Other files are not touched by it, and without it the minute runs out.
+  b.allow(["C:\\b"]);
+  tick(30_000);
+  b.keepAlive(["C:\\a"]);
+  tick(45_000);
+  assert.equal((await read()).error, undefined);
+  tick(61_000);
+  assert.match((await read()).error, /not given/);
 });

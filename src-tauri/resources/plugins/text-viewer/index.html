@@ -140,6 +140,17 @@
       let marks = [];
       let current = -1;
       let note = "";
+      // Paging: the first piece is small so the file shows at once; more comes as you scroll.
+      const FIRST = 256 * 1024;
+      const NEXT = 1024 * 1024;
+      /** How much of a file is loaded at most: every line is a row on the page. */
+      const MAX_LOAD = 2 * 1024 * 1024;
+      let path = "";
+      let loaded = 0;
+      let size = 0;
+      let eof = true;
+      let loading = false;
+      let endedCR = false;
       /** The search the page shows now, so Enter knows whether to move on or to search. */
       let shown = "";
 
@@ -173,18 +184,76 @@
         view.replaceChildren(p);
       }
 
-      async function open(path) {
+      const fmt = (n) =>
+        n < 1024 * 1024
+          ? `${Math.max(1, Math.round(n / 1024))} KB`
+          : `${(n / 1048576).toFixed(1)} MB`;
+
+      async function open(file) {
+        path = file;
+        loaded = 0;
+        endedCR = false;
+        lines = [];
         try {
-          const { text, truncated } = await call("read", { path });
-          lines = text.split(/\r\n|\n|\r/);
-          note = truncated ? "Showing the start of a larger file" : "";
+          const r = await call("readRange", { path, offset: 0, length: FIRST });
+          take(r);
           render();
+          more();
         } catch (e) {
           message(e.message);
         }
       }
 
-      function render() {
+      /** Adds a piece to the lines: it may continue the last line, and a CR LF may be split. */
+      function take(r) {
+        let t = r.text;
+        if (endedCR && t.startsWith("\n")) t = t.slice(1);
+        endedCR = t.endsWith("\r");
+        const parts = t.split(/\r\n|\n|\r/);
+        if (lines.length) {
+          lines[lines.length - 1] += parts[0];
+          lines.push(...parts.slice(1));
+        } else {
+          lines = parts;
+        }
+        size = r.size;
+        // A piece that gets nowhere ends the file, so a changing file can't loop us.
+        eof = r.end >= r.size || r.end <= loaded;
+        loaded = r.end;
+        // At the cap the last line is cut short and nothing follows it: leave it out.
+        if (!eof && loaded >= MAX_LOAD && lines.length > 1) lines.pop();
+        note = eof
+          ? ""
+          : loaded >= MAX_LOAD
+            ? `Showing the first ${fmt(loaded)} of ${fmt(size)}`
+            : `Showing ${fmt(loaded)} of ${fmt(size)}, more as you scroll`;
+      }
+
+      /** Loads the next piece when the end is near, until the cap. */
+      async function more() {
+        if (loading || eof || loaded >= MAX_LOAD) return;
+        if (view.scrollHeight - view.scrollTop - view.clientHeight > 800) return;
+        loading = true;
+        try {
+          take(await call("readRange", { path, offset: loaded, length: NEXT }));
+          render(true);
+        } catch (e) {
+          // The reads are rate limited: try again in a moment rather than give up.
+          if (/Too many/.test(e.message)) setTimeout(more, 1500);
+          else {
+            note = e.message;
+            status();
+          }
+        } finally {
+          loading = false;
+        }
+        more();
+      }
+      view.addEventListener("scroll", more, { passive: true });
+
+      function render(keep = false) {
+        const top = view.scrollTop;
+        const was = current;
         const q = query.value;
         const matchCase = $("case").getAttribute("aria-pressed") === "true";
         const needle = matchCase ? q : q.toLowerCase();
@@ -222,7 +291,15 @@
           frag.append(row);
         }
         view.replaceChildren(frag);
-        if (marks.length) go(0);
+        if (keep) {
+          // More text was added: stay where the person is, and keep the match they were on.
+          view.scrollTop = top;
+          if (marks.length) {
+            current = Math.min(Math.max(was, 0), marks.length - 1);
+            marks[current].classList.add("cur");
+          }
+          status();
+        } else if (marks.length) go(0);
         else status();
       }
 

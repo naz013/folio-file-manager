@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, untrack } from "svelte";
-  import { pluginUrl, pluginsPin, readTextPreview } from "$lib/api/fs";
+  import { pluginUrl, pluginsPin, readTextPreview, readTextRange } from "$lib/api/fs";
   import {
     createBridge,
     isReady,
@@ -48,6 +48,7 @@
       createBridge(plugin.manifest, {
         notify: pluginNotify,
         readText: readTextPreview,
+        readRange: readTextRange,
         // A page that floods the bridge is turned off, which also removes its frame.
         abuse: () => {
           pluginNotify(
@@ -121,6 +122,11 @@
     if (!ready) silent = true;
   }, READY_MS);
   onDestroy(() => clearTimeout(timer));
+  // A preview stays open as long as the person reads, so its file stays readable.
+  const keep = setInterval(() => {
+    if (hello) bridge.keepAlive(hello.paths);
+  }, 20_000);
+  onDestroy(() => clearInterval(keep));
 </script>
 
 <svelte:window {onmessage} />

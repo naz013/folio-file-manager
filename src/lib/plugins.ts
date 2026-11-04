@@ -514,6 +514,12 @@ const isCall = (m: unknown): m is Call =>
 export interface Host {
   notify: (message: string) => void;
   readText: (path: string) => Promise<{ text: string; truncated: boolean }>;
+  /** A piece of a text file; see `readRange` in docs/PLUGINS.md. */
+  readRange: (
+    path: string,
+    offset: number,
+    length: number,
+  ) => Promise<{ text: string; start: number; end: number; size: number }>;
   /** Called once when the page keeps flooding the bridge; the host should remove the plugin. */
   abuse?: () => void;
   now?: () => number;
@@ -533,6 +539,8 @@ const CALLS_PER_SECOND = 50;
 const ABUSE_AFTER = 500;
 /** Reads a plugin may have under way at once, and per window: it can't starve real previews. */
 const MAX_READS_IN_FLIGHT = 2;
+/** The most bytes one `readRange` asks for (the core allows no more either). */
+const MAX_RANGE = 4 * 1024 * 1024;
 const READS_PER_WINDOW = 20;
 const READ_WINDOW_MS = 10_000;
 
@@ -585,7 +593,8 @@ export function createBridge(manifest: Manifest, host: Host) {
         host.notify(`${oneLine(manifest.name)} (plugin): ${message}`);
         return null;
       }
-      case "read": {
+      case "read":
+      case "readRange": {
         need("read");
         const path = params.path;
         if (
@@ -594,6 +603,17 @@ export function createBridge(manifest: Manifest, host: Host) {
         ) {
           throw new Error("That file was not given to this plugin");
         }
+        let range: [number, number] | null = null;
+        if (call.method === "readRange") {
+          const { offset, length } = params;
+          if (!Number.isSafeInteger(offset) || (offset as number) < 0) {
+            throw new Error('"offset" must be a whole number of bytes');
+          }
+          if (!Number.isSafeInteger(length) || (length as number) < 1) {
+            throw new Error('"length" must be a whole number of bytes');
+          }
+          range = [offset as number, Math.min(length as number, MAX_RANGE)];
+        }
         while (readStamps.length && t - readStamps[0] > READ_WINDOW_MS) readStamps.shift();
         if (reading >= MAX_READS_IN_FLIGHT || readStamps.length >= READS_PER_WINDOW) {
           throw new Error("Too many reads: wait a moment");
@@ -601,7 +621,7 @@ export function createBridge(manifest: Manifest, host: Host) {
         readStamps.push(t);
         reading++;
         try {
-          return await host.readText(path);
+          return range ? await host.readRange(path, range[0], range[1]) : await host.readText(path);
         } finally {
           reading--;
         }
@@ -619,6 +639,14 @@ export function createBridge(manifest: Manifest, host: Host) {
     allow(paths: string[]) {
       runs.push({ paths: [...paths], at: now() });
       if (runs.length > MAX_RUNS) runs.shift();
+    },
+    /**
+     * Keeps the files of a preview readable while it is open: a person may read for longer than
+     * a minute, and a page that loads more as they scroll must not be cut off.
+     */
+    keepAlive(paths: string[]) {
+      const t = now();
+      for (const r of runs) if (r.paths.some((p) => paths.includes(p))) r.at = t;
     },
     /** The answer to a message from the page, or null for a message that is not a call. */
     async handle(message: unknown): Promise<Answer | null> {

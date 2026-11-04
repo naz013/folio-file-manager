@@ -75,6 +75,10 @@ its frame to a plugin address either. Never add a plugin address to that policy,
   They go through the same listing, approval, pinning and sandbox as the person's own; one of
   the same id in the person's folder replaces it. Nothing built in is trusted or approved by
   default, and what it may ask for is limited to what the API gives any plugin.
+- **Paged reads.** `readRange` gives a plugin a piece of a text file (at most 4 MB, cut at
+  character boundaries) instead of only the first 256 KB. It is the same permission (`read`), the
+  same file allowance and the same rate limits as `read`, so it opens nothing new; a preview's files
+  are kept readable while it is open, since paging goes on for as long as a person reads.
 - **Not closed**: a DNS lookup from a page may still leak a few bytes (see `docs/PLUGINS.md`).
 
 ## Consequences
