@@ -1,14 +1,23 @@
 <script lang="ts" module>
+  export interface MenuEntry {
+    label: string;
+    /** The keyboard shortcut that does the same, shown at the right. */
+    hint?: string;
+    /** Who the entry comes from (a plugin's name), shown at the right as plain text. */
+    source?: string;
+    disabled?: boolean;
+    danger?: boolean;
+    run: () => void;
+  }
+
   export type MenuItem =
     | "separator"
-    | {
-        label: string;
-        /** The keyboard shortcut that does the same, shown at the right. */
-        hint?: string;
-        disabled?: boolean;
-        danger?: boolean;
-        run: () => void;
-      };
+    | MenuEntry
+    /**
+     * Entries from one source under a heading Folio draws, so they can't pass for its own. The
+     * heading labels the group for screen readers; keyboard movement runs through it as usual.
+     */
+    | { group: string; entries: MenuEntry[] };
 </script>
 
 <script lang="ts">
@@ -71,7 +80,7 @@
     next?.focus();
   }
 
-  function choose(item: Exclude<MenuItem, "separator">) {
+  function choose(item: MenuEntry) {
     onclose();
     // An action that moves focus itself (renaming) does so after this.
     opener?.focus?.();
@@ -109,19 +118,32 @@
   {#each items as item, i (i)}
     {#if item === "separator"}
       <div class="sep" role="separator"></div>
+    {:else if "group" in item}
+      <div class="group" role="group" aria-label={item.group}>
+        <div class="heading" aria-hidden="true">{item.group}</div>
+        {#each item.entries as entry, j (j)}
+          {@render row(entry)}
+        {/each}
+      </div>
     {:else}
-      <button
-        role="menuitem"
-        class:danger={item.danger}
-        disabled={item.disabled}
-        onclick={() => choose(item)}
-      >
-        <span>{item.label}</span>
-        {#if item.hint}<kbd>{item.hint}</kbd>{/if}
-      </button>
+      {@render row(item)}
     {/if}
   {/each}
 </div>
+
+{#snippet row(item: MenuEntry)}
+  <button
+    role="menuitem"
+    class:danger={item.danger}
+    disabled={item.disabled}
+    aria-label={item.source ? `${item.label}, from ${item.source}` : undefined}
+    onclick={() => choose(item)}
+  >
+    <span>{item.label}</span>
+    {#if item.hint}<kbd>{item.hint}</kbd>{/if}
+    {#if item.source}<span class="source">{item.source}</span>{/if}
+  </button>
+{/snippet}
 
 <style>
   .menu {
@@ -173,6 +195,28 @@
     color: var(--text-tertiary);
     font: inherit;
     font-size: var(--font-size-caption);
+  }
+
+  .heading {
+    padding: var(--space-xs) var(--space-sm) var(--space-2xs);
+    color: var(--text-tertiary);
+    font-size: var(--font-size-caption);
+    font-weight: var(--font-weight-semibold);
+    text-transform: uppercase;
+  }
+
+  .source {
+    min-width: 0;
+    max-width: 14em;
+    overflow: hidden;
+    color: var(--text-tertiary);
+    font-size: var(--font-size-caption);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  button > span:first-child {
+    min-width: 0;
   }
 
   .sep {

@@ -127,7 +127,7 @@
   import { sideFolder, sideTarget } from "$lib/pane";
   import SidePane from "$lib/components/SidePane.svelte";
   import PluginFrame from "$lib/components/PluginFrame.svelte";
-  import { actionEvent, actionsFor, type ActionHit } from "$lib/plugins";
+  import { actionEvent, actionsFor, groupActions, type ActionHit } from "$lib/plugins";
   import { plugins, reloadPlugins, setPluginNotifier } from "$lib/plugins.svelte";
   import {
     movePinned,
@@ -336,18 +336,23 @@
       plugins.list,
       picked.map((e) => ({ path: e.path, name: e.name, isDir: e.isDir })),
     );
-    if (!hits.length) return [];
+    const group = groupActions(hits);
+    if (!group) return [];
+    // After Folio's own items and a divider, under a heading that says whose they are.
     return [
       "separator",
-      ...hits.map((hit) => ({
-        label: hit.action.title,
-        hint: hit.plugin.manifest.name,
-        run: () =>
-          runPluginAction(
-            hit,
-            picked.map((e) => e.path),
-          ),
-      })),
+      {
+        group: group.heading,
+        entries: group.entries.map((e) => ({
+          label: e.title,
+          source: e.source,
+          run: () =>
+            runPluginAction(
+              e.hit,
+              picked.map((p) => p.path),
+            ),
+        })),
+      },
     ];
   }
 
@@ -2487,10 +2492,10 @@
         ? [{ label: "PDF tools…", run: () => openPdfTools(one ?? undefined) }]
         : []),
       ...(one && isEditable(one) ? [{ label: "Image tools…", run: () => (imageTools = one) }] : []),
-      ...pluginItems(),
       { label: "Move to Recycle Bin", hint: hintFor("trash"), danger: true, run: trashSelected },
       "separator",
       { label: "More options", run: () => nativeMenu([...selection]) },
+      ...pluginItems(),
     ];
   }
 

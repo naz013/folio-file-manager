@@ -427,6 +427,32 @@ export function actionsFor(plugins: Loaded[], items: Item[]): ActionHit[] {
   return hits;
 }
 
+/** What the context menu shows for plugin actions: one group, with the plugin named per item. */
+export interface ActionGroup {
+  heading: string;
+  entries: { title: string; source: string; hit: ActionHit }[];
+}
+
+/** The heading of the plugin actions in menus. Folio's own items never sit under it. */
+export const PLUGIN_HEADING = "Plugins";
+
+/**
+ * The actions as one group under a heading, each with its plugin's name; null if there are none.
+ * Names and titles are text from the manifest: collapsed to one line, so an action can't pose as
+ * a built-in command or add lines to the menu.
+ */
+export function groupActions(hits: ActionHit[]): ActionGroup | null {
+  if (!hits.length) return null;
+  return {
+    heading: PLUGIN_HEADING,
+    entries: hits.map((hit) => ({
+      title: oneLine(hit.action.title),
+      source: oneLine(hit.plugin.manifest.name),
+      hit,
+    })),
+  };
+}
+
 export interface PreviewHit {
   plugin: Loaded & { manifest: Manifest };
   preview: PreviewDef;

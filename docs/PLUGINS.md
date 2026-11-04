@@ -108,6 +108,14 @@ Unknown fields are ignored. Settings shows what is wrong with a manifest that ca
 A preview is always told the name and path of its file; reading it needs `read`. There is **no
 permission to change, move or delete files**: in this version a plugin can only look and say.
 
+## Where actions appear
+
+Plugin actions are always the last group of the right-click menu, after Folio's own items and a
+divider, under a heading Folio draws (**Plugins**). Each item names its plugin at the right, and a
+screen reader says "<action>, from <plugin>". An action called "Move to Recycle Bin" is still
+listed under that heading, as the plugin's: it never sits among Folio's own items. Names and
+titles are one line of plain text (the manifest refuses line breaks and direction marks).
+
 ## Who made a preview
 
 A plugin's preview fills Quick Look, and a plugin can draw anything on its page. So Folio always
