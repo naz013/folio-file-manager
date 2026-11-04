@@ -28,6 +28,16 @@ you turn them on and read what they can do, and are checked file by file when se
 the same id in your plugins folder replaces the built-in one, and has to be approved on its own
 files.
 
+The build hashes each built-in plugin's folder (the same rule as the digest of any plugin,
+`src-tauri/src/plugin_digest.rs`, used by `build.rs`) and keeps the result inside the program. When
+the app starts, a built-in plugin whose files on disk are not exactly those, or that the build did not
+know, is listed as **damaged**: it shows the reason ("don't match the ones Folio shipped with,
+reinstall Folio"), has no switch and serves nothing. So changing a built-in plugin in the install
+folder is caught even before anyone has approved it. Your own plugins are not affected. This raises
+the bar rather than closing the door: the digests live in the program, which sits in the same
+install folder, so someone who can rewrite the program can rewrite them too. A signed installer
+and an install folder only an administrator can write are what protect the program itself.
+
 | Plugin          | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Text viewer     | Quick Look and a page icon for text and code files: line numbers, wrapping, search (Ctrl+F). Loads more of a large file as you scroll, up to 2 MB                                                                                                                                                                                                                                                                                                                                                                                                           |

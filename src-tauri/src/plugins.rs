@@ -11,7 +11,11 @@ use std::sync::Mutex;
 use serde::Serialize;
 use tauri::http::{Request, Response, StatusCode};
 
+use crate::plugin_digest::{Pin, mime_of, snapshot};
+
 pub const SCHEME: &str = "plugin";
+
+include!(concat!(env!("OUT_DIR"), "/bundled_digests.rs"));
 
 /// The manifest's name inside a plugin folder.
 const MANIFEST: &str = "plugin.json";
@@ -26,13 +30,9 @@ const CSP: &str = "default-src 'none'; script-src 'self' 'unsafe-inline'; \
     style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; \
     connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; \
     sandbox allow-scripts";
-/// A plugin with more files than this (or more entries of any kind) is not read.
-const MAX_FILES: usize = 1000;
-/// A plugin whose served files add up to more than this is not read.
-const MAX_TOTAL: u64 = 64 << 20;
 
-/// What was approved for one plugin: the hash of each file it may serve, by relative path.
-type Pin = HashMap<String, String>;
+/// What a person is told about a bundled plugin whose files are not the ones the app shipped.
+const DAMAGED: &str = "This built-in plugin's files don't match the ones Folio shipped with, so it is turned off. Reinstall Folio to repair it.";
 
 /// The folders plugins live in, and the files approved to be served; managed state. `path` is the
 /// person's plugins folder (`None` when the system has no app data folder); `bundled` holds the
@@ -41,6 +41,10 @@ type Pin = HashMap<String, String>;
 pub struct PluginsDir {
     pub path: Option<PathBuf>,
     bundled: Option<PathBuf>,
+    /// The digest each bundled plugin had when the app was built. A bundled plugin whose files
+    /// differ, or that is not in this list, is damaged: it is listed with an error, can't be
+    /// turned on and serves nothing.
+    expected: HashMap<String, String>,
     /// A plugin serves nothing until the page pins it with the digest the person approved, and
     /// then only files whose bytes still hash to what the pin saw.
     pins: Mutex<HashMap<String, Pin>>,
@@ -48,11 +52,36 @@ pub struct PluginsDir {
 
 impl PluginsDir {
     pub fn new(path: Option<PathBuf>, bundled: Option<PathBuf>) -> Self {
+        let expected = BUNDLED_DIGESTS
+            .iter()
+            .map(|(id, digest)| ((*id).to_owned(), (*digest).to_owned()))
+            .collect();
+        Self::with_digests(path, bundled, expected)
+    }
+
+    /// Like `new`, with the digests the bundled plugins are expected to have (tests; the app
+    /// uses those fixed when it was built).
+    pub fn with_digests(
+        path: Option<PathBuf>,
+        bundled: Option<PathBuf>,
+        expected: HashMap<String, String>,
+    ) -> Self {
         Self {
             path,
             bundled,
+            expected,
             pins: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Whether the plugin `id` in `dir` is a bundled one, with the files it was built with.
+    fn bundled_matches(&self, id: &str, now: &str) -> bool {
+        self.expected.get(id).is_some_and(|d| d == now)
+    }
+
+    /// Whether `dir` is the folder of the plugins shipped with the app.
+    fn is_bundled_dir(&self, dir: &Path) -> bool {
+        self.bundled.as_deref() == Some(dir)
     }
 
     /// The folder that holds plugin `id`: the person's, else the app's own. A link there counts
@@ -76,11 +105,33 @@ impl PluginsDir {
                     .path
                     .as_deref()
                     .is_some_and(|p| std::fs::symlink_metadata(p.join(&f.id)).is_ok());
-                (!replaced).then_some(Found { bundled: true, ..f })
+                (!replaced).then(|| self.checked(f))
             }));
         }
         all.sort_by(|a, b| a.id.cmp(&b.id));
         all
+    }
+
+    /// A bundled plugin as it is offered: as found if its files are the ones the app was built
+    /// with, else damaged (no manifest, an error saying so), so it can't be turned on.
+    fn checked(&self, found: Found) -> Found {
+        let ok = found
+            .digest
+            .as_deref()
+            .is_some_and(|d| self.bundled_matches(&found.id, d));
+        if ok || found.manifest.is_none() {
+            return Found {
+                bundled: true,
+                ..found
+            };
+        }
+        Found {
+            id: found.id,
+            manifest: None,
+            error: Some(DAMAGED.to_owned()),
+            digest: None,
+            bundled: true,
+        }
     }
 
     /// Approves plugin `id` as it is on disk now, if that is exactly the code with `digest` (what
@@ -90,6 +141,13 @@ impl PluginsDir {
         let dir = self.root_of(id).ok_or("There is no such plugin")?;
         let home = plugin_home(dir, id).ok_or("Not a plugin folder")?;
         let result = snapshot(&home);
+        // A bundled plugin is approved only as the app was built with it.
+        let result = match result {
+            Ok((now, _)) if self.is_bundled_dir(dir) && !self.bundled_matches(id, &now) => {
+                Err(DAMAGED.to_owned())
+            }
+            other => other,
+        };
         let Ok(mut pins) = self.pins.lock() else {
             return Err("Plugins are unavailable".to_owned());
         };
@@ -211,57 +269,6 @@ pub fn digest(root: &Path) -> Result<String, String> {
     snapshot(root).map(|(digest, _)| digest)
 }
 
-/// The digest of the plugin in `root`, and the hash of each file it was made from. Each file is
-/// read once, so the two cannot disagree about what was there.
-fn snapshot(root: &Path) -> Result<(String, Pin), String> {
-    let mut files = Vec::new();
-    let mut seen = 0usize;
-    let mut total = 0u64;
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let read = std::fs::read_dir(&dir).map_err(|_| "A folder can't be read".to_owned())?;
-        for entry in read.flatten() {
-            seen += 1;
-            if seen > MAX_FILES * 5 {
-                return Err("The plugin has too many files".to_owned());
-            }
-            let Ok(kind) = entry.file_type() else {
-                continue;
-            };
-            let path = entry.path();
-            if kind.is_symlink() {
-                continue;
-            }
-            if kind.is_dir() {
-                stack.push(path);
-            } else if kind.is_file() && mime_of(&path).is_some() {
-                total += entry.metadata().map_or(0, |m| m.len());
-                if files.len() >= MAX_FILES || total > MAX_TOTAL {
-                    return Err("The plugin has too many or too large files".to_owned());
-                }
-                let rel = path.strip_prefix(root).unwrap_or(&path);
-                files.push((rel.to_string_lossy().replace('\\', "/"), path));
-            }
-        }
-    }
-    files.sort();
-    let mut hasher = blake3::Hasher::new();
-    let mut pin = Pin::new();
-    for (rel, path) in files {
-        let file = std::fs::File::open(&path).map_err(|_| format!("{rel} can't be read"))?;
-        let mut one = blake3::Hasher::new();
-        one.update_reader(file)
-            .map_err(|_| format!("{rel} can't be read"))?;
-        let hash = one.finalize().to_hex().to_string();
-        hasher.update(rel.as_bytes());
-        hasher.update(&[0]);
-        hasher.update(hash.as_bytes());
-        hasher.update(&[0]);
-        pin.insert(rel, hash);
-    }
-    Ok((hasher.finalize().to_hex().to_string(), pin))
-}
-
 /// The folder of plugin `id` under `dir`, if it is a real folder there and not a link (or a
 /// Windows junction) to somewhere else.
 fn plugin_home(dir: &Path, id: &str) -> Option<PathBuf> {
@@ -289,25 +296,6 @@ pub fn resolve(dir: &Path, id: &str, rel: &str) -> Option<PathBuf> {
     // Resolved on disk: a link inside the folder that leads outside it ends up elsewhere.
     let target = path.canonicalize().ok()?;
     (target.starts_with(&home) && target.is_file()).then_some(target)
-}
-
-/// The content type of a file a plugin may serve; other kinds are refused.
-fn mime_of(path: &Path) -> Option<&'static str> {
-    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
-    Some(match ext.as_str() {
-        "html" | "htm" => "text/html; charset=utf-8",
-        "js" | "mjs" => "text/javascript; charset=utf-8",
-        "css" => "text/css; charset=utf-8",
-        "json" => "application/json",
-        "txt" | "md" => "text/plain; charset=utf-8",
-        "svg" => "image/svg+xml",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "woff2" => "font/woff2",
-        _ => return None,
-    })
 }
 
 /// The answer for a plugin file that is not there (or that plugins are not set up).
@@ -615,11 +603,26 @@ mod tests {
         b
     }
 
+    /// Plugins with the person's folder `dir` and the bundle `b`, whose digests are the ones the
+    /// bundled plugins have now, as the build script would have fixed them.
+    fn built(dir: &Path, b: &Path) -> PluginsDir {
+        let expected = std::fs::read_dir(b)
+            .unwrap()
+            .flatten()
+            .map(|e| {
+                let id = e.file_name().to_string_lossy().into_owned();
+                let d = digest(&e.path()).unwrap();
+                (id, d)
+            })
+            .collect();
+        PluginsDir::with_digests(Some(dir.to_path_buf()), Some(b.to_path_buf()), expected)
+    }
+
     #[test]
     fn bundled_plugins_are_listed_marked_and_served_like_any_other() {
         let (dir, _) = setup();
         let b = bundle();
-        let plugins = PluginsDir::new(Some(dir.path().to_path_buf()), Some(b.path().to_path_buf()));
+        let plugins = built(dir.path(), b.path());
         let all = plugins.list_all();
         let seen: Vec<(&str, bool)> = all.iter().map(|f| (f.id.as_str(), f.bundled)).collect();
         // The person's `demo` replaces the bundled one of the same name.
@@ -644,7 +647,7 @@ mod tests {
     fn a_plugin_in_the_persons_folder_hides_the_bundled_one_of_its_name() {
         let (dir, _) = setup();
         let b = bundle();
-        let plugins = PluginsDir::new(Some(dir.path().to_path_buf()), Some(b.path().to_path_buf()));
+        let plugins = built(dir.path(), b.path());
         // The bundled `demo`'s digest is not the one on disk in the person's folder.
         let bundled_digest = digest(&b.path().join("demo")).unwrap();
         assert!(plugins.pin("demo", &bundled_digest).is_err());
@@ -670,6 +673,162 @@ mod tests {
         assert_eq!(
             handle(&plugins, &request("/demo/big.js")).status(),
             StatusCode::PAYLOAD_TOO_LARGE
+        );
+    }
+
+    #[test]
+    fn a_bundled_plugin_with_a_changed_byte_is_damaged_and_cannot_be_approved() {
+        let (dir, _) = setup();
+        let b = bundle();
+        let plugins = built(dir.path(), b.path());
+        let before = plugins.list_all();
+        let text = before.iter().find(|f| f.id == "text").unwrap();
+        assert!(text.manifest.is_some() && text.error.is_none() && text.bundled);
+        let good = text.digest.clone().unwrap();
+
+        // Someone with write access to the install folder changes one byte.
+        std::fs::write(b.path().join("text/index.html"), "<p>built-in</p>").unwrap();
+        let after = plugins.list_all();
+        let text = after.iter().find(|f| f.id == "text").unwrap();
+        assert!(text.manifest.is_none(), "nothing to turn on");
+        assert!(text.digest.is_none());
+        assert!(text.bundled);
+        assert!(
+            text.error
+                .as_deref()
+                .is_some_and(|e| e.contains("don't match")),
+            "{:?}",
+            text.error
+        );
+        // Not even the digest of the files as shipped approves it, nor the digest of what is there.
+        assert!(plugins.pin("text", &good).is_err());
+        assert!(
+            plugins
+                .pin("text", &digest(&b.path().join("text")).unwrap())
+                .is_err()
+        );
+        assert_eq!(
+            handle(&plugins, &request("/text/index.html")).status(),
+            StatusCode::FORBIDDEN
+        );
+        // The plugins that were not touched are still fine.
+        assert!(
+            after
+                .iter()
+                .filter(|f| f.id != "text")
+                .all(|f| f.error.is_none())
+        );
+
+        // Put back as it was built, it is offered again.
+        std::fs::write(b.path().join("text/index.html"), "<p>built in</p>").unwrap();
+        assert!(plugins.list_all().iter().all(|f| f.error.is_none()));
+        assert!(plugins.pin("text", &good).is_ok());
+    }
+
+    #[test]
+    fn a_file_added_to_or_removed_from_a_bundled_plugin_damages_it_too() {
+        let (dir, _) = setup();
+        let b = bundle();
+        let plugins = built(dir.path(), b.path());
+        std::fs::write(b.path().join("text/extra.js"), "alert(1)").unwrap();
+        let all = plugins.list_all();
+        assert!(all.iter().find(|f| f.id == "text").unwrap().error.is_some());
+        std::fs::remove_file(b.path().join("text/extra.js")).unwrap();
+        std::fs::remove_file(b.path().join("text/index.html")).unwrap();
+        let all = plugins.list_all();
+        assert!(all.iter().find(|f| f.id == "text").unwrap().error.is_some());
+    }
+
+    #[test]
+    fn a_folder_in_the_bundle_that_the_build_did_not_know_is_damaged() {
+        let (dir, _) = setup();
+        let b = bundle();
+        let plugins = built(dir.path(), b.path());
+        std::fs::create_dir(b.path().join("extra")).unwrap();
+        std::fs::write(b.path().join("extra/plugin.json"), r#"{"id":"extra"}"#).unwrap();
+        let all = plugins.list_all();
+        let extra = all.iter().find(|f| f.id == "extra").unwrap();
+        assert!(extra.manifest.is_none() && extra.error.is_some() && extra.bundled);
+        assert!(
+            plugins
+                .pin("extra", &digest(&b.path().join("extra")).unwrap())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_persons_plugin_replaces_a_damaged_bundled_one_and_is_approved_on_its_own_files() {
+        let (dir, _) = setup();
+        let b = bundle();
+        let plugins = built(dir.path(), b.path());
+        // Damage the bundled `demo`, which the person's own `demo` replaces.
+        std::fs::write(b.path().join("demo/index.html"), "<p>tampered</p>").unwrap();
+        let all = plugins.list_all();
+        let demo: Vec<_> = all.iter().filter(|f| f.id == "demo").collect();
+        assert_eq!(demo.len(), 1);
+        assert!(
+            !demo[0].bundled && demo[0].error.is_none(),
+            "the person's, as it is"
+        );
+        assert!(
+            plugins
+                .pin("demo", demo[0].digest.as_deref().unwrap())
+                .is_ok()
+        );
+        assert_eq!(
+            handle(&plugins, &request("/demo/index.html")).body(),
+            b"<p>hi</p>"
+        );
+    }
+
+    #[test]
+    fn the_digests_fixed_at_build_time_are_those_of_the_plugins_that_ship() {
+        let shipped = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/plugins");
+        let on_disk: Vec<String> = {
+            let mut ids: Vec<String> = std::fs::read_dir(&shipped)
+                .unwrap()
+                .flatten()
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+            ids.sort();
+            ids
+        };
+        let mut built: Vec<&str> = BUNDLED_DIGESTS.iter().map(|(id, _)| *id).collect();
+        built.sort_unstable();
+        assert_eq!(
+            built, on_disk,
+            "every shipped plugin has a digest, and no other does"
+        );
+        for (id, fixed) in BUNDLED_DIGESTS {
+            assert_eq!(&digest(&shipped.join(id)).unwrap(), fixed, "{id}");
+        }
+        // The app as built offers all of them, undamaged.
+        let plugins = PluginsDir::new(None, Some(shipped));
+        let all = plugins.list_all();
+        assert_eq!(all.len(), on_disk.len());
+        assert!(
+            all.iter().all(|f| f.bundled && f.error.is_none()),
+            "{all:?}"
+        );
+    }
+
+    #[test]
+    fn with_no_digests_from_the_build_every_bundled_plugin_is_damaged() {
+        let (dir, _) = setup();
+        let b = bundle();
+        let plugins = PluginsDir::with_digests(
+            Some(dir.path().to_path_buf()),
+            Some(b.path().to_path_buf()),
+            HashMap::new(),
+        );
+        let all = plugins.list_all();
+        let text = all.iter().find(|f| f.id == "text").unwrap();
+        assert!(text.manifest.is_none() && text.error.is_some());
+        assert!(
+            plugins
+                .pin("text", &digest(&b.path().join("text")).unwrap())
+                .is_err()
         );
     }
 }

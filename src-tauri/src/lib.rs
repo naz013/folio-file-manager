@@ -20,6 +20,7 @@ mod mft;
 mod ops;
 mod perf;
 mod platform;
+mod plugin_digest;
 mod plugins;
 mod preview;
 mod queue;

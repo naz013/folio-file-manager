@@ -89,6 +89,13 @@ its frame to a plugin address either. Never add a plugin address to that policy,
   start of the file: UTF-16 by the pattern of zero bytes, Windows-1252 if not valid UTF-8) and say
   which they used; a page may choose one of four. Offsets stay bytes and pieces start and end on
   whole characters in every encoding, so a page needs no decoder of its own.
+- **Bundled digests at build time.** `build.rs` hashes each bundled plugin folder with the app's
+  own digest rule (one shared file, `plugin_digest.rs`) and embeds the result. A bundled plugin
+  whose installed files differ, or that the build did not know, is listed as damaged, can't be
+  turned on and can't be pinned. A plugin of the same id in the person's folder still replaces the
+  bundled one and is approved on its own files. This is a barrier against changing the plugin
+  files alone: the digests are in the executable, so a writer of the executable can change them
+  too (signing and a protected install folder cover that).
 - **Not closed**: a DNS lookup from a page may still leak a few bytes (see `docs/PLUGINS.md`).
 
 ## Consequences

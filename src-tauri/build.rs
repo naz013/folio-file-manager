@@ -1,7 +1,14 @@
+use std::fmt::Write as _;
+use std::path::Path;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+// The rule that makes a plugin's digest is the app's own: one file, used by both.
+#[path = "src/plugin_digest.rs"]
+mod plugin_digest;
+
 fn main() {
+    bundled_plugin_digests();
     // What the About dialog shows, so a bug report says which build it is about. A build
     // outside a git checkout (a source tarball) has no commit to name.
     let commit = std::env::var("FOLIO_COMMIT")
@@ -24,11 +31,64 @@ fn main() {
         common_dir.map(|d| format!("{d}/packed-refs")),
     ];
     for path in watched.into_iter().flatten() {
-        if std::path::Path::new(&path).exists() {
+        if Path::new(&path).exists() {
             println!("cargo:rerun-if-changed={path}");
         }
     }
+    drop_stale_plugin_copy();
     tauri_build::build();
+}
+
+/// Hashes each plugin folder under `resources/plugins/` with the app's own digest rule and
+/// writes the result for the app to include. A bundled plugin whose files on disk later differ
+/// (someone with write access to the install folder changed them) no longer matches it.
+fn bundled_plugin_digests() {
+    let root = Path::new("resources/plugins");
+    println!("cargo:rerun-if-changed=resources/plugins");
+    let mut digests = Vec::new();
+    if let Ok(read) = std::fs::read_dir(root) {
+        for entry in read.flatten() {
+            if !entry
+                .file_type()
+                .is_ok_and(|t| t.is_dir() && !t.is_symlink())
+            {
+                continue;
+            }
+            let id = entry.file_name().to_string_lossy().into_owned();
+            let (digest, _) = plugin_digest::snapshot(&entry.path())
+                .unwrap_or_else(|why| panic!("bundled plugin {id}: {why}"));
+            digests.push((id, digest));
+        }
+    }
+    digests.sort();
+    let mut code =
+        String::from("/// The digest of each bundled plugin, fixed when the app was built.\n");
+    code.push_str("pub const BUNDLED_DIGESTS: &[(&str, &str)] = &[\n");
+    for (id, digest) in &digests {
+        // Writing to a String can't fail.
+        let _ = writeln!(code, "    ({id:?}, {digest:?}),");
+    }
+    code.push_str("];\n");
+    let out = std::env::var("OUT_DIR").expect("OUT_DIR is set by cargo");
+    std::fs::write(Path::new(&out).join("bundled_digests.rs"), code)
+        .expect("bundled_digests.rs can be written");
+}
+
+/// In a dev or test run the app reads its bundled plugins from a copy next to the executable
+/// (`target/<profile>/plugins`). The copy adds and overwrites files but never removes one deleted
+/// or renamed in the source, and a stale file would make the folder differ from the digest fixed
+/// above. The copy is a build product: it is removed here and made again just after.
+fn drop_stale_plugin_copy() {
+    let Ok(out) = std::env::var("OUT_DIR") else {
+        return;
+    };
+    // OUT_DIR is `target/<profile>/build/<crate>-<hash>/out`.
+    if let Some(profile) = Path::new(&out).ancestors().nth(3) {
+        let copy = profile.join("plugins");
+        if copy.is_dir() {
+            let _ = std::fs::remove_dir_all(copy);
+        }
+    }
 }
 
 fn git(args: &[&str]) -> Option<String> {
