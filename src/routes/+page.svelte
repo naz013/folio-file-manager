@@ -50,6 +50,7 @@
     onDirChanged,
     openPath,
     onCloseBlocked,
+    onMenuAction,
     onQueueUpdate,
     openWindow,
     joinPath,
@@ -97,7 +98,17 @@
   import { formatSize } from "$lib/format";
   import { editableImage, previewKind } from "$lib/preview";
   import { sizeKey, sortEntries, type SortKey, type SortState } from "$lib/sort";
-  import { forSystem, hintFor, matchShortcut, type ScopeId } from "$lib/shortcuts";
+  import {
+    binName,
+    forSystem,
+    hintFor,
+    matchShortcut,
+    SHORTCUTS,
+    type ScopeId,
+  } from "$lib/shortcuts";
+
+  /** What this system calls its bin. */
+  const bin = binName();
   import ConflictDialog from "$lib/components/ConflictDialog.svelte";
   import ContextMenu, { type MenuItem } from "$lib/components/ContextMenu.svelte";
   import QuickLook from "$lib/components/QuickLook.svelte";
@@ -438,7 +449,7 @@
             },
             "separator",
             {
-              label: "Move to Recycle Bin",
+              label: `Move to ${bin}`,
               hint: hintFor("trash"),
               danger: true,
               run: () => trashPaneItems(paths),
@@ -1177,24 +1188,24 @@
         ? ` ${plural(leftAlone, "item")} changed before it could be deleted and was left alone.`
         : "";
       const full = noRoom
-        ? ` ${plural(noRoom, "item")} did not fit in the Recycle Bin and ${noRoom === 1 ? "was" : "were"} left alone: empty it and try again.`
+        ? ` ${plural(noRoom, "item")} did not fit in the ${bin} and ${noRoom === 1 ? "was" : "were"} left alone: empty it and try again.`
         : "";
       // Never deleted for good in its place: Folio leaves alone what is on a drive with no
       // Recycle Bin (network, removable, or set to delete at once), and what is in one already.
       const nobin = noBin
-        ? ` ${plural(noBin, "item")} ${noBin === 1 ? "was" : "were"} left alone: not on a drive with a Recycle Bin, or already in one. Folio does not delete items on such a drive for good.`
+        ? ` ${plural(noBin, "item")} ${noBin === 1 ? "was" : "were"} left alone: not on a drive with a ${bin}, or already in one. Folio does not delete items on such a drive for good.`
         : "";
       if (unconfirmed) {
         // Never say "moved" for what may be gone for good; keep the row so it is read.
         notify(
-          `${plural(unconfirmed, "item")} left without a Recycle Bin entry and may have been deleted permanently (the bin may be turned off or full).${count ? ` ${plural(count, "item")} moved to the Recycle Bin.` : ""}${note}${full}${nobin}`,
+          `${plural(unconfirmed, "item")} left without a ${bin} entry and may have been deleted permanently (the bin may be turned off or full).${count ? ` ${plural(count, "item")} moved to the ${bin}.` : ""}${note}${full}${nobin}`,
           true,
         );
         refresh([]);
         return;
       }
       notify(
-        `${count ? `Moved ${plural(count, "item")} to Recycle Bin.` : "Nothing was moved to the Recycle Bin."}${note}${full}${nobin}`,
+        `${count ? `Moved ${plural(count, "item")} to ${bin}.` : `Nothing was moved to the ${bin}.`}${note}${full}${nobin}`,
         leftAlone > 0 || !!noRoom || !!noBin,
       );
       // Finished and quiet: no need to keep the row around.
@@ -2237,7 +2248,7 @@
         () => (bulkOpen = true),
         selected().length > 1,
       ),
-      ...action("Move to Recycle Bin", hintFor("trash"), trashSelected, any),
+      ...action(`Move to ${bin}`, hintFor("trash"), trashSelected, any),
       ...action("Quick Look", hintFor("quickLook"), openQuickLook, any),
       ...action("Tags…", undefined, () => (tagsOpen = true), any),
       ...action("New smart folder…", undefined, () => (smartDialog = { folder: null })),
@@ -2327,7 +2338,7 @@
       ...action("Keyboard shortcuts", hintFor("shortcuts"), () => (shortcutsOpen = true)),
       ...action("Help", hintFor("help"), () => (helpOpen = true)),
       ...action("About Folio", undefined, () => (aboutOpen = true)),
-      ...action("Recycle Bin", "", () => navigate(BIN_PATH)),
+      ...action(bin, "", () => navigate(BIN_PATH)),
       ...action("Storage breakdown", "", () => showScreen(STORAGE_PATH)),
       ...action("Plugins", "", () => showScreen(PLUGINS_PATH)),
       ...action("All tags", "", () => showScreen(TAGS_PATH)),
@@ -2492,7 +2503,7 @@
         ? [{ label: "PDF tools…", run: () => openPdfTools(one ?? undefined) }]
         : []),
       ...(one && isEditable(one) ? [{ label: "Image tools…", run: () => (imageTools = one) }] : []),
-      { label: "Move to Recycle Bin", hint: hintFor("trash"), danger: true, run: trashSelected },
+      { label: `Move to ${bin}`, hint: hintFor("trash"), danger: true, run: trashSelected },
       "separator",
       { label: "More options", run: () => nativeMenu([...selection]) },
       ...pluginItems(),
@@ -2732,6 +2743,46 @@
     clear: () => clearSelectionAndClipboard,
   };
 
+  /** The commands the macOS menu can run, each with no key press to read. */
+  const MENU_IDS = new Set<string>([
+    ...["settings", "palette", "goTo", "search", "shortcuts", "help", "inspector"],
+    ...["panes", "paneSwitch", "tabNew", "tabClose", "newFolder", "open", "quickLook", "rename"],
+    ...["trash", "back", "forward", "up", "hidden", "copy", "cut", "paste", "selectAll"],
+    ...["undo", "redo"],
+  ]);
+
+  /**
+   * A command picked in the macOS app menu. It runs the handler of the shortcut with that id
+   * under the same rules as its keys: nothing behind a dialog or Quick Look, and the commands
+   * for files not while renaming or on a screen that isn't a list of files. In a text field
+   * the editing commands act on the text instead.
+   */
+  async function runMenuAction(id: string) {
+    if (!MENU_IDS.has(id) || !(id in keyHandlers)) return;
+    if (dialogOpen() || look) return;
+    const field = document.activeElement;
+    const typing = field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement;
+    const everywhere = SHORTCUTS.some((s) => s.id === id && s.scope === "tabs");
+    if (typing) {
+      if (id === "paste") {
+        const text = await navigator.clipboard.readText().catch(() => "");
+        field.setRangeText(text, field.selectionStart ?? 0, field.selectionEnd ?? 0, "end");
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+      } else if (["copy", "cut", "selectAll", "undo", "redo"].includes(id)) {
+        document.execCommand(id);
+      }
+      if (!everywhere) return;
+    } else if (!everywhere && (renaming || sideActive || (place && !inBin))) return;
+    const stand = {
+      key: "",
+      shiftKey: false,
+      altKey: false,
+      repeat: false,
+      target: field ?? document.body,
+    };
+    keyHandlers[id as keyof typeof keyHandlers](stand as unknown as KeyboardEvent)?.();
+  }
+
   /** Tab shortcuts. They work everywhere, including while a text field has focus. */
   function tabShortcut(e: KeyboardEvent): Action | null {
     const found = matchShortcut(e, "tabs");
@@ -2744,11 +2795,9 @@
     return found ? keyHandlers[found.id](e) : null;
   }
 
-  function onkeydown(e: KeyboardEvent) {
-    // The webview would reload the page, losing every tab and its state.
-    if (e.key === "F5") e.preventDefault();
-    // A dialog handles its own keys; nothing behind it may act on them.
-    if (
+  /** Whether a dialog is open: it handles its own keys, and nothing behind it may act. */
+  function dialogOpen(): boolean {
+    return !!(
       asking ||
       menu ||
       askCrash ||
@@ -2763,8 +2812,13 @@
       !!notesVersion ||
       bulkOpen ||
       paletteOpen
-    )
-      return;
+    );
+  }
+
+  function onkeydown(e: KeyboardEvent) {
+    // The webview would reload the page, losing every tab and its state.
+    if (e.key === "F5") e.preventDefault();
+    if (dialogOpen()) return;
     if (look) {
       // Quick Look owns the keyboard, but the audio and video controls keep Space and the
       // arrows (play, seek, volume).
@@ -2806,6 +2860,7 @@
         notify(d.note ? `${done}. Fast scan was not used: ${d.note}` : done);
       }
     });
+    const unlistenMenu = onMenuAction(runMenuAction);
     const unlistenBlocked = onCloseBlocked(() =>
       notify("Operations are still running. Wait for them, or cancel them, before closing.", true),
     );
@@ -2888,6 +2943,7 @@
       unlistenQueue.then((u) => u());
       unlistenScan.then((u) => u());
       unlistenBlocked.then((u) => u());
+      unlistenMenu.then((u) => u());
       unlistenDrop.then((u) => u());
       unlistenClose.then((u) => u());
     };
@@ -3389,7 +3445,7 @@
       style:top="{inAppDrag.y + 14}px"
     >
       {dropTarget === BIN_PATH
-        ? `Move ${plural(trashable(inAppDrag.paths).length, "item")} to Recycle Bin`
+        ? `Move ${plural(trashable(inAppDrag.paths).length, "item")} to ${bin}`
         : plural(inAppDrag.paths.length, "item")}
     </div>
   {/if}

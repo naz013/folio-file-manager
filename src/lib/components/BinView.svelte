@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { binName } from "$lib/shortcuts";
   import { binList, binPurge, binRestore, binSizes, type BinItem, type BinSize } from "$lib/api/fs";
   import { formatDate, formatSize } from "$lib/format";
   import EmptyState from "./EmptyState.svelte";
@@ -92,11 +93,13 @@
       asking = null;
     }
   }
+
+  const bin = binName();
 </script>
 
 <!-- Only answers Escape for the confirmation inside it. -->
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-<section class="bin" class:dropping aria-label="Recycle Bin" data-drop-bin {onkeydown}>
+<section class="bin" class:dropping aria-label={bin} data-drop-bin {onkeydown}>
   <header>
     <span class="note">{items.length} {items.length === 1 ? "item" : "items"}</span>
     <span class="grow"></span>
@@ -107,7 +110,7 @@
       Delete permanently…
     </button>
     <button class="danger" disabled={!items.length || busy} onclick={() => (asking = "all")}>
-      Empty Recycle Bin…
+      Empty {bin}…
     </button>
   </header>
 
@@ -115,7 +118,7 @@
     <div class="confirm" role="alertdialog" aria-label="Confirm deleting for good">
       <p>
         Delete {asked.length === 1 ? `"${asked[0].name}"` : `${asked.length} items`} permanently? This
-        can't be undone, and nothing can be brought back from the Recycle Bin.
+        can't be undone, and nothing can be brought back from the {bin}.
       </p>
       <button onclick={() => (asking = null)}>Cancel</button>
       <button class="danger" disabled={busy} onclick={purge}>Delete permanently</button>
@@ -127,14 +130,14 @@
   {/if}
 
   {#if loading && !items.length}
-    <EmptyState icon="trash" text="Reading the Recycle Bin…" />
+    <EmptyState icon="trash" text={`Reading the ${bin}…`} />
   {:else if !items.length}
     <EmptyState
       icon="trash"
-      text="The Recycle Bin is empty. Deleted files wait here until you empty it."
+      text={`The ${bin} is empty. Deleted files wait here until you empty it.`}
     />
   {:else}
-    <ul class="list" aria-label="Items in the Recycle Bin">
+    <ul class="list" aria-label={`Items in the ${bin}`}>
       {#each items as item (item.id)}
         <li class:chosen={chosen.includes(item.id)}>
           <label>

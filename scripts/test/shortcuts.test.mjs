@@ -23,6 +23,8 @@ function press(text) {
     metaKey: mods.includes("Cmd"),
     shiftKey: mods.includes("Shift"),
     altKey: mods.includes("Alt"),
+    // The physical key, for the chords that name one.
+    code: key === "." ? "Period" : undefined,
   };
 }
 
@@ -43,6 +45,8 @@ test("no key press means two shortcuts of one scope", () => {
   // Every chord, written as the key press that satisfies it, must find its own shortcut first.
   for (const s of SHORTCUTS) {
     for (const c of s.chords) {
+      // A key for a Mac only can't be tried here, where the system isn't one.
+      if (c.mac === true) continue;
       const e = {
         key: c.key,
         ctrlKey: c.ctrl === true,
@@ -184,7 +188,7 @@ test("on a Mac the list says Cmd and Option, except where the keys really are Ct
   const rows = shortcutGroups(true).flatMap((g) => g.items);
   const keysOf = (does) => rows.find((r) => r.does === does)?.keys;
   assert.equal(keysOf("Copy"), "⌘+C");
-  assert.equal(keysOf("Back"), "⌥+←");
+  assert.equal(keysOf("Back"), "⌘[  /  ⌥←");
   // Cycling tabs and zooming by scroll are Control, not Command, on a Mac.
   assert.equal(keysOf("Zoom a picture"), "Pinch  /  Ctrl+scroll");
   assert.ok(rows.some((r) => r.keys === "Ctrl+Tab  /  Ctrl+Shift+Tab"));
@@ -192,4 +196,55 @@ test("on a Mac the list says Cmd and Option, except where the keys really are Ct
   // F1 is the shortcuts list and Shift+F1 is Help: neither takes the other's key.
   assert.equal(matchShortcut(press("F1"), "tabs")?.id, "shortcuts");
   assert.equal(matchShortcut(press("Shift+F1"), "tabs")?.id, "help");
+});
+
+test("Mac-only keys work on a Mac and nowhere else", async () => {
+  const { matchShortcutOn } = await import("../../src/lib/shortcuts.ts");
+  const on = (mac, text) => matchShortcutOn(mac, press(text), "files")?.id ?? null;
+  // Cmd+Backspace trashes on a Mac; Ctrl+Backspace on Windows must not.
+  assert.equal(on(true, "Cmd+Backspace"), "trash");
+  assert.notEqual(on(false, "Ctrl+Backspace"), "trash");
+  assert.equal(on(true, "Cmd+ArrowUp"), "up");
+  assert.equal(on(false, "Ctrl+ArrowUp"), "move");
+  assert.equal(on(true, "Cmd+["), "back");
+  assert.equal(on(true, "Cmd+]"), "forward");
+  assert.equal(on(false, "Ctrl+["), null);
+  // Cmd+H hides the app on a Mac; the hidden-files key there is Cmd+Shift+.
+  assert.equal(on(true, "Cmd+Shift+."), "hidden");
+  // With Shift held the key reads ">" on a US layout; the physical key still names it.
+  assert.equal(
+    matchShortcutOn(true, { ...press("Cmd+Shift+>"), code: "Period" }, "files")?.id,
+    "hidden",
+  );
+  assert.equal(on(true, "Cmd+h"), null);
+  assert.equal(on(false, "Ctrl+h"), "hidden");
+  assert.equal(on(false, "Ctrl+Shift+."), null);
+  // Plain Delete and the shared Cmd/Ctrl keys are the same on both.
+  assert.equal(on(true, "Delete"), "trash");
+  assert.equal(on(true, "Cmd+c"), "copy");
+});
+
+test("the list writes Mac keys and the system's name for its bin", async () => {
+  const { binNameFor } = await import("../../src/lib/shortcuts.ts");
+  assert.equal(binNameFor(true), "Recycle Bin");
+  assert.equal(binNameFor(false), "Trash");
+  const find = (groups, does) => groups.flatMap((g) => g.items).find((i) => i.does === does);
+  const mac = shortcutGroups(true, "Trash");
+  assert.equal(find(mac, "Move to the Trash").keys, "Delete  /  ⌘Backspace");
+  assert.equal(find(mac, "Show or hide hidden files").keys, "⌘⇧.");
+  assert.equal(find(mac, "Back").keys, "⌘[  /  ⌥←");
+  assert.equal(find(mac, "Copy").keys, "⌘+C");
+  const win = shortcutGroups(false, "Recycle Bin");
+  assert.equal(find(win, "Move to the Recycle Bin").keys, "Delete");
+  assert.equal(find(win, "Show or hide hidden files").keys, "Ctrl+H");
+  assert.ok(!win.flatMap((g) => g.items).some((i) => i.does.includes("{bin}")));
+});
+
+test("every command in the macOS menu is a shortcut of the page", async () => {
+  const { readFileSync } = await import("node:fs");
+  const rs = readFileSync(new URL("../../src-tauri/src/app_menu.rs", import.meta.url), "utf8");
+  const ids = [...rs.matchAll(/entry\("(\w+)",/g)].map((m) => m[1]);
+  assert.ok(ids.length > 10, "found the menu entries");
+  const known = new Set(SHORTCUTS.map((s) => s.id));
+  for (const id of ids) assert.ok(known.has(id), `${id} has no shortcut`);
 });

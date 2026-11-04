@@ -2,6 +2,7 @@ import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { ArchiveListing } from "$lib/archive";
+import { binName } from "$lib/shortcuts";
 import type { ImageInfo } from "$lib/imageinfo";
 
 /** A directory entry (decoded from `fs::Entry` in src-tauri/src/fs/mod.rs). */
@@ -212,7 +213,7 @@ export const TAGS_PATH = "folio:tags";
 export type Place = "bin" | "storage" | "cleanup" | "settings" | "plugins" | "tags";
 
 const PLACES: Record<string, { place: Place; title: string }> = {
-  [BIN_PATH]: { place: "bin", title: "Recycle Bin" },
+  [BIN_PATH]: { place: "bin", title: binName() },
   [STORAGE_PATH]: { place: "storage", title: "Storage" },
   [CLEANUP_PATH]: { place: "cleanup", title: "Cleanup" },
   [SETTINGS_PATH]: { place: "settings", title: "Settings" },
@@ -645,6 +646,9 @@ export interface Job {
 /** Fires whenever a job started from this window changes. */
 export const onQueueUpdate = (cb: (job: Job) => void): Promise<UnlistenFn> =>
   getCurrentWebviewWindow().listen<Job>("queue-update", (e) => cb(e.payload));
+/** A command chosen in the macOS app menu: the id of the shortcut it stands for. */
+export const onMenuAction = (cb: (id: string) => void): Promise<UnlistenFn> =>
+  getCurrentWebviewWindow().listen<string>("menu-action", (e) => cb(e.payload));
 /** Fires when closing this window was refused because its operations are still going. */
 export const onCloseBlocked = (cb: () => void): Promise<UnlistenFn> =>
   getCurrentWebviewWindow().listen("queue-close-blocked", () => cb());

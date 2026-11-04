@@ -15,6 +15,10 @@ export interface Chord {
   /** Left out: whether it is held doesn't matter. `false`: it must not be held. */
   shift?: boolean;
   alt?: boolean;
+  /** Match the physical key (`KeyboardEvent.code`) instead of `key`, which Shift changes. */
+  code?: string;
+  /** `true`: only on a Mac. `false`: only elsewhere. Left out: everywhere. */
+  mac?: boolean;
 }
 
 /**
@@ -31,9 +35,12 @@ export interface Shortcut {
   group: string;
   /** How it is written in the list: "Ctrl+C". Where several keys do the same, they are joined. */
   keys: string;
+  /** What it does. `{bin}` is the system's name for its bin: Recycle Bin, or Trash. */
   does: string;
   /** Written as it is on every system: the keys are not Ctrl and Alt in the way a Mac swaps them. */
   plain?: boolean;
+  /** How it is written on a Mac when that isn't `keys` with Cmd and Option swapped in. */
+  macKeys?: string;
   /** What the command palette shows beside it, if shorter than `keys`. */
   hint?: string;
   /** The key presses that mean it, tried in order of the list below. Empty for a gesture. */
@@ -155,8 +162,9 @@ export const SHORTCUTS = [
     scope: "files",
     group: "Files",
     keys: "Delete",
-    does: "Move to the Recycle Bin",
-    chords: [{ key: "Delete" }],
+    macKeys: "Delete  /  ⌘Backspace",
+    does: "Move to the {bin}",
+    chords: [{ key: "Delete" }, { key: "Backspace", ctrl: true, shift: false, mac: true }],
   },
   {
     id: "undo",
@@ -207,24 +215,36 @@ export const SHORTCUTS = [
     scope: "files",
     group: "Moving around",
     keys: "Alt+←",
+    macKeys: "⌘[  /  ⌥←",
     does: "Back",
-    chords: [{ key: "ArrowLeft", alt: true }],
+    chords: [
+      { key: "ArrowLeft", alt: true },
+      { key: "[", ctrl: true, mac: true },
+    ],
   },
   {
     id: "forward",
     scope: "files",
     group: "Moving around",
     keys: "Alt+→",
+    macKeys: "⌘]  /  ⌥→",
     does: "Forward",
-    chords: [{ key: "ArrowRight", alt: true }],
+    chords: [
+      { key: "ArrowRight", alt: true },
+      { key: "]", ctrl: true, mac: true },
+    ],
   },
   {
     id: "up",
     scope: "files",
     group: "Moving around",
     keys: "Alt+↑",
+    macKeys: "⌘↑  /  ⌥↑",
     does: "Up one folder",
-    chords: [{ key: "ArrowUp", alt: true }],
+    chords: [
+      { key: "ArrowUp", alt: true },
+      { key: "ArrowUp", ctrl: true, alt: false, mac: true },
+    ],
   },
   {
     id: "upBackspace",
@@ -343,8 +363,13 @@ export const SHORTCUTS = [
     scope: "files",
     group: "Window",
     keys: "Ctrl+H",
+    // ⌘H hides the app on a Mac.
+    macKeys: "⌘⇧.",
     does: "Show or hide hidden files",
-    chords: [{ key: "h", ctrl: true, shift: false }],
+    chords: [
+      { key: "h", ctrl: true, shift: false, mac: false },
+      { key: ".", code: "Period", ctrl: true, shift: true, mac: true },
+    ],
   },
   {
     id: "inspector",
@@ -463,12 +488,15 @@ export interface KeyLike {
   metaKey: boolean;
   shiftKey: boolean;
   altKey: boolean;
+  /** The physical key, for chords that name one. */
+  code?: string;
 }
 
 /** Whether the key press is this chord: what is required is held, what is barred is not. */
-export function chordMatches(chord: Chord, e: KeyLike): boolean {
+export function chordMatches(chord: Chord, e: KeyLike, mac = onMac()): boolean {
+  if (chord.mac !== undefined && chord.mac !== mac) return false;
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-  if (key !== chord.key) return false;
+  if (chord.code === undefined ? key !== chord.key : e.code !== chord.code) return false;
   if (chord.ctrl !== undefined && (e.ctrlKey || e.metaKey) !== chord.ctrl) return false;
   if (chord.shift !== undefined && e.shiftKey !== chord.shift) return false;
   if (chord.alt !== undefined && e.altKey !== chord.alt) return false;
@@ -480,16 +508,35 @@ export function matchShortcut<S extends Scope>(
   e: KeyLike,
   ...scopes: S[]
 ): Extract<Declared, { scope: S }> | null {
+  return matchShortcutOn(onMac(), e, ...scopes);
+}
+
+/** `matchShortcut` for a given system rather than the one running. */
+export function matchShortcutOn<S extends Scope>(
+  mac: boolean,
+  e: KeyLike,
+  ...scopes: S[]
+): Extract<Declared, { scope: S }> | null {
   const found = SHORTCUTS.find(
     (s) =>
       (scopes as Scope[]).includes(s.scope) &&
-      (s.chords as readonly Chord[]).some((c) => chordMatches(c, e)),
+      (s.chords as readonly Chord[]).some((c) => chordMatches(c, e, mac)),
   );
   return (found ?? null) as Extract<Declared, { scope: S }> | null;
 }
 
 /** Whether keys are written for a Mac: Cmd and Option in place of Ctrl and Alt. */
 export const onMac = () => typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
+
+/** The system's name for its bin: Windows has a Recycle Bin, a Mac and Linux a Trash. */
+export const binNameFor = (windows: boolean): string => (windows ? "Recycle Bin" : "Trash");
+
+/** Whether this is Windows. */
+export const onWindows = () =>
+  typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
+
+/** What this system calls its bin. */
+export const binName = () => binNameFor(onWindows());
 
 /** Writes the keys for this system. */
 export function forSystem(keys: string, mac = onMac()): string {
@@ -500,7 +547,9 @@ const byId = new Map<string, Shortcut>(SHORTCUTS.map((s) => [s.id, s]));
 
 /** `keys` of `shortcut` as shown: for this system, unless the shortcut is the same everywhere. */
 const written = (shortcut: Shortcut, keys: string, mac = onMac()) =>
-  shortcut.plain ? keys : forSystem(keys, mac);
+  shortcut.plain
+    ? keys
+    : forSystem(mac && shortcut.macKeys && keys === shortcut.keys ? shortcut.macKeys : keys, mac);
 
 /** What the command palette shows beside an action for the shortcut with this id. */
 export function hintFor(id: ShortcutId): string {
@@ -514,12 +563,12 @@ export interface ShortcutGroup {
 }
 
 /** The shortcuts by group, in the order they are declared, for the list. */
-export function shortcutGroups(mac = onMac()): ShortcutGroup[] {
+export function shortcutGroups(mac = onMac(), bin = binName()): ShortcutGroup[] {
   const groups = new Map<string, ShortcutGroup>();
   for (const s of SHORTCUTS) {
     let group = groups.get(s.group);
     if (!group) groups.set(s.group, (group = { title: s.group, items: [] }));
-    group.items.push({ keys: written(s, s.keys, mac), does: s.does });
+    group.items.push({ keys: written(s, s.keys, mac), does: s.does.replace("{bin}", bin) });
     for (const more of "also" in s ? s.also : []) {
       group.items.push({ keys: written(s, more.keys, mac), does: more.does });
     }

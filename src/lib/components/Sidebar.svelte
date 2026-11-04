@@ -1,5 +1,6 @@
 <script lang="ts">
   import FolderIcon from "./FolderIcon.svelte";
+  import { binName } from "$lib/shortcuts";
   import Icon, { type IconName } from "./Icon.svelte";
   import {
     BIN_PATH,
@@ -138,6 +139,8 @@
     window.addEventListener("focus", refreshDrives);
     return () => window.removeEventListener("focus", refreshDrives);
   });
+
+  const bin = binName();
 </script>
 
 {#snippet heading(section: keyof typeof sections)}
@@ -324,7 +327,7 @@
       onclick={onbin}
     >
       <Icon name="trash" />
-      <span>Recycle Bin</span>
+      <span>{bin}</span>
     </button>
   </div>
 </aside>

@@ -1,4 +1,6 @@
 mod about;
+#[cfg(any(target_os = "macos", test))]
+mod app_menu;
 mod archive_view;
 mod bin;
 mod civil;
@@ -201,6 +203,8 @@ pub fn run() {
         .manage(commands::Searching::default())
         .manage(commands::SmartWalks::default())
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            app_menu::install(app)?;
             #[cfg(desktop)]
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
