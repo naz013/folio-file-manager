@@ -158,3 +158,216 @@ test("the CSV viewer plugin is a valid preview that asks only to read", async ()
   assert.match(page, /<script src="csv\.js"><\/script>/);
   assert.match(page, /m\.preview === "csv"/);
 });
+
+// ---- Reading in pieces, and ordering and filtering in slices ----
+
+/** Reads `text` in pieces of `size` characters the way the page does: a row a piece ends in waits. */
+function inPieces(text, size, d = ",") {
+  const rows = [];
+  let rest = "";
+  let first = true;
+  for (let at = 0; at < text.length; at += size) {
+    const last = at + size >= text.length;
+    const chunk = CSV.parseChunk(rest + text.slice(at, at + size), d, { final: last, first });
+    rows.push(...plain(chunk.rows));
+    rest = (rest + text.slice(at, at + size)).slice(chunk.consumed);
+    first = false;
+  }
+  return rows;
+}
+
+test("a text read in pieces gives the rows it gives whole, wherever the pieces end", () => {
+  const text =
+    '\ufeffid,name,note\r\n1,"Ann ""A"" Lee","two\nlines"\n2,Bo,\n\n3,"unclosed,\nand more\r4,Cy,"x"y\n5,,\n6';
+  const whole = parse(text);
+  for (let size = 1; size <= text.length + 1; size++) {
+    assert.deepEqual(inPieces(text, size), whole, `pieces of ${size}`);
+  }
+  // A piece that ends inside a quoted field keeps the whole row for the next piece.
+  const cut = CSV.parseChunk('a,b\n1,"two\nli', ",", { final: false });
+  assert.deepEqual(plain(cut.rows), [["a", "b"]]);
+  assert.equal(cut.consumed, 4);
+  // A piece that ends on a row's end gives every row and consumes it all.
+  const whole2 = CSV.parseChunk("a,b\n1,2\n", ",", { final: false });
+  assert.equal(whole2.rows.length, 2);
+  assert.equal(whole2.consumed, 8);
+});
+
+test("pieces of random text match the whole, for any delimiter", () => {
+  let seed = 7;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const alphabet = ["a", "b", ",", ";", '"', "\n", "\r", " ", "1"];
+  for (let t = 0; t < 200; t++) {
+    let text = "";
+    for (let i = 0, n = Math.floor(rnd() * 60); i < n; i++)
+      text += alphabet[Math.floor(rnd() * alphabet.length)];
+    for (const d of [",", ";"]) {
+      const whole = parse(text, d);
+      for (const size of [1, 2, 3, 5, 8, 13]) {
+        assert.deepEqual(
+          inPieces(text, size, d),
+          whole,
+          `${JSON.stringify(text)} / ${d} / ${size}`,
+        );
+      }
+    }
+  }
+});
+
+test("sortOrder gives the same order as sorting, keeps ties in file order, and gives turns", async () => {
+  const keys = Array.from({ length: 50000 }, (_, i) => (i * 7919) % 97);
+  const cmp = (a, b) => keys[a] - keys[b];
+  let turns = 0;
+  const got = await CSV.sortOrder(keys.length, cmp, {
+    run: 1000,
+    breathe: async () => {
+      turns++;
+    },
+  });
+  const want = Array.from(keys.keys()).sort(cmp);
+  assert.deepEqual(plain(got), want);
+  assert.ok(turns > 0, "the page was given turns");
+  assert.deepEqual(plain(await CSV.sortOrder(0, cmp)), []);
+  assert.deepEqual(plain(await CSV.sortOrder(1, cmp)), [0]);
+});
+
+test("a sort or filter that is replaced stops early", async () => {
+  const cmp = (a, b) => a - b;
+  let calls = 0;
+  const stopped = await CSV.sortOrder(100000, cmp, {
+    run: 500,
+    breathe: async () => {},
+    cancelled: () => ++calls > 3,
+  });
+  assert.equal(stopped, null);
+  let seen = 0;
+  const filtered = await CSV.filterOrder(
+    Array.from({ length: 200000 }, (_, i) => i),
+    () => true,
+    { breathe: async () => {}, cancelled: () => ++seen > 2 },
+  );
+  // Slices are time-based, so a fast run may finish before a turn: both ends are right.
+  assert.ok(filtered === null || filtered.length === 200000);
+});
+
+test("filterOrder keeps the order, reports what it has found, and covers every row", async () => {
+  const order = Array.from({ length: 30000 }, (_, i) => 29999 - i);
+  const progress = [];
+  const found = await CSV.filterOrder(order, (i) => i % 1000 === 0, {
+    breathe: async () => {},
+    progress: (list, done, total) => progress.push([list.length, done, total]),
+  });
+  assert.deepEqual(
+    plain(found),
+    order.filter((i) => i % 1000 === 0),
+  );
+  for (const [, done, total] of progress) assert.ok(done <= total && total === 30000);
+});
+
+test("a 50 MB file is read in pieces, each quick, and ordered without one long block", async () => {
+  const line = (i) =>
+    `${i},"Name ${(i * 7919) % 100003}",City ${(i * 31) % 977},${((i * 104729) % 100000) / 100},free text number ${i} to fill the row\n`;
+  const parts = ["id,name,city,amount,note\n"];
+  let bytes = parts[0].length;
+  for (let i = 0; bytes < 50 * 1048576; i++) {
+    const l = line(i);
+    parts.push(l);
+    bytes += l.length;
+  }
+  const text = parts.join("");
+  const PIECE = 2 * 1048576;
+  const rows = [];
+  let rest = "";
+  let slowest = 0;
+  for (let at = 0; at < text.length; at += PIECE) {
+    const last = at + PIECE >= text.length;
+    const t = performance.now();
+    const piece = rest + text.slice(at, at + PIECE);
+    const chunk = CSV.parseChunk(piece, ",", { final: last, first: at === 0 });
+    for (const r of chunk.rows) rows.push(r);
+    rest = piece.slice(chunk.consumed);
+    slowest = Math.max(slowest, performance.now() - t);
+  }
+  assert.ok(rows.length > 400000, `${rows.length} rows`);
+  assert.equal(rows[1][0], "0");
+  assert.equal(rows.at(-1)[0], String(rows.length - 2));
+  // One piece of 2 MB is a short block for the page (generous: CI machines vary).
+  assert.ok(slowest < 400, `slowest piece ${Math.round(slowest)} ms`);
+  // A numeric sort of all of them, in slices.
+  const amounts = new Float64Array(rows.length - 1);
+  for (let i = 1; i < rows.length; i++) amounts[i - 1] = Number(rows[i][3]);
+  let longest = 0;
+  let last = performance.now();
+  const sorted = await CSV.sortOrder(amounts.length, (a, b) => amounts[a] - amounts[b], {
+    breathe: async () => {
+      longest = Math.max(longest, performance.now() - last);
+      await new Promise((r) => setTimeout(r, 0));
+      last = performance.now();
+    },
+  });
+  assert.equal(sorted.length, amounts.length);
+  assert.ok(
+    amounts[sorted[0]] <= amounts[sorted[1]] && amounts[sorted.at(-2)] <= amounts[sorted.at(-1)],
+  );
+  assert.ok(longest < 250, `longest slice ${Math.round(longest)} ms`);
+});
+
+test("the page reads in pieces, says what it covers, and bounds what it holds", () => {
+  const html = readFileSync(
+    new URL("../../src-tauri/resources/plugins/csv-viewer/index.html", import.meta.url),
+    "utf8",
+  );
+  assert.match(html, /const PAGE = 4 \* 1024 \* 1024;/);
+  assert.match(html, /const AUTO_LOAD = 16 \* 1024 \* 1024;/);
+  assert.match(html, /const MAX_LOAD = 64 \* 1024 \* 1024;/);
+  assert.match(html, /const MAX_ROWS = 750000;/);
+  // Progress, a way to stop, a way to read on, and the coverage of a sort and a filter.
+  assert.match(html, /Reading… \$\{fmtSize\(at\)\} of/);
+  assert.match(html, /"Stop"/);
+  assert.match(html, /Read more \(up to/);
+  assert.match(
+    html,
+    /Sorting and filtering cover the \$\{fmtNum\(data\.length\)\} rows read so far/,
+  );
+  assert.match(html, /Sorting and filtering cover these rows only/);
+  // The slow parts run in slices, and the order is kept while only the filter changes.
+  assert.match(html, /CSV\.sortOrder\(/);
+  assert.match(html, /CSV\.filterOrder\(/);
+  assert.match(html, /ordered !== key/);
+  // Nothing from the file is ever markup.
+  assert.ok(!/innerHTML|insertAdjacentHTML|document\.write/.test(html));
+});
+
+test("maxRows stops a piece where it says, and the rest is the text after the last row read", () => {
+  const text = "a,b\n1,2\n3,4\n5,6\n";
+  const chunk = CSV.parseChunk(text, ",", { final: false, maxRows: 2 });
+  assert.deepEqual(plain(chunk.rows), [
+    ["a", "b"],
+    ["1", "2"],
+  ]);
+  assert.equal(text.slice(chunk.consumed), "3,4\n5,6\n");
+  // Blank lines after the last row are not rows: nothing is left to read.
+  const tail = CSV.parseChunk("a,b\n\n\n", ",", { final: true, maxRows: 5 });
+  assert.equal(tail.rows.length, 1);
+  assert.equal(tail.consumed, 6);
+});
+
+test("the page waits out the host's read limit, holds one row at most 8 MB, and names a stop", () => {
+  const html = readFileSync(
+    new URL("../../src-tauri/resources/plugins/csv-viewer/index.html", import.meta.url),
+    "utf8",
+  );
+  assert.match(html, /const PAGE = 4 \* 1024 \* 1024;/);
+  assert.match(html, /const MAX_ROW_TEXT = 8 \* 1024 \* 1024;/);
+  // "Too many reads" is waited out, not shown as the end of the file.
+  assert.match(html, /\/Too many\/\.test\(e\.message\)/);
+  assert.match(html, /async function readPiece\(/);
+  // Any other failure is said in the notice, with the rows that were read.
+  assert.match(html, /reading stopped: \$\{loadError\}/);
+  // Rows of the last piece are covered by an active sort or filter.
+  assert.match(html, /function flushGrow\(\)/);
+  assert.match(html, /if \(dirty && !loading && !busy\) refresh\(false\);/);
+  // The notice is a status, and the bar has a name.
+  assert.match(html, /<div id="top" role="status"><\/div>/);
+  assert.match(html, /ariaLabel: "Reading the file"/);
+});

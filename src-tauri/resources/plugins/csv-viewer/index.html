@@ -164,6 +164,18 @@
         color: var(--dim);
         text-align: center;
       }
+      .callout.reading {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .callout button {
+        margin-left: 10px;
+      }
+      .callout.reading progress {
+        flex: 1;
+        max-width: 240px;
+      }
       select#enc {
         padding: 3px 6px;
         font: inherit;
@@ -187,7 +199,7 @@
       <button id="ccell" title="Copy the selected cell" disabled>Copy cell</button>
       <button id="crow" title="Copy the selected row, tab-separated" disabled>Copy row</button>
     </div>
-    <div id="top"></div>
+    <div id="top" role="status"></div>
     <div id="grid" tabindex="0"><p class="msg">Waiting…</p></div>
     <script src="csv.js"></script>
     <script src="encoding.js"></script>
@@ -195,33 +207,58 @@
       // A file's text is untrusted: it is only ever put on the page with textContent.
       const ROW_H = 26;
       const PAGE = 4 * 1024 * 1024;
-      /** How much of a file is read at most: every row is an entry in memory. */
-      const MAX_LOAD = 8 * 1024 * 1024;
-      const MAX_ROWS = 500000;
+      /** What is read without being asked: most files, and quickly. */
+      const AUTO_LOAD = 16 * 1024 * 1024;
+      /** The most that is ever read: every row is an entry in memory. */
+      const MAX_LOAD = 64 * 1024 * 1024;
+      const MAX_ROWS = 750000;
       const MAX_COLS = 300;
+      /** A row (or an unclosed quote) longer than this ends the reading: it is held whole. */
+      const MAX_ROW_TEXT = 8 * 1024 * 1024;
       const $ = (id) => document.getElementById(id);
       const grid = $("grid");
       const query = $("q");
 
-      let raw = "";
-      let note = "";
+      /** Every row read so far, the header row included. */
+      let rows = [];
       let size = 0;
+      /** Bytes read so far (where the next piece starts), and the row the last piece ended in. */
+      let at = 0;
+      let rest = "";
+      let loading = false;
+      let stopped = false;
+      let loadLimit = AUTO_LOAD;
+      let loadEnc = "";
+      let rowCap = false;
+      /** A row longer than `MAX_ROW_TEXT` ended the reading. */
+      let longRow = false;
+      /** Why reading stopped when a read failed. */
+      let loadError = "";
       let detected = ",";
       let delim = null; // null: the detected one
       let hasHeader = true;
+      /** The rows below the header: `rows` itself when there is no header row. */
       let data = [];
       let names = [];
       let cols = 0;
+      let wide = false;
+      /** The most columns any row read so far has. */
+      let seenCols = 0;
       let widths = [];
       let numeric = [];
       let idxWidth = 50;
       let sort = { col: -1, dir: 1 };
       let order = [];
       let vis = [];
-      let hay = null;
       let needle = "";
       let sel = null;
-      let cut = "";
+      /** Counts sorts and filters: a newer one ends an older one. */
+      let working = 0;
+      let busy = "";
+      /** Rows arrived that the order and filter shown do not cover yet. */
+      let dirty = false;
+      /** What `order` was made for: the column, direction and number of rows. */
+      let ordered = "";
 
       // The page talks to Folio with messages; see docs/PLUGINS.md.
       let nextId = 1;
@@ -271,94 +308,171 @@
 
       /** Counts opens: a read that returns after a newer open began is dropped. */
       let generation = 0;
-      async function open(path, same = false) {
+      async function open(path, same = false, keepDelim = false) {
         opened = path;
         if (!same) {
           chosen = "";
           Enc.reset(encSelect);
         }
+        if (!keepDelim) delim = null;
         const mine = ++generation;
-        // Every page of this open is read in one encoding: an offset means bytes of that one.
-        const enc = chosen;
+        working++;
+        rows = [];
+        data = rows;
+        at = 0;
+        rest = "";
+        size = 0;
+        stopped = false;
+        rowCap = false;
+        longRow = false;
+        loadError = "";
+        loadLimit = AUTO_LOAD;
+        loadEnc = chosen;
+        hasHeader = null;
+        sort = { col: -1, dir: 1 };
+        ordered = "";
+        order = [];
+        vis = [];
+        sel = null;
+        dirty = false;
+        busy = "";
+        cols = 0;
+        wide = false;
+        seenCols = 0;
+        $("ccell").disabled = $("crow").disabled = true;
+        $("top").replaceChildren();
+        message("Reading…");
+        await load(mine);
+      }
+
+      /**
+       * Reads the file in pieces, from where it left off, until `loadLimit` bytes, the row limit
+       * or its end. The first piece makes the table; each later one adds rows to it.
+       */
+      async function load(mine) {
+        loading = true;
+        loadError = "";
+        callout();
+        let piece = at === 0 ? 0 : 1;
+        let started = rows.length > 0;
         try {
-          let text = "";
-          let at = 0;
           for (;;) {
-            const r = await call("readRange", {
-              path,
-              offset: at,
-              length: PAGE,
-              encoding: enc || undefined,
-            });
-            if (mine !== generation) return;
-            if (at === 0) Enc.show(encSelect, r, enc);
-            text += r.text;
+            // Not past the limit: the last piece is as long as what is left of it.
+            const length = Math.max(4096, Math.min(PAGE, loadLimit - at));
+            const r = await readPiece(mine, length);
+            if (!r) return;
+            if (piece === 0) Enc.show(encSelect, r, loadEnc);
             size = r.size;
-            if (r.end >= r.size || r.end <= at) {
-              at = r.size;
+            const atEnd = r.end >= r.size || r.end <= at;
+            at = atEnd ? r.size : r.end;
+            const text = rest + r.text;
+            if (piece === 0) detected = CSV.detect(text);
+            const stop = !atEnd && (at >= loadLimit || stopped);
+            const room = MAX_ROWS - rows.length;
+            // A piece that ends in the middle of a row keeps that row for the next one; at a
+            // stop it is left out, as is a row cut short by the end of what is read.
+            const chunk = CSV.parseChunk(text, delim ?? detected, {
+              final: atEnd,
+              first: piece === 0,
+              maxRows: room,
+            });
+            piece++;
+            rest = text.slice(chunk.consumed);
+            for (const row of chunk.rows) {
+              rows.push(row);
+              if (data !== rows) data.push(row);
+            }
+            seenCols = Math.max(seenCols, columnsOf(chunk.rows));
+            // Past the row limit, with something other than blank lines left.
+            if (chunk.rows.length >= room && (!atEnd || rest.trim() !== "")) rowCap = true;
+            // A row that does not end is held whole and read again with every piece: bounded.
+            if (rest.length > MAX_ROW_TEXT) longRow = true;
+            if (!started && rows.length) {
+              started = true;
+              startTable();
+            } else if (started) {
+              grow();
+            }
+            if (atEnd || stop || rowCap || longRow) {
+              rest = "";
               break;
             }
-            at = r.end;
-            if (at >= MAX_LOAD) break;
           }
-          raw = text;
-          cut = "";
-          if (at < size) {
-            // The last row is cut short: leave it out.
-            const nl = raw.lastIndexOf("\n");
-            if (nl > 0) raw = raw.slice(0, nl + 1);
-            cut = `Showing the first ${fmtSize(at)} of ${fmtSize(size)}`;
-          }
-          detected = CSV.detect(raw);
-          delim = null;
-          hasHeader = null;
-          setup();
         } catch (e) {
-          message(e.message);
+          if (mine !== generation) return;
+          loadError = e.message;
+        }
+        loading = false;
+        flushGrow();
+        if (!rows.length) {
+          $("top").replaceChildren();
+          message(
+            loadError ||
+              (longRow
+                ? "Folio could not find the end of the first row: it is longer than 8 MB, or has a quote that is never closed."
+                : "This file is empty."),
+          );
+          return;
+        }
+        callout();
+        // Rows that came after a sort or filter was asked for are covered now.
+        if (dirty) refresh(false);
+      }
+
+      /**
+       * One piece of the file. The host limits how many reads a plugin makes in a while: when it
+       * says so, wait a moment and ask again (a Stop ends the wait).
+       */
+      async function readPiece(mine, length) {
+        for (;;) {
+          try {
+            const r = await call("readRange", {
+              path: opened,
+              offset: at,
+              length,
+              encoding: loadEnc || undefined,
+            });
+            return mine === generation ? r : null;
+          } catch (e) {
+            if (!/Too many/.test(e.message) || stopped || mine !== generation) throw e;
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+            if (mine !== generation) return null;
+          }
         }
       }
 
-      /** Reads the rows again for the delimiter and header choice, and draws. */
-      function setup() {
-        const d = delim ?? detected;
-        const rows = CSV.parse(raw, d, MAX_ROWS + 1);
-        const extra = [];
-        if (rows.length > MAX_ROWS) {
-          rows.length = MAX_ROWS;
-          extra.push(`first ${fmtNum(MAX_ROWS)} rows`);
-        }
-        cols = Math.min(
-          rows.reduce((m, r) => Math.max(m, r.length), 0),
-          MAX_COLS,
-        );
-        if (rows.some((r) => r.length > MAX_COLS)) extra.push(`first ${MAX_COLS} columns`);
+      /** The first rows are in: header, columns and the table, shown at once. */
+      function startTable() {
         if (hasHeader === null) {
           const first = rows[0] || [];
           hasHeader =
             rows.length > 1 && first.some((c) => c) && !first.some((c) => CSV.isNumber(c));
         }
         $("hdr").setAttribute("aria-pressed", String(hasHeader));
-        const head = hasHeader ? rows[0] || [] : [];
-        data = hasHeader ? rows.slice(1) : rows;
-        names = Array.from({ length: cols }, (_, c) => (hasHeader && head[c]) || CSV.letters(c));
-        note = [cut, extra.length ? `Showing the ${extra.join(" and ")}` : ""]
-          .filter(Boolean)
-          .join(" · ");
+        applyHeader();
         // The delimiter list shows what "Auto" found.
         const sel0 = $("delim");
         sel0.replaceChildren();
         sel0.append(new Option(`Auto (${CSV.NAMES[detected]})`, ""));
         for (const c of CSV.CANDIDATES) sel0.append(new Option(CSV.NAMES[c], c));
         sel0.value = delim ?? "";
-        measure();
-        sort = { col: -1, dir: 1 };
-        hay = null;
-        sel = null;
-        $("ccell").disabled = $("crow").disabled = true;
-        $("top").replaceChildren();
-        if (note) $("top").append(el("p", "callout", note));
         refresh(true);
       }
+
+      /** The rows below the header (or all of them), and the names of the columns. */
+      function applyHeader() {
+        data = hasHeader ? rows.slice(1) : rows;
+        const head = hasHeader ? rows[0] || [] : [];
+        cols = Math.min(seenCols, MAX_COLS);
+        wide = seenCols > MAX_COLS;
+        names = Array.from({ length: cols }, (_, c) => (hasHeader && head[c]) || CSV.letters(c));
+        measure();
+        sel = null;
+        $("ccell").disabled = $("crow").disabled = true;
+        callout();
+      }
+
+      const columnsOf = (list) => list.reduce((m, r) => Math.max(m, r.length), 0);
 
       /** Column widths and kinds, from the start of the table. */
       function measure() {
@@ -383,51 +497,139 @@
         idxWidth = Math.max(44, String(data.length + 1).length * 8 + 24);
       }
 
+      /** What the notice under the bar was last built for. */
+      let shownSig = "";
+      let growTimer = 0;
+      /** Rows arrived: make room for them, at most every so often. */
+      function grow() {
+        if (!growTimer) growTimer = setTimeout(doGrow, 60);
+      }
+
+      /** Makes room for the rows that arrived, now if a wait for it is pending. */
+      function flushGrow() {
+        if (!growTimer) return;
+        clearTimeout(growTimer);
+        doGrow();
+      }
+
+      function doGrow() {
+        {
+          growTimer = 0;
+          if (!$("body")) return;
+          if (seenCols > MAX_COLS) wide = true;
+          const more = Math.min(seenCols, MAX_COLS) > cols;
+          const digits = Math.max(44, String(data.length + 1).length * 8 + 24);
+          const widened = more || digits > idxWidth;
+          if (more) {
+            cols = Math.min(seenCols, MAX_COLS);
+            names = Array.from({ length: cols }, (_, c) => names[c] ?? CSV.letters(c));
+            measure();
+          } else {
+            idxWidth = Math.max(idxWidth, digits);
+          }
+          if (sort.col < 0 && !needle && !busy) {
+            // As the file is: the new rows follow the ones shown.
+            for (let i = order.length; i < data.length; i++) order.push(i);
+            vis = order;
+          } else {
+            dirty = true;
+          }
+          if (widened) drawHead();
+          $("body").style.height = `${vis.length * ROW_H}px`;
+          drawRows();
+          status();
+          callout();
+          // Nothing else is coming to cover them: a sort or filter covers them now.
+          if (dirty && !loading && !busy) refresh(false);
+        }
+      }
+
       // ---- Order and filter ----
 
       const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
-      function reorder() {
-        order = Array.from({ length: data.length }, (_, i) => i);
-        if (sort.col < 0) return;
+      /** A comparison of two rows' numbers in `rows` order, for the sort that is asked for. */
+      function comparison(total) {
         const c = sort.col;
         const dir = sort.dir;
         if (numeric[c]) {
-          const keys = data.map((r) => (CSV.isNumber(r[c] ?? "") ? Number(r[c]) : NaN));
-          order.sort((a, b) => {
+          const keys = new Float64Array(total);
+          for (let i = 0; i < total; i++) {
+            const v = data[i][c] ?? "";
+            keys[i] = CSV.isNumber(v) ? Number(v) : NaN;
+          }
+          return (a, b) => {
             const x = keys[a];
             const y = keys[b];
             if (Number.isNaN(x) || Number.isNaN(y)) return Number.isNaN(x) - Number.isNaN(y);
-            return (x - y) * dir;
-          });
-        } else {
-          order.sort((a, b) => {
-            const x = data[a][c] ?? "";
-            const y = data[b][c] ?? "";
-            if (!x || !y) return (x === "") - (y === "");
-            return collator.compare(x, y) * dir;
-          });
+            return x === y ? 0 : (x - y) * dir;
+          };
         }
+        return (a, b) => {
+          const x = data[a][c] ?? "";
+          const y = data[b][c] ?? "";
+          if (!x || !y) return (x === "") - (y === "");
+          return collator.compare(x, y) * dir;
+        };
       }
 
-      function refilter() {
+      /**
+       * Order and filter the rows read so far, in slices so the table stays usable: a newer
+       * request ends an older one. Rows that arrive meanwhile are covered by the next run.
+       */
+      async function refresh(resetScroll) {
+        const run = ++working;
+        const cancelled = () => run !== working;
+        const total = data.length;
+        dirty = false;
         needle = query.value.toLowerCase();
+        drawHead();
+        // The order is kept while only the filter changes: sorting is the slow part.
+        const key = `${sort.col}:${sort.dir}:${total}`;
+        if (sort.col < 0) {
+          order = Array.from({ length: total }, (_, i) => i);
+          ordered = "";
+        } else if (ordered !== key) {
+          busy = "Sorting…";
+          status();
+          const sorted = await CSV.sortOrder(total, comparison(total), { cancelled });
+          if (!sorted) return;
+          order = sorted;
+          ordered = key;
+        }
         if (!needle) {
           vis = order;
-          return;
+        } else {
+          busy = "Filtering…";
+          const found = await CSV.filterOrder(
+            order,
+            (i) => {
+              for (const v of data[i]) if (v.toLowerCase().includes(needle)) return true;
+              return false;
+            },
+            {
+              cancelled,
+              progress: (list, done, all) => {
+                vis = list;
+                busy = `Filtering… ${Math.round((done / all) * 100)}%`;
+                $("body").style.height = `${vis.length * ROW_H}px`;
+                drawRows();
+                status();
+              },
+            },
+          );
+          if (!found) return;
+          vis = found;
         }
-        if (!hay) hay = data.map((r) => r.join("\u0001").toLowerCase());
-        vis = order.filter((i) => hay[i].includes(needle));
-      }
-
-      function refresh(resetScroll) {
-        reorder();
-        refilter();
+        busy = "";
         drawHead();
         $("body").style.height = `${vis.length * ROW_H}px`;
         if (resetScroll) grid.scrollTop = 0;
         drawRows();
         status();
+        callout();
+        // Rows that came in while this ran, and are not in it, when nothing else is coming.
+        if (dirty && !loading) refresh(false);
       }
 
       // ---- Drawing ----
@@ -529,10 +731,85 @@
       function status() {
         const total = data.length;
         const base = `${fmtNum(total)} row${total === 1 ? "" : "s"} × ${cols} column${cols === 1 ? "" : "s"}`;
-        $("count").textContent = needle
+        const text = needle
           ? `${fmtNum(vis.length)} of ${fmtNum(total)} rows`
           : `${base} · ${fmtSize(size)}`;
-        if (!total && !cols) message("This file is empty.");
+        $("count").setAttribute("aria-live", busy ? "off" : "polite");
+        $("count").textContent = busy ? `${busy} · ${text}` : text;
+      }
+
+      /** The notice under the bar: reading progress, what is not read, and what that means. */
+      function callout() {
+        const top = $("top");
+        const sorted = sort.col >= 0 || needle;
+        // While reading, only the numbers change: the buttons stay as they are, and keep focus.
+        const sig = `${loading}|${sorted}|${wide}|${stopped}`;
+        const live = top.querySelector(".reading");
+        if (loading && live && sig === shownSig) {
+          live.firstChild.textContent = `Reading… ${fmtSize(at)} of ${fmtSize(size || at)}`;
+          const bar = live.querySelector("progress");
+          bar.max = size || 1;
+          bar.value = at;
+          return;
+        }
+        shownSig = sig;
+        top.replaceChildren();
+        const part = at < size || rowCap || longRow;
+        const lines = [];
+        if (loading) {
+          const box = el("div", "callout reading");
+          box.append(
+            el("span", null, `Reading… ${fmtSize(at)} of ${fmtSize(size || at)}`),
+            Object.assign(el("progress"), {
+              max: size || 1,
+              value: at,
+              ariaLabel: "Reading the file",
+            }),
+          );
+          const stop = el("button", null, "Stop");
+          stop.onclick = () => {
+            stopped = true;
+          };
+          box.append(stop);
+          top.append(box);
+          if (sorted) {
+            lines.push(
+              `Sorting and filtering cover the ${fmtNum(data.length)} rows read so far, and the rest once it is read.`,
+            );
+          }
+        } else if (part) {
+          const box = el("div", "callout");
+          const why = loadError
+            ? `reading stopped: ${loadError}`
+            : longRow
+              ? "a row longer than 8 MB (or an unclosed quote) ends the reading"
+              : rowCap
+                ? `the most Folio reads here is ${fmtNum(MAX_ROWS)} rows`
+                : at >= MAX_LOAD
+                  ? `the most Folio reads here is ${fmtSize(MAX_LOAD)}`
+                  : "";
+          const of = at < size ? ` (${fmtSize(at)} of ${fmtSize(size)})` : "";
+          box.append(
+            el(
+              "span",
+              null,
+              `Showing the first ${fmtNum(data.length)} rows${of}${why ? `: ${why}` : ""}.`,
+            ),
+          );
+          if (!rowCap && !longRow && at < size && at < MAX_LOAD) {
+            const more = el("button", null, `Read more (up to ${fmtSize(MAX_LOAD)})`);
+            more.onclick = () => {
+              stopped = false;
+              loadLimit = MAX_LOAD;
+              load(generation);
+            };
+            box.append(more);
+          }
+          top.append(box);
+          if (sorted) lines.push("Sorting and filtering cover these rows only.");
+        }
+        if (wide) lines.push(`Showing the first ${MAX_COLS} columns.`);
+        for (const l of lines) top.append(el("p", "callout", l));
       }
 
       grid.addEventListener("scroll", drawRows, { passive: true });
@@ -554,13 +831,17 @@
         }
       });
       $("hdr").onclick = () => {
+        if (hasHeader === null) return;
         hasHeader = !hasHeader;
-        setup();
+        $("hdr").setAttribute("aria-pressed", String(hasHeader));
+        applyHeader();
+        sort = { col: -1, dir: 1 };
+        refresh(true);
       };
       $("delim").onchange = (e) => {
+        // Another delimiter reads the file again from the start.
         delim = e.currentTarget.value || null;
-        hasHeader = null;
-        setup();
+        if (opened) open(opened, true, true);
       };
       document.addEventListener("keydown", (e) => {
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {

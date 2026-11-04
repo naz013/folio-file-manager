@@ -61,7 +61,8 @@ test("the four viewers carry the menu and pass the choice on every read", () => 
     assert.match(html, /<select id="enc"><\/select>/, id);
     const reads = html.match(/call\("readRange", \{[^}]*\}/g) ?? [];
     assert.ok(reads.length > 0, id);
-    for (const r of reads) assert.match(r, /encoding: (chosen|enc) \|\| undefined/, `${id}: ${r}`);
+    for (const r of reads)
+      assert.match(r, /encoding: (chosen|enc|loadEnc) \|\| undefined/, `${id}: ${r}`);
     // One shared helper, the same in each folder.
     assert.equal(
       readFileSync(new URL(`${folder}encoding.js`, dir), "utf8"),
@@ -141,6 +142,6 @@ test("each viewer drops a read that returns after a newer open began", () => {
   }
   // The CSV pages of one open share one encoding, whatever is chosen meanwhile.
   const csv = readFileSync(new URL("csv-viewer/index.html", dir), "utf8");
-  assert.match(csv, /const enc = chosen;/);
-  assert.match(csv, /encoding: enc \|\| undefined/);
+  assert.match(csv, /loadEnc = chosen;/);
+  assert.match(csv, /encoding: loadEnc \|\| undefined/);
 });
