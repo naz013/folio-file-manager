@@ -262,6 +262,17 @@
         color: var(--dim);
         text-align: center;
       }
+      select#enc {
+        padding: 3px 6px;
+        font: inherit;
+        color: inherit;
+        background: Canvas;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+      }
+      select#enc {
+        margin-left: auto;
+      }
     </style>
   </head>
   <body>
@@ -274,10 +285,12 @@
       <button id="prev" title="Previous match (Shift+Enter)" aria-label="Previous match">↑</button>
       <button id="next" title="Next match (Enter)" aria-label="Next match">↓</button>
       <span id="count" class="count" role="status"></span>
+      <select id="enc"></select>
     </div>
     <div id="top"></div>
     <div id="view" tabindex="0"><p class="msg">Waiting…</p></div>
     <script src="markdown.js"></script>
+    <script src="encoding.js"></script>
     <script>
       // A file's text is untrusted. Nothing from it is ever turned into markup: the tree from
       // markdown.js is drawn with createElement and textContent, and a link is only shown.
@@ -328,15 +341,39 @@
       const fmt = (n) =>
         n < 1048576 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1048576).toFixed(1)} MB`;
 
-      async function open(path) {
+      let chosen = "";
+      let opened = "";
+      const encSelect = $("enc");
+      Enc.fill(encSelect);
+      encSelect.addEventListener("change", () => {
+        chosen = encSelect.value;
+        if (opened) open(opened, true);
+      });
+
+      /** Counts opens: a read that returns after a newer open began is dropped. */
+      let generation = 0;
+      async function open(path, same = false) {
+        opened = path;
+        if (!same) {
+          chosen = "";
+          Enc.reset(encSelect);
+        }
+        const mine = ++generation;
         try {
-          const r = await call("readRange", { path, offset: 0, length: LIMIT });
+          const r = await call("readRange", {
+            path,
+            offset: 0,
+            length: LIMIT,
+            encoding: chosen || undefined,
+          });
+          if (mine !== generation) return;
+          Enc.show(encSelect, r, chosen);
           source = r.text.charCodeAt(0) === 0xfeff ? r.text.slice(1) : r.text;
           note = r.end < r.size ? `Showing the first ${fmt(r.end)} of ${fmt(r.size)}` : "";
           tree = Markdown.parse(source);
           render();
         } catch (e) {
-          view.replaceChildren(el("p", "msg", e.message));
+          if (mine === generation) view.replaceChildren(el("p", "msg", e.message));
         }
       }
 

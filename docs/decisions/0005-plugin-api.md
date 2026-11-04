@@ -85,6 +85,10 @@ its frame to a plugin address either. Never add a plugin address to that policy,
   returns the bytes raw (the start and size in 16 bytes, then the data) rather than as text, so a
   large range isn't inflated in transit.
 - **Who made a preview.** Quick Look draws a bar under a plugin's page ("Preview by <name>", a badge for built-in or installed, and "Show normally"), outside the frame, so the page cannot imitate Folio's own interface unmarked.
+- **Encodings.** `read` and `readRange` find the encoding (a byte-order mark, else a guess from the
+  start of the file: UTF-16 by the pattern of zero bytes, Windows-1252 if not valid UTF-8) and say
+  which they used; a page may choose one of four. Offsets stay bytes and pieces start and end on
+  whole characters in every encoding, so a page needs no decoder of its own.
 - **Not closed**: a DNS lookup from a page may still leak a few bytes (see `docs/PLUGINS.md`).
 
 ## Consequences

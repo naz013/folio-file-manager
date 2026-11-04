@@ -572,7 +572,10 @@ const isCall = (m: unknown): m is Call =>
 /** What the bridge needs from Folio; the page supplies it. */
 export interface Host {
   notify: (message: string) => void;
-  readText: (path: string) => Promise<{ text: string; truncated: boolean }>;
+  readText: (
+    path: string,
+    encoding?: string,
+  ) => Promise<{ text: string; truncated: boolean; encoding: string; bom: boolean }>;
   /** A piece of a file as bytes; see `readBytes` in docs/PLUGINS.md. */
   readBytes: (
     path: string,
@@ -584,7 +587,15 @@ export interface Host {
     path: string,
     offset: number,
     length: number,
-  ) => Promise<{ text: string; start: number; end: number; size: number }>;
+    encoding?: string,
+  ) => Promise<{
+    text: string;
+    start: number;
+    end: number;
+    size: number;
+    encoding: string;
+    bom: boolean;
+  }>;
   /** Called once when the page keeps flooding the bridge; the host should remove the plugin. */
   abuse?: () => void;
   now?: () => number;
@@ -604,6 +615,8 @@ const CALLS_PER_SECOND = 50;
 const ABUSE_AFTER = 500;
 /** Reads a plugin may have under way at once, and per window: it can't starve real previews. */
 const MAX_READS_IN_FLIGHT = 2;
+/** The encodings a page may ask `read` and `readRange` to use; without one Folio finds it. */
+export const ENCODINGS = ["utf-8", "utf-16le", "utf-16be", "windows-1252"];
 /** The most bytes one `readRange` asks for (the core allows no more either). */
 const MAX_RANGE = 4 * 1024 * 1024;
 /** The most bytes one `readBytes` asks for: less than a text range, since bytes are raw. */
@@ -671,6 +684,13 @@ export function createBridge(manifest: Manifest, host: Host) {
         ) {
           throw new Error("That file was not given to this plugin");
         }
+        let encoding: string | undefined;
+        if (params.encoding !== undefined && params.encoding !== null) {
+          if (call.method === "readBytes" || !ENCODINGS.includes(params.encoding as string)) {
+            throw new Error(`"encoding" must be one of ${ENCODINGS.join(", ")}`);
+          }
+          encoding = params.encoding as string;
+        }
         let range: [number, number] | null = null;
         if (call.method === "readRange" || call.method === "readBytes") {
           const { offset, length } = params;
@@ -695,7 +715,9 @@ export function createBridge(manifest: Manifest, host: Host) {
           if (call.method === "readBytes" && range) {
             return await host.readBytes(path, range[0], range[1]);
           }
-          return range ? await host.readRange(path, range[0], range[1]) : await host.readText(path);
+          return range
+            ? await host.readRange(path, range[0], range[1], encoding)
+            : await host.readText(path, encoding);
         } finally {
           reading--;
         }

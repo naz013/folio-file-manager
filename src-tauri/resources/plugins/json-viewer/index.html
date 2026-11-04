@@ -220,6 +220,14 @@
         color: var(--dim);
         text-align: center;
       }
+      select#enc {
+        padding: 3px 6px;
+        font: inherit;
+        color: inherit;
+        background: Canvas;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+      }
     </style>
   </head>
   <body>
@@ -234,6 +242,7 @@
       <button id="next" title="Next match (Enter)" aria-label="Next match">↓</button>
       <span id="count" class="count" role="status"></span>
       <span class="spacer"></span>
+      <select id="enc"></select>
       <button id="expand" title="Open every level">Expand all</button>
       <button id="collapse" title="Fold everything">Collapse all</button>
       <button id="cpath" title="Copy the path of the selected row" disabled>Copy path</button>
@@ -241,6 +250,7 @@
     </div>
     <div id="top"></div>
     <div id="view" tabindex="0"><p class="msg">Waiting…</p></div>
+    <script src="encoding.js"></script>
     <script>
       // A file's text is untrusted: it is only ever put on the page with textContent.
       const MAX_HITS = 2000;
@@ -319,13 +329,37 @@
         view.replaceChildren(el("p", "msg", txt));
       }
 
-      async function open(path) {
+      let chosen = "";
+      let opened = "";
+      const encSelect = $("enc");
+      Enc.fill(encSelect);
+      encSelect.addEventListener("change", () => {
+        chosen = encSelect.value;
+        if (opened) open(opened, true);
+      });
+
+      /** Counts opens: a read that returns after a newer open began is dropped. */
+      let generation = 0;
+      async function open(path, same = false) {
+        opened = path;
+        if (!same) {
+          chosen = "";
+          Enc.reset(encSelect);
+        }
+        const mine = ++generation;
         try {
-          const r = await call("readRange", { path, offset: 0, length: MAX_FILE });
+          const r = await call("readRange", {
+            path,
+            offset: 0,
+            length: MAX_FILE,
+            encoding: chosen || undefined,
+          });
+          if (mine !== generation) return;
+          Enc.show(encSelect, r, chosen);
           fileSize = r.size;
           load(r.text, r.end < r.size);
         } catch (e) {
-          message(e.message);
+          if (mine === generation) message(e.message);
         }
       }
 

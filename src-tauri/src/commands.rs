@@ -264,14 +264,26 @@ fn allow_answer(path: &str, outcome: &slow::Outcome<bool>) -> CmdResult<()> {
     }
 }
 
+/// The encoding a page asked for by name; none means Folio finds it from the file.
+fn parse_encoding(name: Option<&str>) -> CmdResult<Option<crate::preview::Encoding>> {
+    name.map(|n| {
+        crate::preview::Encoding::from_label(n).ok_or_else(|| format!("Unknown encoding \"{n}\""))
+    })
+    .transpose()
+}
+
 /// The start of a text file for Quick Look; fails for files that are not text, and for ones
 /// that are only in the cloud. Gives up after a while, like a listing.
 #[tauri::command]
-pub async fn read_text_preview(path: String) -> CmdResult<crate::preview::TextPreview> {
+pub async fn read_text_preview(
+    path: String,
+    encoding: Option<String>,
+) -> CmdResult<crate::preview::TextPreview> {
     let file = PathBuf::from(&path);
+    let enc = parse_encoding(encoding.as_deref())?;
     let outcome = slow::PREVIEWS
         .run(slow::PREVIEW, move || {
-            crate::preview::read_text_preview(&file)
+            crate::preview::read_text_preview(&file, enc)
         })
         .await;
     preview_result(&path, outcome)
@@ -284,11 +296,13 @@ pub async fn read_text_range(
     path: String,
     offset: u64,
     length: u64,
+    encoding: Option<String>,
 ) -> CmdResult<crate::preview::TextRange> {
     let file = PathBuf::from(&path);
+    let enc = parse_encoding(encoding.as_deref())?;
     let outcome = slow::PREVIEWS
         .run(slow::PREVIEW, move || {
-            crate::preview::read_text_range(&file, offset, length)
+            crate::preview::read_text_range(&file, offset, length, enc)
         })
         .await;
     preview_result(&path, outcome)

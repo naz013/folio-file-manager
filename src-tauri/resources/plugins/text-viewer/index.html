@@ -116,6 +116,14 @@
         color: var(--dim);
         text-align: center;
       }
+      select#enc {
+        padding: 3px 6px;
+        font: inherit;
+        color: inherit;
+        background: Canvas;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+      }
     </style>
   </head>
   <body>
@@ -126,10 +134,12 @@
       <button id="next" title="Next match (Enter)" aria-label="Next match">↓</button>
       <span id="count" class="count" role="status"></span>
       <span class="spacer"></span>
+      <select id="enc"></select>
       <button id="wrap" aria-pressed="false" title="Wrap long lines">Wrap</button>
       <button id="nums" aria-pressed="true" title="Line numbers">Lines</button>
     </div>
     <div id="view" tabindex="0"><p class="msg">Waiting…</p></div>
+    <script src="encoding.js"></script>
     <script>
       // A file's text is untrusted: it is only ever put on the page with textContent.
       const MAX_HITS = 5000;
@@ -146,6 +156,9 @@
       /** How much of a file is loaded at most: every line is a row on the page. */
       const MAX_LOAD = 2 * 1024 * 1024;
       let path = "";
+      /** The encoding a person chose; empty lets Folio find it. */
+      let chosen = "";
+      let opened = "";
       let loaded = 0;
       let size = 0;
       let eof = true;
@@ -189,18 +202,40 @@
           ? `${Math.max(1, Math.round(n / 1024))} KB`
           : `${(n / 1048576).toFixed(1)} MB`;
 
-      async function open(file) {
+      const encSelect = $("enc");
+      Enc.fill(encSelect);
+      encSelect.addEventListener("change", () => {
+        chosen = encSelect.value;
+        if (opened) open(opened, true);
+      });
+
+      /** Counts opens: a read that returns after a newer open began is dropped. */
+      let generation = 0;
+      async function open(file, same = false) {
         path = file;
+        opened = file;
+        if (!same) {
+          chosen = "";
+          Enc.reset(encSelect);
+        }
+        const mine = ++generation;
         loaded = 0;
         endedCR = false;
         lines = [];
         try {
-          const r = await call("readRange", { path, offset: 0, length: FIRST });
+          const r = await call("readRange", {
+            path,
+            offset: 0,
+            length: FIRST,
+            encoding: chosen || undefined,
+          });
+          if (mine !== generation) return;
+          Enc.show(encSelect, r, chosen);
           take(r);
           render();
           more();
         } catch (e) {
-          message(e.message);
+          if (mine === generation) message(e.message);
         }
       }
 
@@ -234,8 +269,18 @@
         if (loading || eof || loaded >= MAX_LOAD) return;
         if (view.scrollHeight - view.scrollTop - view.clientHeight > 800) return;
         loading = true;
+        const enc = chosen;
+        const mine = generation;
         try {
-          take(await call("readRange", { path, offset: loaded, length: NEXT }));
+          const r = await call("readRange", {
+            path,
+            offset: loaded,
+            length: NEXT,
+            encoding: enc || undefined,
+          });
+          // A piece of an earlier open (another file or encoding) is not added.
+          if (mine !== generation) return;
+          take(r);
           render(true);
         } catch (e) {
           // The reads are rate limited: try again in a moment rather than give up.

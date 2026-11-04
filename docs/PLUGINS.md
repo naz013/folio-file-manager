@@ -157,13 +157,13 @@ cut each other off. A preview's page is made when the file is shown and removed 
 **The page asks Folio** `{ folio: 1, id, method, params }` and gets `{ folio: 1, id, result }` or
 `{ folio: 1, id, error }` (the error is a sentence):
 
-| Method      | Params                     | Needs       | Result                                                      |
-| ----------- | -------------------------- | ----------- | ----------------------------------------------------------- |
-| `selection` |                            | `selection` | the paths of the files of the last action                   |
-| `read`      | `{ path }`                 | `read`      | `{ text, truncated }`; start of a text file                 |
-| `readRange` | `{ path, offset, length }` | `read`      | `{ text, start, end, size }`; a piece of a text file        |
-| `readBytes` | `{ path, offset, length }` | `read`      | `{ data, start, end, size }`; a piece of any file, as bytes |
-| `notify`    | `{ message }`              | `notify`    | `null`                                                      |
+| Method      | Params                                | Needs       | Result                                                              |
+| ----------- | ------------------------------------- | ----------- | ------------------------------------------------------------------- |
+| `selection` |                                       | `selection` | the paths of the files of the last action                           |
+| `read`      | `{ path, encoding? }`                 | `read`      | `{ text, truncated, encoding, bom }`; start of a text file          |
+| `readRange` | `{ path, offset, length, encoding? }` | `read`      | `{ text, start, end, size, encoding, bom }`; a piece of a text file |
+| `readBytes` | `{ path, offset, length }`            | `read`      | `{ data, start, end, size }`; a piece of any file, as bytes         |
+| `notify`    | `{ message }`                         | `notify`    | `null`                                                              |
 
 `read` works only for paths Folio gave the plugin in its last few `action` or `preview` events, for
 a minute after each, at most 2 at once and 20 per 10 seconds, as text,
@@ -176,7 +176,18 @@ falls inside one, `start` is the next character's byte, and if `length` would cu
 stops before it. `end` is where to ask for the next piece (`offset: end`), and `end >= size` means the
 file is done. `size` is the file's size in bytes. It follows the rules of `read` (a file Folio gave
 the plugin, the same limits on reads), and the files of a **preview** stay readable for as long as it
-is open, not only for a minute. A file with NUL bytes (binary) is refused.
+is open, not only for a minute. A file with NUL bytes (binary) is refused, unless it is UTF-16.
+
+**Encodings.** `read` and `readRange` find a text file's encoding themselves and say which they
+used: `encoding` is `utf-8`, `utf-16le`, `utf-16be` or `windows-1252`, and `bom` is true when the file
+starts with a byte-order mark (which is not in `text`). A mark decides (UTF-8, UTF-16 LE, UTF-16 BE).
+Without one, a file whose zero bytes sit in every other place (Latin text in UTF-16) is UTF-16, a file
+that is not valid UTF-8 is Windows-1252, and anything else is UTF-8. A page can pass `encoding` to
+choose one of the four instead; a mark of the encoding it chose is still skipped. Offsets stay bytes
+in every encoding: in UTF-16 a piece starts and ends on a whole character (a surrogate pair is never
+split), so `start` may be one or three bytes past `offset` and `end` one or three before `offset + length`; `end`
+is still where the next piece starts. `readBytes` has no encoding. The text, JSON, Markdown and CSV
+viewers show the one used in a menu and let a person choose another.
 
 `readBytes` reads a piece of any regular file as bytes, for pages that show binary files. `offset` and
 `length` are in bytes; `length` is at most 1 MB (less than a text piece, since bytes are raw), and

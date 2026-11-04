@@ -125,8 +125,11 @@ export function pluginUrl(id: string, file: string): string {
 }
 
 /** The start of a text file; rejects for files that are not text. */
-export const readTextPreview = (path: string) =>
-  invoke<{ text: string; truncated: boolean }>("read_text_preview", { path });
+export const readTextPreview = (path: string, encoding?: string) =>
+  invoke<{ text: string; truncated: boolean; encoding: string; bom: boolean }>(
+    "read_text_preview",
+    { path, encoding: encoding ?? null },
+  );
 
 /** A piece of a text file: from byte `offset`, up to `length` bytes, cut at characters. */
 export interface TextRange {
@@ -137,9 +140,13 @@ export interface TextRange {
   end: number;
   /** The file's size in bytes. */
   size: number;
+  /** The encoding the text was read in: `utf-8`, `utf-16le`, `utf-16be` or `windows-1252`. */
+  encoding: string;
+  /** The file starts with a byte-order mark. */
+  bom: boolean;
 }
-export const readTextRange = (path: string, offset: number, length: number) =>
-  invoke<TextRange>("read_text_range", { path, offset, length });
+export const readTextRange = (path: string, offset: number, length: number, encoding?: string) =>
+  invoke<TextRange>("read_text_range", { path, offset, length, encoding: encoding ?? null });
 
 /** A piece of a file as bytes: from byte `offset`, up to `length` bytes. */
 export interface BytesRange {

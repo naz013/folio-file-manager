@@ -164,6 +164,14 @@
         color: var(--dim);
         text-align: center;
       }
+      select#enc {
+        padding: 3px 6px;
+        font: inherit;
+        color: inherit;
+        background: Canvas;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+      }
     </style>
   </head>
   <body>
@@ -175,12 +183,14 @@
       <input id="q" type="search" placeholder="Filter rows" aria-label="Filter rows" />
       <span id="count" class="count" role="status"></span>
       <span class="spacer"></span>
+      <select id="enc"></select>
       <button id="ccell" title="Copy the selected cell" disabled>Copy cell</button>
       <button id="crow" title="Copy the selected row, tab-separated" disabled>Copy row</button>
     </div>
     <div id="top"></div>
     <div id="grid" tabindex="0"><p class="msg">Waiting…</p></div>
     <script src="csv.js"></script>
+    <script src="encoding.js"></script>
     <script>
       // A file's text is untrusted: it is only ever put on the page with textContent.
       const ROW_H = 26;
@@ -250,12 +260,38 @@
         grid.replaceChildren(el("p", "msg", txt));
       }
 
-      async function open(path) {
+      let chosen = "";
+      let opened = "";
+      const encSelect = $("enc");
+      Enc.fill(encSelect);
+      encSelect.addEventListener("change", () => {
+        chosen = encSelect.value;
+        if (opened) open(opened, true);
+      });
+
+      /** Counts opens: a read that returns after a newer open began is dropped. */
+      let generation = 0;
+      async function open(path, same = false) {
+        opened = path;
+        if (!same) {
+          chosen = "";
+          Enc.reset(encSelect);
+        }
+        const mine = ++generation;
+        // Every page of this open is read in one encoding: an offset means bytes of that one.
+        const enc = chosen;
         try {
           let text = "";
           let at = 0;
           for (;;) {
-            const r = await call("readRange", { path, offset: at, length: PAGE });
+            const r = await call("readRange", {
+              path,
+              offset: at,
+              length: PAGE,
+              encoding: enc || undefined,
+            });
+            if (mine !== generation) return;
+            if (at === 0) Enc.show(encSelect, r, enc);
             text += r.text;
             size = r.size;
             if (r.end >= r.size || r.end <= at) {
