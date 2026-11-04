@@ -85,20 +85,18 @@
       });
       // Tauri's own helper, which Windows puts in every frame. Its answer can't be seen from here
       // (it goes to Folio's page), so the sign is outside: an Explorer window on C:\Windows.
-      attempt("__TAURI_INTERNALS__.invoke(open_path)", () => {
+      {
         const t = window.__TAURI_INTERNALS__;
         const li = document.createElement("li");
         if (!t || typeof t.invoke !== "function") {
           li.textContent = "BLOCKED: __TAURI_INTERNALS__ is not in this frame, nothing was sent";
         } else {
           t.invoke("open_path", { path: "C:\\Windows" }).catch(() => {});
-          li.className = "bad";
           li.textContent =
-            "CHECK: __TAURI_INTERNALS__ IS in this frame and invoke(open_path) was sent. If an Explorer window opened on C:\\Windows, the sandbox is OPEN";
+            "A command was sent to Folio. If Explorer opened on C:\\Windows, this Folio is not compatible with plugins (the sandbox is open); if nothing opened, it was refused.";
         }
         out.append(li);
-        return undefined;
-      });
+      }
       // Tauri's custom-protocol channel: the policy must refuse the request.
       for (const url of ["http://ipc.localhost/plugins_folder", "ipc://localhost/plugins_folder"]) {
         attempt(`fetch ${url}`, async () => {
