@@ -53,18 +53,18 @@ Priorities: **P0** = required for 1.0, **P1** = shortly after 1.0, **P2** = late
 
 ### Browsing
 
-| Feature                                | Priority | Notes                                                                             |
-| -------------------------------------- | -------- | --------------------------------------------------------------------------------- |
-| Grid & list views                      | P0       | Grid with size slider; list with sortable, resizable columns                      |
-| Column view (Finder-style)             | P1       | High value for Mac switchers; must not block 1.0                                  |
-| Gallery view                           | P2       | Large preview + filmstrip for photo folders                                       |
-| Tabs                                   | P0       | Middle-click opens in new tab; drag tab out → new window; tabs restored on launch |
-| Sidebar                                | P0       | Favorites (drag to reorder/add), drives with usage bars, tags                     |
-| Breadcrumb path bar                    | P0       | Click a segment to jump; chevron shows siblings; double-click to type a path      |
-| Quick Look (Space)                     | P0       | Images, PDF, text/code, audio/video; Windows preview handlers later               |
-| Inspector panel                        | P1       | Preview, tags, space breakdown, metadata                                          |
-| Hidden files, sort, group by kind/date | P0       |                                                                                   |
-| Dual pane                              | P2       | Opt-in for power users                                                            |
+| Feature                                | Priority | Notes                                                                                                     |
+| -------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------- |
+| Grid & list views                      | P0       | Grid with size slider; list with sortable, resizable columns                                              |
+| Column view (Finder-style)             | P1       | High value for Mac switchers; must not block 1.0                                                          |
+| Gallery view                           | P2       | Large preview + filmstrip for photo folders                                                               |
+| Tabs                                   | P0       | Middle-click opens in new tab; drag tab out → new window; tabs restored on launch                         |
+| Sidebar                                | P0       | Favorites (drag to reorder/add), drives with usage bars, tags                                             |
+| Breadcrumb path bar                    | P0       | Click a segment to jump; chevron shows siblings; double-click to type a path                              |
+| Quick Look (Space)                     | P0       | Images, PDF, text/code, audio/video, the contents of zip and tar archives; Windows preview handlers later |
+| Inspector panel                        | P1       | Preview, tags, space breakdown, metadata                                                                  |
+| Hidden files, sort, group by kind/date | P0       |                                                                                                           |
+| Dual pane                              | P2       | Opt-in for power users                                                                                    |
 
 ### File operations
 

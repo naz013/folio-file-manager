@@ -7,6 +7,7 @@
   import { previewEvent, previewFor, type PreviewHit } from "$lib/plugins";
   import { plugins } from "$lib/plugins.svelte";
   import { createZoomEase, pixelsPer, wheelFactor } from "$lib/zoom";
+  import ArchiveView from "./ArchiveView.svelte";
   import FileIcon from "./FileIcon.svelte";
   import FolderIcon from "./FolderIcon.svelte";
   import ImageDetails from "./ImageDetails.svelte";
@@ -41,6 +42,8 @@
     | { kind: "plugin"; hit: PreviewHit }
     | { kind: "url"; media: "image" | "pdf" | "audio" | "video"; url: string }
     | { kind: "text"; text: string; truncated: boolean }
+    /** A zip or tar: the list of what is inside, drawn by `ArchiveView`. */
+    | { kind: "archive" }
     /** `cloud`: the file is only in the cloud, and opening it would download it. */
     | { kind: "none"; why: string; cloud?: boolean };
 
@@ -217,6 +220,8 @@
       shown = { kind: "plugin", hit };
     } else if (kind === "other") {
       shown = { kind: "none", why: isDir ? "Folder" : "No preview for this kind of file" };
+    } else if (kind === "archive") {
+      shown = { kind: "archive" };
     } else if (kind === "text") {
       readTextPreview(path)
         .then((t) => current && (shown = { kind: "text", ...t }))
@@ -316,6 +321,8 @@
             }}
           />
         {/key}
+      {:else if shown.kind === "archive"}
+        {#key path}<ArchiveView {path} />{/key}
       {:else if shown.kind === "text"}
         <pre>{shown.text}{#if shown.truncated}
             … the rest of the file is not shown{/if}</pre>

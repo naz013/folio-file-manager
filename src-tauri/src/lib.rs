@@ -1,4 +1,5 @@
 mod about;
+mod archive_view;
 mod bin;
 mod civil;
 mod cleanup;
@@ -316,6 +317,7 @@ pub fn run() {
             commands::read_text_range,
             commands::read_bytes_range,
             commands::read_image_info,
+            commands::list_archive,
             commands::show_context_menu,
             commands::trash_paths,
             commands::rename_path,

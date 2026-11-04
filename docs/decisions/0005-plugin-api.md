@@ -96,6 +96,12 @@ its frame to a plugin address either. Never add a plugin address to that policy,
   bundled one and is approved on its own files. This is a barrier against changing the plugin
   files alone: the digests are in the executable, so a writer of the executable can change them
   too (signing and a protected install folder cover that).
+- **Archive contents are a core view, not a plugin method.** Quick Look lists the entries of a zip,
+  tar or tar.gz itself (`archive_view.rs`, command `list_archive`). A plugin method would need a new
+  permission and would put an archive parser's input (untrusted names, sizes and counts) in a plugin
+  page for no gain: the reader is small, read-only, bounded and already shares code with the unpack
+  feature's dependencies, and a core view works with no plugin turned on. A plugin may still draw other
+  kinds of archive with `readBytes`.
 - **Not closed**: a DNS lookup from a page may still leak a few bytes (see `docs/PLUGINS.md`).
 
 ## Consequences

@@ -1,6 +1,7 @@
 import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import type { ArchiveListing } from "$lib/archive";
 import type { ImageInfo } from "$lib/imageinfo";
 
 /** A directory entry (decoded from `fs::Entry` in src-tauri/src/fs/mod.rs). */
@@ -148,6 +149,12 @@ export interface TextRange {
 }
 export const readTextRange = (path: string, offset: number, length: number, encoding?: string) =>
   invoke<TextRange>("read_text_range", { path, offset, length, encoding: encoding ?? null });
+
+/**
+ * What is inside a zip or tar archive, read from its index: nothing is unpacked. An archive that is
+ * encrypted, damaged or of another kind is a listing that says so; only an unreadable file rejects.
+ */
+export const listArchive = (path: string) => invoke<ArchiveListing>("list_archive", { path });
 
 /**
  * A picture's size and EXIF details; null for anything the core can't read (never an error).

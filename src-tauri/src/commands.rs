@@ -351,6 +351,23 @@ pub async fn read_image_info(
     })
 }
 
+/// What is inside a zip or tar archive, for Quick Look: names, sizes and dates, read from the
+/// archive's index. Nothing is unpacked or written. An archive that is encrypted, damaged or of
+/// another kind is a listing that says so; only a file that can't be opened is an error.
+#[tauri::command]
+pub async fn list_archive(path: String) -> CmdResult<crate::archive_view::Listing> {
+    let file = PathBuf::from(&path);
+    let outcome = slow::PREVIEWS
+        .run(slow::PREVIEW, move || {
+            if crate::preview::cloud_only(&file) {
+                return Err(std::io::Error::other(crate::preview::CLOUD_ONLY));
+            }
+            crate::archive_view::list(&file)
+        })
+        .await;
+    preview_result(&path, outcome)
+}
+
 /// What the outcome of reading a preview means to the person.
 fn preview_result<T>(path: &str, outcome: slow::Outcome<std::io::Result<T>>) -> CmdResult<T> {
     match outcome {
