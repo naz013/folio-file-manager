@@ -121,12 +121,24 @@
           monospace;
         tab-size: 2;
       }
+      .space {
+        position: relative;
+      }
       .row {
+        position: absolute;
+        left: 0;
         display: flex;
         align-items: baseline;
+        box-sizing: border-box;
+        height: 21px;
+        width: max-content;
+        min-width: 100%;
         padding-right: 12px;
-        white-space: pre-wrap;
-        overflow-wrap: anywhere;
+        white-space: pre;
+      }
+      #view.tree:focus-visible {
+        outline: 2px solid Highlight;
+        outline-offset: -2px;
       }
       .row:hover {
         background: var(--sel);
@@ -137,10 +149,6 @@
       }
       .row.cur {
         background: color-mix(in srgb, orange 25%, transparent);
-      }
-      .kids {
-        margin-left: 18px;
-        border-left: 1px solid var(--line);
       }
       .tg,
       .sp {
@@ -161,8 +169,7 @@
       .row > .str,
       .row > .num,
       .row > .lit {
-        flex: 0 1 auto;
-        min-width: 0;
+        flex: none;
       }
       .key {
         color: var(--key);
@@ -184,7 +191,9 @@
         color: var(--dim);
       }
       .more {
-        margin: 2px 0 2px 18px;
+        align-self: center;
+        padding: 0 8px;
+        line-height: 17px;
       }
       mark {
         color: inherit;
@@ -250,16 +259,25 @@
     </div>
     <div id="top"></div>
     <div id="view" tabindex="0"><p class="msg">Waiting…</p></div>
+    <script src="json.js"></script>
     <script src="encoding.js"></script>
     <script>
       // A file's text is untrusted: it is only ever put on the page with textContent.
       const MAX_HITS = 2000;
-      const CHUNK = 200;
+      /** Members of an open container shown at once: one window, moved by Next and Previous. */
+      const CHUNK = 10000;
+      const ROW_H = 21;
+      const OVERSCAN = 10;
       const MAX_DEPTH = 400;
-      /** The most of a file the tree is built from: one read, and every node costs memory. */
-      const MAX_FILE = 4 * 1024 * 1024;
+      const PAGE = 4 * 1024 * 1024;
+      /** The most of a file that is read and parsed: the text and the parsed document are held. */
+      const MAX_FILE = 32 * 1024 * 1024;
+      /** Above this the document is large: no Pretty view (it would copy the whole of it). */
+      const LARGE = 4 * 1024 * 1024;
       /** Lines drawn in the text views; each is an element on the page. */
       const MAX_LINES = 20000;
+      /** Characters of a line that are drawn: a minified document is one enormous line. */
+      const MAX_WIDTH = 10000;
       const $ = (id) => document.getElementById(id);
       const view = $("view");
       const query = $("q");
@@ -271,14 +289,22 @@
       let hasDoc = false;
       let error = null;
       let mode = "raw";
-      let entries = [];
       let expanded = new Set();
-      let limits = new Map();
-      let rowOf = new Map();
+      /** Where each open container's window of members starts. */
+      let windows = new Map();
+      /** The text of the Pretty view, made once for the document. */
+      let pretty = null;
+      /** The lines of the tree that are open, and where each node's line is. */
+      let list = [];
+      let lineIndex = new Map();
       let selected = null;
+      /** Counts searches: a newer one, or a new view, ends an older one. */
+      let searchRun = 0;
+      let capped = false;
       let hits = [];
       let current = -1;
       let needle = "";
+      let large = false;
 
       // The page talks to Folio with messages; see docs/PLUGINS.md.
       let nextId = 1;
@@ -309,23 +335,13 @@
         if (txt !== undefined) e.textContent = txt;
         return e;
       };
-      const kind = (v) => (v === null ? "null" : Array.isArray(v) ? "array" : typeof v);
-      const isContainer = (v) => v !== null && typeof v === "object";
-      const pk = (path) => JSON.stringify(path);
-      /** `$.a.b[3]["odd key"]` */
-      const pathText = (path) =>
-        path.reduce(
-          (s, k) =>
-            typeof k === "number"
-              ? `${s}[${k}]`
-              : /^[A-Za-z_$][\w$]*$/.test(k)
-                ? `${s}.${k}`
-                : `${s}[${JSON.stringify(k)}]`,
-          "$",
-        );
+      const { kind, isContainer, pk, pathText } = Json;
 
       function message(txt) {
         view.className = "";
+        view.removeAttribute("role");
+        view.removeAttribute("aria-label");
+        view.removeAttribute("aria-activedescendant");
         view.replaceChildren(el("p", "msg", txt));
       }
 
@@ -347,19 +363,72 @@
           Enc.reset(encSelect);
         }
         const mine = ++generation;
+        searchRun++;
+        let enc = chosen;
+        // Nothing of the file that was shown stays to be drawn over the reading.
+        doc = undefined;
+        hasDoc = false;
+        hits = [];
+        current = -1;
+        list = [];
+        selected = null;
+        $("cpath").disabled = $("cvalue").disabled = true;
         try {
-          const r = await call("readRange", {
-            path,
-            offset: 0,
-            length: MAX_FILE,
-            encoding: chosen || undefined,
-          });
+          let t = "";
+          let at = 0;
+          let first = true;
+          message("Reading…");
+          for (;;) {
+            const r = await readPiece(path, at, Math.min(PAGE, MAX_FILE - at), enc, mine);
+            if (!r) return;
+            if (first) {
+              Enc.show(encSelect, r, enc);
+              // The rest is read in the encoding the start was found to be in: found again
+              // for each piece, it could change part way and mix two.
+              enc = enc || r.encoding;
+              first = false;
+            }
+            fileSize = r.size;
+            t += r.text;
+            const atEnd = r.end >= r.size || r.end <= at;
+            at = atEnd ? r.size : r.end;
+            if (atEnd || at >= MAX_FILE) break;
+            message(
+              `Reading… ${(at / 1048576).toFixed(1)} of ${(fileSize / 1048576).toFixed(1)} MB`,
+            );
+          }
           if (mine !== generation) return;
-          Enc.show(encSelect, r, chosen);
-          fileSize = r.size;
-          load(r.text, r.end < r.size);
+          // Parsing a big file takes a moment: say so before the page is held up by it.
+          if (t.length > LARGE) {
+            message("Reading the structure…");
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            if (mine !== generation) return;
+          }
+          load(t, at < fileSize);
         } catch (e) {
           if (mine === generation) message(e.message);
+        }
+      }
+
+      /**
+       * One piece of the file. The host limits how many reads a plugin makes in a while: when it
+       * says so, wait a moment and ask again.
+       */
+      async function readPiece(path, offset, length, enc, mine) {
+        for (;;) {
+          try {
+            const r = await call("readRange", {
+              path,
+              offset,
+              length,
+              encoding: enc || undefined,
+            });
+            return mine === generation ? r : null;
+          } catch (e) {
+            if (!/Too many/.test(e.message) || mine !== generation) throw e;
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+            if (mine !== generation) return null;
+          }
         }
       }
 
@@ -465,14 +534,15 @@
         error = null;
         hasDoc = false;
         doc = undefined;
-        entries = [];
+        list = [];
         selected = null;
+        large = text.length > LARGE;
         expanded = new Set([pk([])]);
-        limits = new Map();
+        windows = new Map();
+        pretty = null;
         if (!truncated) {
           try {
             doc = JSON.parse(text);
-            buildIndex();
             hasDoc = true;
           } catch (e) {
             error = explain(e, text);
@@ -481,29 +551,10 @@
             }
           }
         }
-        $("m-tree").disabled = $("m-pretty").disabled = !hasDoc;
+        $("m-tree").disabled = !hasDoc;
+        $("m-pretty").disabled = !hasDoc || large;
         $("expand").disabled = $("collapse").disabled = !hasDoc;
         setMode(hasDoc ? "tree" : "raw");
-      }
-
-      /** Every node, flat, so a search sees what isn't drawn yet. */
-      function buildIndex() {
-        const walk = (key, v, path) => {
-          if (path.length > MAX_DEPTH) throw new Error("too deeply nested");
-          const container = isContainer(v);
-          entries.push({
-            path,
-            key,
-            value: container ? null : String(v),
-            container,
-          });
-          if (container) {
-            for (const [k, child] of Object.entries(v)) {
-              walk(Array.isArray(v) ? null : k, child, [...path, Array.isArray(v) ? Number(k) : k]);
-            }
-          }
-        };
-        walk(null, doc, []);
       }
 
       function setMode(m) {
@@ -529,17 +580,30 @@
             el(
               "div",
               "callout note",
-              `This file is ${(fileSize / 1048576).toFixed(1)} MB, more than the ${MAX_FILE / 1048576} MB the tree can hold, so only its start is shown as text.`,
+              `This file is ${(fileSize / 1048576).toFixed(1)} MB, more than the ${MAX_FILE / 1048576} MB Folio reads here, so only its start is shown as text.`,
+            ),
+          );
+        } else if (large) {
+          top.append(
+            el(
+              "div",
+              "callout note",
+              `A large document (${(text.length / 1048576).toFixed(1)} MB): the Pretty view is off, and the Raw view shows the first ${MAX_LINES.toLocaleString("en-US")} lines.`,
             ),
           );
         }
         needle = query.value.toLowerCase();
         hits = [];
         current = -1;
+        capped = false;
+        searchRun++;
         if (mode === "tree") {
-          if (needle) hits = findHits();
           renderTree();
-        } else renderText(mode === "pretty" ? JSON.stringify(doc, null, 2) : text);
+          if (needle) return void findHits();
+        } else {
+          if (mode === "pretty" && pretty === null) pretty = JSON.stringify(doc, null, 2);
+          renderText(mode === "pretty" ? pretty : text);
+        }
         if (hits.length) go(0);
         else status();
       }
@@ -565,50 +629,134 @@
 
       // ---- Tree ----
 
-      /** The nodes whose key or value holds the search text (all of them, drawn or not). */
-      function findHits() {
-        const found = [];
-        for (const e of entries) {
-          if (found.length >= MAX_HITS) break;
-          const inKey = e.key !== null && String(e.key).toLowerCase().includes(needle);
-          const inValue = e.value !== null && e.value.toLowerCase().includes(needle);
-          if (inKey || inValue) found.push(e.path);
+      /** Looks through the whole document for the search text, in slices, and goes to the first. */
+      async function findHits() {
+        const run = ++searchRun;
+        const r = await Json.search(doc, needle, MAX_HITS, {
+          cancelled: () => run !== searchRun,
+          visited: (n) => {
+            $("count").textContent = `Searching… ${n.toLocaleString("en-US")} nodes`;
+          },
+        });
+        if (!r) return;
+        hits = r.found;
+        capped = r.capped;
+        current = -1;
+        if (hits.length) go(0);
+        else {
+          drawRows();
+          status();
         }
-        return found;
       }
 
+      /** The open lines of the tree, as tall as all of them; only the ones in view are drawn. */
       function renderTree() {
-        const top = view.scrollTop;
-        rowOf = new Map();
+        // Where the tree was, if it was showing; any other view starts at the top.
+        const top = view.className === "tree" ? view.scrollTop : 0;
+        const flat = Json.flatten(doc, expanded, windows, CHUNK);
+        list = flat.list;
+        lineIndex = flat.index;
         view.className = "tree";
-        view.replaceChildren(node(null, doc, [], true));
+        view.setAttribute("role", "tree");
+        view.setAttribute("aria-label", "The document as a tree");
+        const space = el("div", "space");
+        space.style.height = `${list.length * ROW_H + 12}px`;
+        view.replaceChildren(space);
+        drawn = new Map();
         view.scrollTop = top;
+        drawRows();
+      }
+
+      /** The rows that are in the page, by position in the list. */
+      let drawn = new Map();
+
+      /** Draws the lines in view and drops the ones that are not: the others stay as they are. */
+      function drawRows() {
+        const space = view.firstChild;
+        if (mode !== "tree" || !space || !space.classList || !space.classList.contains("space"))
+          return;
+        const first = Math.max(0, Math.floor(view.scrollTop / ROW_H) - OVERSCAN);
+        const last = Math.min(
+          list.length,
+          Math.ceil((view.scrollTop + view.clientHeight) / ROW_H) + OVERSCAN,
+        );
+        for (const [i, row] of drawn) {
+          if (i < first || i >= last) {
+            row.remove();
+            drawn.delete(i);
+          }
+        }
+        for (let i = first; i < last; i++) {
+          if (drawn.has(i)) continue;
+          const row = lineRow(list[i], i);
+          drawn.set(i, row);
+          space.append(row);
+        }
+        syncActive();
+      }
+
+      view.addEventListener("scroll", drawRows, { passive: true });
+      window.addEventListener("resize", drawRows);
+
+      /** Tells assistive technology which line is selected, if it is in the page. */
+      function syncActive() {
+        const at = selected ? lineIndex.get(selected.id) : undefined;
+        if (at !== undefined && drawn.has(at))
+          view.setAttribute("aria-activedescendant", `jr-${at}`);
+        else view.removeAttribute("aria-activedescendant");
       }
 
       function spacer() {
         return el("span", "sp");
       }
 
-      function node(key, v, path, last) {
-        const wrap = el("div", "node");
-        const id = pk(path);
-        const k = kind(v);
-        const container = isContainer(v);
-        const count = container ? Object.keys(v).length : 0;
-        const open = container && count > 0 && expanded.has(id);
+      /** One line of the tree. */
+      function lineRow(line, i) {
         const row = el("div", "row");
-        rowOf.set(id, row);
+        row.id = `jr-${i}`;
+        row.style.top = `${i * ROW_H + 6}px`;
+        row.style.paddingLeft = `${line.depth * 18}px`;
+        if (line.close) {
+          row.setAttribute("role", "presentation");
+          row.append(spacer(), (line.kind === "array" ? "]" : "}") + (line.last ? "" : ","));
+          return row;
+        }
+        if (line.more || line.earlier) {
+          row.setAttribute("role", "presentation");
+          const n = Math.min(CHUNK, line.left);
+          const move = el(
+            "button",
+            "more",
+            line.more
+              ? `Next ${n.toLocaleString("en-US")} (${line.left.toLocaleString("en-US")} more)`
+              : `Previous ${n.toLocaleString("en-US")} (${line.left.toLocaleString("en-US")} before)`,
+          );
+          move.onclick = () => {
+            const from = windows.get(line.of) ?? 0;
+            windows.set(line.of, line.more ? from + CHUNK : Math.max(0, from - CHUNK));
+            renderTree();
+          };
+          row.append(spacer(), move);
+          return row;
+        }
+        const { id, key, v, kind: k, container, count, open } = line;
+        row.dataset.id = id;
+        row.setAttribute("role", "treeitem");
+        row.setAttribute("aria-level", String(line.depth + 1));
+        row.setAttribute("aria-posinset", String(i + 1));
+        row.setAttribute("aria-setsize", String(list.length));
+        row.setAttribute("aria-selected", String(!!selected && selected.id === id));
+        if (container && count > 0) row.setAttribute("aria-expanded", String(open));
         if (selected && selected.id === id) row.classList.add("sel");
-
+        if (hits[current] && pk(hits[current]) === id) row.classList.add("cur");
         if (container && count > 0) {
           const tg = el("button", "tg", open ? "▾" : "▸");
+          tg.tabIndex = -1;
           tg.setAttribute("aria-label", open ? "Collapse" : "Expand");
-          tg.setAttribute("aria-expanded", String(open));
           tg.onclick = (e) => {
             e.stopPropagation();
-            if (expanded.has(id)) expanded.delete(id);
-            else expanded.add(id);
-            renderTree();
+            toggle(id);
+            view.focus({ preventScroll: true });
           };
           row.append(tg);
         } else {
@@ -630,58 +778,123 @@
           }
         } else {
           const shown = k === "string" ? JSON.stringify(v) : String(v);
+          const clipped = shown.length > 600 ? `${shown.slice(0, 600)}…` : shown;
           const vs = el("span", k === "string" ? "str" : k === "number" ? "num" : "lit");
-          marked(vs, shown);
+          marked(vs, clipped);
+          if (shown.length > 600)
+            vs.title = "The value is longer than what is shown here; Copy value gives all of it.";
           row.append(vs);
         }
-        if (!last && !open) row.append(",");
-        row.onclick = () => select(id, path, v, row);
-        wrap.append(row);
-
-        if (open) {
-          const kids = el("div", "kids");
-          const items = Object.entries(v);
-          const limit = limits.get(id) ?? CHUNK;
-          const array = k === "array";
-          items.slice(0, limit).forEach(([ck, cv], i) => {
-            const childPath = [...path, array ? Number(ck) : ck];
-            kids.append(node(array ? null : ck, cv, childPath, i === items.length - 1));
-          });
-          if (items.length > limit) {
-            const more = el(
-              "button",
-              "more",
-              `Show ${Math.min(CHUNK, items.length - limit)} more (${items.length - limit} left)`,
-            );
-            more.onclick = () => {
-              limits.set(id, limit + CHUNK);
-              renderTree();
-            };
-            kids.append(more);
-          }
-          wrap.append(kids);
-          const close = el("div", "row");
-          close.append(spacer(), (k === "array" ? "]" : "}") + (last ? "" : ","));
-          wrap.append(close);
-        }
-        return wrap;
+        if (!line.last && !open) row.append(",");
+        row.onclick = () => {
+          select(line);
+          view.focus({ preventScroll: true });
+        };
+        return row;
       }
 
-      function select(id, path, value, row) {
-        if (selected) rowOf.get(selected.id)?.classList.remove("sel");
-        selected = { id, path, value };
-        row.classList.add("sel");
+      function toggle(id) {
+        if (expanded.has(id)) expanded.delete(id);
+        else expanded.add(id);
+        renderTree();
+      }
+
+      /** Selects a node by its path, which is what copying uses: it need not be drawn. */
+      function select(line) {
+        selected = { id: line.id, path: line.path };
         $("cpath").disabled = $("cvalue").disabled = false;
+        // Only the marks change: the rows stay, so a text selection or focus is not lost.
+        for (const row of drawn.values()) {
+          const on = row.dataset.id === line.id;
+          row.classList.toggle("sel", on);
+          if (row.dataset.id !== undefined) row.setAttribute("aria-selected", String(on));
+        }
+        syncActive();
       }
 
-      /** Opens every level above `path` (and the batches that hold it), so its row exists. */
+      /** Scrolls so that line `i` is in view. */
+      function ensureVisible(i) {
+        const y = i * ROW_H + 6;
+        if (y < view.scrollTop) view.scrollTop = y - 6;
+        else if (y + ROW_H > view.scrollTop + view.clientHeight) {
+          view.scrollTop = y + ROW_H - view.clientHeight + 6;
+        }
+      }
+
+      // Keys in the tree: the arrows move the selection, Right and Left open and close, Enter
+      // opens or closes. Quick Look moves between files with the arrows: here they are the tree's.
+      view.addEventListener("keydown", (e) => {
+        if (mode !== "tree" || !list.length || e.target !== view) return;
+        const node = (i, step) => {
+          while (i >= 0 && i < list.length && list[i].id === undefined) i += step;
+          return i >= 0 && i < list.length ? i : -1;
+        };
+        const at = selected ? (lineIndex.get(selected.id) ?? -1) : -1;
+        const line = at >= 0 ? list[at] : null;
+        const page = Math.max(1, Math.floor(view.clientHeight / ROW_H) - 1);
+        let to = -1;
+        switch (e.key) {
+          case "ArrowDown":
+            to = node(at + 1, 1);
+            break;
+          case "ArrowUp":
+            to = at <= 0 ? 0 : node(at - 1, -1);
+            break;
+          case "PageDown":
+            to = node(Math.min(list.length - 1, at + page), -1);
+            break;
+          case "PageUp":
+            to = node(Math.max(0, at - page), 1);
+            break;
+          case "Home":
+            to = node(0, 1);
+            break;
+          case "End":
+            to = node(list.length - 1, -1);
+            break;
+          case "ArrowRight":
+            if (line && line.container && line.count > 0 && !line.open)
+              return void act(toggle, line);
+            to = node(at + 1, 1);
+            break;
+          case "ArrowLeft":
+            if (line && line.open) return void act(toggle, line);
+            if (line && line.depth > 0) {
+              let i = at - 1;
+              while (i > 0 && (list[i].id === undefined || list[i].depth >= line.depth)) i--;
+              to = i;
+            }
+            break;
+          case "Enter":
+          case " ":
+            if (line && line.container && line.count > 0) return void act(toggle, line);
+            break;
+          default:
+            return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        if (to >= 0) {
+          select(list[to]);
+          ensureVisible(to);
+          drawRows();
+        }
+        function act(fn, l) {
+          e.preventDefault();
+          e.stopPropagation();
+          fn(l.id);
+        }
+      });
+
+      /** Opens every level above `path` (and the batches that hold it), so its line exists. */
       function reveal(path) {
         let v = doc;
         for (let i = 0; i < path.length; i++) {
           const id = pk(path.slice(0, i));
           expanded.add(id);
-          const index = Object.keys(v).indexOf(String(path[i]));
-          if (index >= (limits.get(id) ?? CHUNK)) limits.set(id, index + CHUNK);
+          const index = Array.isArray(v) ? path[i] : Object.keys(v).indexOf(String(path[i]));
+          // The window of members that holds it; only that many lines are made, however far in.
+          windows.set(id, Math.floor(index / CHUNK) * CHUNK);
           v = v[path[i]];
         }
       }
@@ -689,9 +902,11 @@
       // ---- Text (pretty and raw) ----
 
       function renderText(str) {
-        const all = str.split(/\r\n|\n|\r/);
-        const lines = all.slice(0, MAX_LINES);
+        const { lines, more, clipped } = Json.firstLines(str, MAX_LINES, MAX_WIDTH);
         view.className = "text";
+        view.removeAttribute("role");
+        view.removeAttribute("aria-label");
+        view.removeAttribute("aria-activedescendant");
         view.style.setProperty("--digits", String(String(lines.length).length));
         const frag = document.createDocumentFragment();
         const marks = [];
@@ -702,9 +917,16 @@
           row.append(el("span", "n", String(i + 1)), t);
           frag.append(row);
         });
-        if (all.length > lines.length) {
-          frag.append(el("p", "msg", `… ${all.length - lines.length} more lines are not shown`));
+        if (clipped) {
+          frag.append(
+            el(
+              "p",
+              "msg",
+              `Lines are cut at ${MAX_WIDTH.toLocaleString("en-US")} characters; the Pretty view shows a small document in full.`,
+            ),
+          );
         }
+        if (more) frag.append(el("p", "msg", "… more lines are not shown"));
         view.replaceChildren(frag);
         hits = marks;
         const bad = view.querySelector(".line.err");
@@ -716,27 +938,34 @@
       function status() {
         let t = "";
         if (needle) {
-          const more = hits.length >= MAX_HITS ? "+" : "";
+          const more = capped || hits.length >= MAX_HITS ? "+" : "";
           t = hits.length ? `${current + 1} of ${hits.length}${more}` : "No matches";
         } else if (hasDoc) {
           const unit = Array.isArray(doc) ? "item" : "key";
           t = isContainer(doc)
-            ? `${Object.keys(doc).length} ${unit}${Object.keys(doc).length === 1 ? "" : "s"} · ${(text.length / 1024).toFixed(1)} KB`
+            ? `${Object.keys(doc).length} ${unit}${Object.keys(doc).length === 1 ? "" : "s"} · ${text.length < 1048576 ? `${(text.length / 1024).toFixed(1)} KB` : `${(text.length / 1048576).toFixed(1)} MB`}`
             : kind(doc);
         }
         $("count").textContent = t;
       }
 
       function go(index) {
-        if (!hits.length) return;
+        if (!hits.length || (mode === "tree" && !hasDoc)) return;
         const was = hits[current];
         current = (index + hits.length) % hits.length;
         if (mode === "tree") {
+          // Open what is above it and find its line: only the lines in view are drawn, so
+          // however far it is, this is one pass over the open lines and a scroll.
           reveal(hits[current]);
           renderTree();
-          const row = rowOf.get(pk(hits[current]));
-          row?.classList.add("cur");
-          row?.scrollIntoView({ block: "center", inline: "nearest" });
+          const at = lineIndex.get(pk(hits[current]));
+          const line = list[at];
+          if (line) {
+            selected = { id: line.id, path: line.path };
+            $("cpath").disabled = $("cvalue").disabled = false;
+            view.scrollTop = Math.max(0, at * ROW_H - view.clientHeight / 2);
+            drawRows();
+          }
         } else {
           was?.classList?.remove("cur");
           hits[current].classList.add("cur");
@@ -775,10 +1004,8 @@
       $("prev").onclick = () => go(current - 1);
       for (const m of ["tree", "pretty", "raw"]) $(`m-${m}`).onclick = () => setMode(m);
       $("expand").onclick = () => {
-        let n = 0;
-        for (const e of entries) {
-          if (e.container && e.path.length <= 8 && n++ < 3000) expanded.add(pk(e.path));
-        }
+        // Not everything of a huge document: no deeper than 8 levels and 3,000 containers.
+        for (const id of Json.openable(doc, 8, 3000, 200000, 150000, CHUNK)) expanded.add(id);
         setMode("tree");
       };
       $("collapse").onclick = () => {
@@ -816,7 +1043,8 @@
       $("cpath").onclick = () => selected && copy(pathText(selected.path), "path");
       $("cvalue").onclick = () => {
         if (!selected) return;
-        const v = selected.value;
+        // From the document by path, so a node that is not drawn can be copied as well.
+        const v = Json.valueAt(doc, selected.path);
         copy(typeof v === "string" ? v : JSON.stringify(v, null, 2), "value");
       };
 
