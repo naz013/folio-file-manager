@@ -32,7 +32,10 @@ test("a plugin's preview is always labelled by a bar Folio draws outside the plu
 
 test("the bar takes its own row of the window only while a plugin draws the preview", () => {
   assert.match(ql, /class:with-source=\{shown\.kind === "plugin"\}/);
-  assert.match(ql, /\.window\.with-source\s*\{\s*grid-template-rows: auto 1fr auto auto;/);
+  assert.match(
+    ql,
+    /\.window\.with-source,\s*\.window\.with-details\s*\{\s*grid-template-rows: auto 1fr auto auto;/,
+  );
   // Colours and sizes come from the tokens, never written out.
   const css = ql.slice(ql.indexOf(".source {"), ql.indexOf("</style>"));
   assert.ok(!/#[0-9a-f]{3,8}\b/i.test(css), "a colour written out in the bar's styles");

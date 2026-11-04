@@ -326,6 +326,31 @@ pub async fn read_bytes_range(
     preview_result(&path, outcome).map(|r| tauri::ipc::Response::new(r.pack()))
 }
 
+/// The size and EXIF details of a picture, for Quick Look and the inspector: `None` for anything
+/// that can't be read, or that is slow or in the cloud (looking never downloads), because the
+/// details are a courtesy and never an error. The place it was taken is only included when
+/// `with_location` is true; otherwise the answer only says whether there is one.
+#[tauri::command]
+pub async fn read_image_info(
+    path: String,
+    with_location: bool,
+) -> CmdResult<Option<crate::imageinfo::ImageInfo>> {
+    let file = PathBuf::from(&path);
+    // The cloud check touches the disk too, so it runs in the lane, with the time limit.
+    let outcome = slow::PREVIEWS
+        .run(slow::DETAILS, move || {
+            if crate::preview::cloud_only(&file) {
+                return None;
+            }
+            crate::imageinfo::read(&file, with_location)
+        })
+        .await;
+    Ok(match outcome {
+        slow::Outcome::Done(info) => info,
+        _ => None,
+    })
+}
+
 /// What the outcome of reading a preview means to the person.
 fn preview_result<T>(path: &str, outcome: slow::Outcome<std::io::Result<T>>) -> CmdResult<T> {
     match outcome {

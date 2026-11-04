@@ -42,6 +42,9 @@ pub static AUTO_MEASURES: LazyLock<Lane> = LazyLock::new(|| Lane::new(1));
 /// How long Quick Look may wait for a file before saying it is not answering.
 pub const PREVIEW: Duration = Duration::from_secs(15);
 
+/// How long a picture's details (size, EXIF) may take: a courtesy, so not as long as a preview.
+pub const DETAILS: Duration = Duration::from_secs(5);
+
 /// Where Quick Look reads: the start of a text file, and the byte ranges of the picture, sound
 /// or video being shown. A few at once, so a dead share cannot take the blocking pool.
 pub static PREVIEWS: LazyLock<Lane> = LazyLock::new(|| Lane::new(8));

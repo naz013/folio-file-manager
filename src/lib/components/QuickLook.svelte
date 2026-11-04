@@ -2,12 +2,14 @@
   import { onMount } from "svelte";
   import { CLOUD_ONLY, previewUrl, readTextPreview, releasePreview, type Entry } from "$lib/api/fs";
   import { formatDate, formatSize } from "$lib/format";
+  import { hasDetails } from "$lib/imageinfo";
   import { previewKind } from "$lib/preview";
   import { previewEvent, previewFor, type PreviewHit } from "$lib/plugins";
   import { plugins } from "$lib/plugins.svelte";
   import { createZoomEase, pixelsPer, wheelFactor } from "$lib/zoom";
   import FileIcon from "./FileIcon.svelte";
   import FolderIcon from "./FolderIcon.svelte";
+  import ImageDetails from "./ImageDetails.svelte";
   import PdfViewer from "./PdfViewer.svelte";
   import PluginFrame from "./PluginFrame.svelte";
 
@@ -245,6 +247,7 @@
     bind:this={dialog}
     class="window"
     class:with-source={shown.kind === "plugin"}
+    class:with-details={shown.kind === "url" && shown.media === "image" && hasDetails(entry.name)}
     role="dialog"
     aria-modal="true"
     aria-label="Quick Look: {entry.name}"
@@ -345,6 +348,10 @@
         <span class="badge" class:builtin={builtIn}>{builtIn ? "Built-in plugin" : "Plugin"}</span>
         <button class="open" onclick={() => (skipped = path)}>Show normally</button>
       </div>
+    {/if}
+
+    {#if shown.kind === "url" && shown.media === "image" && hasDetails(entry.name)}
+      {#key path}<ImageDetails {path} layout="line" />{/key}
     {/if}
 
     <footer>← → to move · Space or Esc to close</footer>
@@ -476,7 +483,8 @@
   }
 
   /* A plugin draws the preview; this bar says so and offers Folio's own view instead. */
-  .window.with-source {
+  .window.with-source,
+  .window.with-details {
     grid-template-rows: auto 1fr auto auto;
   }
 

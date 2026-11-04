@@ -8,6 +8,7 @@ mod cleanup_temp;
 mod commands;
 mod crash;
 mod fs;
+mod imageinfo;
 mod journal;
 #[cfg_attr(
     not(windows),
@@ -314,6 +315,7 @@ pub fn run() {
             commands::read_text_preview,
             commands::read_text_range,
             commands::read_bytes_range,
+            commands::read_image_info,
             commands::show_context_menu,
             commands::trash_paths,
             commands::rename_path,

@@ -1,6 +1,7 @@
 import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import type { ImageInfo } from "$lib/imageinfo";
 
 /** A directory entry (decoded from `fs::Entry` in src-tauri/src/fs/mod.rs). */
 export interface Entry {
@@ -147,6 +148,13 @@ export interface TextRange {
 }
 export const readTextRange = (path: string, offset: number, length: number, encoding?: string) =>
   invoke<TextRange>("read_text_range", { path, offset, length, encoding: encoding ?? null });
+
+/**
+ * A picture's size and EXIF details; null for anything the core can't read (never an error).
+ * The place it was taken is only included when `withLocation` is true.
+ */
+export const readImageInfo = (path: string, withLocation = false) =>
+  invoke<ImageInfo | null>("read_image_info", { path, withLocation });
 
 /** A piece of a file as bytes: from byte `offset`, up to `length` bytes. */
 export interface BytesRange {

@@ -70,8 +70,10 @@
   import { untrack } from "svelte";
   import { measureCancel, measureDir, type Entry, type Measured, type Tag } from "$lib/api/fs";
   import { formatDate, formatSize } from "$lib/format";
+  import { hasDetails } from "$lib/imageinfo";
   import { tagColor } from "$lib/tags";
   import FolderIcon from "./FolderIcon.svelte";
+  import ImageDetails from "./ImageDetails.svelte";
   import Thumbnail from "./Thumbnail.svelte";
 
   let {
@@ -245,6 +247,9 @@
       <dt>Where</dt>
       <dd class="path">{item.path}</dd>
     </dl>
+    {#if !item.isDir && hasDetails(item.name)}
+      {#key item.path}<ImageDetails path={item.path} layout="list" />{/key}
+    {/if}
   {:else if picked.length > 1}
     <h2 class="name">{plural(picked.length, "item")} selected</h2>
     <dl>

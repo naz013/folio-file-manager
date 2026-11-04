@@ -40,6 +40,8 @@ lopdf = "0.46"
 # Zip archives; deflate (and deflate64), through the flate2 the image crates already bring.
 zip = { version = "9", default-features = false, features = ["deflate-flate2", "deflate64"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "bmp"] }
+imagesize = "0.15"
+kamadak-exif = "0.6"
 
 [dev-dependencies]
 tempfile = "3"
