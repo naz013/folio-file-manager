@@ -1,0 +1,23 @@
+{
+  "id": "log-viewer",
+  "name": "Log viewer",
+  "version": "1.0.0",
+  "description": "Quick Look for log files: levels in colour, a filter, and a way to follow the end of the file.",
+  "api": 1,
+  "entry": "index.html",
+  "permissions": ["read"],
+  "previews": [
+    {
+      "id": "log",
+      "title": "Log viewer",
+      "extensions": ["log", "out", "err"]
+    }
+  ],
+  "thumbnails": [
+    {
+      "extensions": ["log", "out", "err"],
+      "image": "thumb.svg",
+      "color": "#e8590c"
+    }
+  ]
+}

@@ -1,0 +1,624 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Log viewer</title>
+    <style>
+      :root {
+        --line: color-mix(in srgb, CanvasText 14%, transparent);
+        --dim: color-mix(in srgb, CanvasText 52%, transparent);
+        --soft: color-mix(in srgb, CanvasText 6%, transparent);
+        --hit: color-mix(in srgb, gold 45%, transparent);
+        --error: light-dark(#c7293a, #ff7b86);
+        --warn: light-dark(#a86400, #f0b347);
+        --info: CanvasText;
+        --debug: color-mix(in srgb, CanvasText 62%, transparent);
+        --trace: color-mix(in srgb, CanvasText 42%, transparent);
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+        background: Canvas;
+        color: CanvasText;
+        font:
+          13px system-ui,
+          sans-serif;
+      }
+      .bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-bottom: 1px solid var(--line);
+      }
+      .bar input[type="search"] {
+        flex: 1;
+        min-width: 100px;
+        max-width: 240px;
+        padding: 4px 8px;
+        font: inherit;
+        color: inherit;
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+      }
+      button {
+        padding: 3px 8px;
+        font: inherit;
+        color: inherit;
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+      button[aria-pressed="true"] {
+        background: var(--hit);
+      }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+      }
+      .chip i {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--c);
+      }
+      .chip[aria-pressed="false"] {
+        opacity: 0.45;
+        background: transparent;
+      }
+      .chip[aria-pressed="true"] {
+        background: var(--soft);
+      }
+      .chip b {
+        font-weight: 500;
+        color: var(--dim);
+      }
+      .count {
+        color: var(--dim);
+        white-space: nowrap;
+      }
+      .spacer {
+        flex: 1;
+      }
+      #grid {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        position: relative;
+        font:
+          12.5px/20px ui-monospace,
+          "Cascadia Mono",
+          Consolas,
+          monospace;
+      }
+      #body {
+        position: relative;
+        min-width: 100%;
+      }
+      .row {
+        position: absolute;
+        left: 0;
+        right: 0;
+        height: 20px;
+        box-sizing: border-box;
+        padding: 0 12px 0 9px;
+        border-left: 3px solid transparent;
+        white-space: pre;
+        overflow: hidden;
+      }
+      .row:hover {
+        background: var(--soft);
+      }
+      .lv-error {
+        color: var(--error);
+        border-left-color: var(--error);
+        background: color-mix(in srgb, var(--error) 8%, transparent);
+      }
+      .lv-warn {
+        color: var(--warn);
+        border-left-color: var(--warn);
+        background: color-mix(in srgb, var(--warn) 8%, transparent);
+      }
+      .lv-info {
+        color: var(--info);
+      }
+      .lv-debug {
+        color: var(--debug);
+      }
+      .lv-trace {
+        color: var(--trace);
+      }
+      .ts {
+        opacity: 0.6;
+      }
+      mark {
+        color: inherit;
+        background: var(--hit);
+        border-radius: 2px;
+      }
+      .msg {
+        padding: 24px;
+        color: var(--dim);
+        text-align: center;
+        font:
+          13px system-ui,
+          sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="bar">
+      <input id="q" type="search" placeholder="Filter lines (Ctrl+F)" aria-label="Filter lines" />
+      <span id="chips" role="group" aria-label="Levels"></span>
+      <span id="count" class="count" role="status"></span>
+      <span class="spacer"></span>
+      <button id="start" title="Show the start of the file">Start</button>
+      <button id="end" title="Show the end of the file">End</button>
+      <button id="follow" aria-pressed="false" title="Keep reading as the file grows">
+        Follow
+      </button>
+    </div>
+    <div id="grid" tabindex="0"><p class="msg">Waiting…</p></div>
+    <script src="log.js"></script>
+    <script>
+      // A file's text is untrusted: it is only ever put on the page with textContent.
+      const ROW_H = 20;
+      /** The end of a big file is read first, small enough to show at once. */
+      const TAIL = 512 * 1024;
+      const PIECE = 1024 * 1024;
+      /** A file this small is read whole. */
+      const WHOLE = 2 * 1024 * 1024;
+      /** How much of the file is held at a time; the far side is let go of past it. */
+      const MAX_WINDOW = 24 * 1024 * 1024;
+      const MAX_SHOWN_CHARS = 4000;
+      const FOLLOW_MS = 1500;
+      const LEVELS = [
+        ["error", "Error", "var(--error)"],
+        ["warn", "Warn", "var(--warn)"],
+        ["info", "Info", "var(--info)"],
+        ["debug", "Debug", "var(--debug)"],
+        ["trace", "Trace", "var(--trace)"],
+        ["none", "Other", "var(--dim)"],
+      ];
+      const $ = (id) => document.getElementById(id);
+      const grid = $("grid");
+      const query = $("q");
+
+      let path = "";
+      let size = 0;
+      /** Whole lines, in file order: [{ start, end, lines }]. Each ends where the next begins. */
+      let pieces = [];
+      let lines = [];
+      let lvl = [];
+      let counts = {};
+      let on = { error: true, warn: true, info: true, debug: true, trace: true, none: true };
+      let shown = [];
+      let needle = "";
+      let width = 0;
+      let loadingUp = false;
+      let loadingDown = false;
+      let doneUp = false;
+      let following = false;
+      let timer = 0;
+
+      // The page talks to Folio with messages; see docs/PLUGINS.md.
+      let nextId = 1;
+      const pending = new Map();
+      function call(method, params) {
+        return new Promise((resolve, reject) => {
+          const id = nextId++;
+          pending.set(id, { resolve, reject });
+          parent.postMessage({ folio: 1, id, method, params }, "*");
+        });
+      }
+      window.addEventListener("message", (e) => {
+        const m = e.data;
+        if (!m || m.folio !== 1) return;
+        if (m.id !== undefined) {
+          const waiting = pending.get(m.id);
+          pending.delete(m.id);
+          if (m.error !== undefined) waiting?.reject(new Error(m.error));
+          else waiting?.resolve(m.result);
+        } else if (m.event === "preview" && m.preview === "log") {
+          path = m.path;
+          showEnd();
+        }
+      });
+
+      const el = (tag, cls, txt) => {
+        const e = document.createElement(tag);
+        if (cls) e.className = cls;
+        if (txt !== undefined) e.textContent = txt;
+        return e;
+      };
+      const fmtSize = (n) =>
+        n < 1048576 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1048576).toFixed(1)} MB`;
+      const fmtNum = (n) => n.toLocaleString("en-US");
+      const read = (offset, length) => call("readRange", { path, offset, length });
+
+      function message(txt) {
+        grid.replaceChildren(el("p", "msg", txt));
+      }
+
+      /**
+       * A piece of the file as whole lines, with where they are in the file. At the end of the
+       * file the last line may still be being written: `openStart` is where it begins, so it can
+       * be read again once it is finished, and `tail` is the text before it, to tell later that
+       * the file is still the same one.
+       */
+      function pieceOf(r, atLineStart, atEof = r.end >= r.size) {
+        const w = Log.wholeLines(r.text, r.start, atLineStart, atEof);
+        const done = w.text.lastIndexOf("\n") + 1;
+        const open = done < w.text.length;
+        return {
+          start: w.start,
+          end: w.end,
+          lines: Log.linesOf(w.text),
+          open,
+          openStart: open
+            ? w.start + new TextEncoder().encode(w.text.slice(0, done)).length
+            : w.end,
+          tail: w.text.slice(0, done).slice(-256),
+        };
+      }
+
+      // ---- Reading ----
+
+      /** Shows the end of the file: all of a small one, the last part of a big one. */
+      async function showEnd() {
+        try {
+          const head = await read(0, 4096);
+          size = head.size;
+          const small = size <= WHOLE;
+          const off = small ? 0 : size - TAIL;
+          const r = small ? await read(0, size) : await read(off, TAIL);
+          pieces = [pieceOf(r, off === 0)];
+          doneUp = pieces[0].start === 0;
+          prepare(true);
+          grid.scrollTop = grid.scrollHeight;
+          drawRows();
+        } catch (e) {
+          message(e.message);
+        }
+      }
+
+      async function showStart() {
+        try {
+          const r = await read(0, PIECE);
+          size = r.size;
+          pieces = [pieceOf(r, true)];
+          doneUp = true;
+          prepare(true);
+          grid.scrollTop = 0;
+          drawRows();
+          loadLater();
+        } catch (e) {
+          message(e.message);
+        }
+      }
+
+      const windowBytes = () => pieces.reduce((n, p) => n + (p.end - p.start), 0);
+      const lastEnd = () => pieces[pieces.length - 1].end;
+
+      /** The first line in view, as an index into all lines, to stay at it when lines are added. */
+      function anchor() {
+        const k = Math.min(shown.length - 1, Math.floor(grid.scrollTop / ROW_H));
+        return k < 0 ? null : { line: shown[k], inRow: grid.scrollTop - k * ROW_H };
+      }
+      function restore(a, shift) {
+        if (!a) return;
+        const target = a.line + shift;
+        let lo = 0;
+        let hi = shown.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if (shown[mid] < target) lo = mid + 1;
+          else hi = mid;
+        }
+        grid.scrollTop = lo * ROW_H + a.inRow;
+      }
+
+      async function loadEarlier() {
+        if (loadingUp || doneUp || !pieces.length) return;
+        loadingUp = true;
+        try {
+          const first = pieces[0];
+          const off = Math.max(0, first.start - PIECE);
+          const r = await read(off, first.start - off);
+          const p = pieceOf(r, off === 0);
+          p.end = first.start;
+          if (!p.lines.length) {
+            // Nothing whole came back (one very long line): don't ask again.
+            doneUp = true;
+          } else {
+            const a = anchor();
+            pieces.unshift(p);
+            let shift = p.lines.length;
+            while (windowBytes() > MAX_WINDOW && pieces.length > 1) pieces.pop();
+            doneUp = p.start === 0;
+            prepare(false);
+            restore(a, shift);
+          }
+        } catch {
+          // The reads are rate limited; the next scroll asks again.
+        } finally {
+          loadingUp = false;
+        }
+        drawRows();
+      }
+
+      async function loadLater() {
+        if (loadingDown || !pieces.length || lastEnd() >= size) return;
+        loadingDown = true;
+        try {
+          const r = await read(lastEnd(), PIECE);
+          size = r.size;
+          const p = pieceOf(r, true);
+          if (p.lines.length) {
+            const a = anchor();
+            pieces.push(p);
+            let dropped = 0;
+            while (windowBytes() > MAX_WINDOW && pieces.length > 1) {
+              dropped += pieces.shift().lines.length;
+              doneUp = false;
+            }
+            prepare(false);
+            restore(a, -dropped);
+          } else {
+            size = Math.min(size, lastEnd());
+          }
+        } catch {
+          // Try again on the next scroll.
+        } finally {
+          loadingDown = false;
+        }
+        drawRows();
+      }
+
+      // ---- What is shown ----
+
+      /** Lines, their levels and the counts, again, after the pieces changed. */
+      function prepare(resetScroll) {
+        lines = pieces.flatMap((p) => p.lines);
+        lvl = Log.levels(lines);
+        counts = { error: 0, warn: 0, info: 0, debug: 0, trace: 0, none: 0 };
+        for (const l of lvl) counts[l || "none"]++;
+        drawChips();
+        refilter();
+        if (resetScroll) grid.scrollTop = 0;
+        status();
+        drawRows();
+      }
+
+      function refilter() {
+        needle = query.value.toLowerCase();
+        shown = [];
+        let longest = 0;
+        for (let i = 0; i < lines.length; i++) {
+          if (!on[lvl[i] || "none"]) continue;
+          if (needle && !lines[i].toLowerCase().includes(needle)) continue;
+          shown.push(i);
+          if (lines[i].length > longest) longest = lines[i].length;
+        }
+        width = Math.min(longest, MAX_SHOWN_CHARS) * 7.6 + 40;
+        let body = $("body");
+        if (!body) {
+          body = el("div");
+          body.id = "body";
+          grid.replaceChildren(body);
+        }
+        body.style.height = `${shown.length * ROW_H}px`;
+        body.style.width = `${width}px`;
+      }
+
+      function drawChips() {
+        const box = $("chips");
+        box.replaceChildren();
+        for (const [key, label, color] of LEVELS) {
+          if (!counts[key] && key !== "none") continue;
+          const b = el("button", "chip");
+          b.setAttribute("aria-pressed", String(on[key]));
+          b.title = `${on[key] ? "Hide" : "Show"} ${label.toLowerCase()} lines`;
+          const dot = el("i");
+          dot.style.setProperty("--c", color);
+          b.append(dot, label, " ");
+          b.append(el("b", null, fmtNum(counts[key])));
+          b.onclick = () => {
+            on[key] = !on[key];
+            drawChips();
+            refilter();
+            grid.scrollTop = 0;
+            drawRows();
+            status();
+          };
+          box.append(b);
+        }
+      }
+
+      function marked(parent, str) {
+        if (!needle) {
+          parent.append(str);
+          return;
+        }
+        const lower = str.toLowerCase();
+        let from = 0;
+        let at = lower.indexOf(needle);
+        while (at !== -1) {
+          if (at > from) parent.append(str.slice(from, at));
+          parent.append(el("mark", null, str.slice(at, at + needle.length)));
+          from = at + needle.length;
+          at = lower.indexOf(needle, from);
+        }
+        parent.append(str.slice(from));
+      }
+
+      /** Only the rows in view (and a few beyond) are elements. */
+      function drawRows() {
+        const body = $("body");
+        if (!body) return;
+        const first = Math.max(0, Math.floor(grid.scrollTop / ROW_H) - 10);
+        const last = Math.min(
+          shown.length,
+          Math.ceil((grid.scrollTop + grid.clientHeight) / ROW_H) + 10,
+        );
+        const frag = document.createDocumentFragment();
+        for (let k = first; k < last; k++) {
+          const i = shown[k];
+          const text =
+            lines[i].length > MAX_SHOWN_CHARS ? `${lines[i].slice(0, MAX_SHOWN_CHARS)}…` : lines[i];
+          const row = el("div", `row lv-${lvl[i] || "none"}`);
+          row.style.top = `${k * ROW_H}px`;
+          const cut = Log.stampLength(text);
+          if (cut) {
+            const ts = el("span", "ts");
+            marked(ts, text.slice(0, cut));
+            row.append(ts);
+          }
+          marked(row, text.slice(cut));
+          frag.append(row);
+        }
+        body.replaceChildren(frag);
+      }
+
+      function status() {
+        const total = lines.length;
+        const part =
+          pieces.length && (pieces[0].start > 0 || lastEnd() < size)
+            ? ` · ${fmtSize(lastEnd() - pieces[0].start)} of ${fmtSize(size)}`
+            : size
+              ? ` · ${fmtSize(size)}`
+              : "";
+        $("count").textContent =
+          shown.length === total
+            ? `${fmtNum(total)} line${total === 1 ? "" : "s"}${part}`
+            : `${fmtNum(shown.length)} of ${fmtNum(total)} lines${part}`;
+        if (!total) message("This file is empty.");
+      }
+
+      // ---- Scrolling and following ----
+
+      grid.addEventListener(
+        "scroll",
+        () => {
+          drawRows();
+          if (grid.scrollTop < 400) loadEarlier();
+          if (!following && grid.scrollHeight - grid.scrollTop - grid.clientHeight < 600)
+            loadLater();
+        },
+        { passive: true },
+      );
+      window.addEventListener("resize", drawRows);
+
+      async function poll() {
+        if (!following || loadingDown || !pieces.length) return;
+        loadingDown = true;
+        try {
+          const last = pieces[pieces.length - 1];
+          // From where the unfinished line (if any) begins, and a few bytes before it, to check
+          // that this is still the file that was read: a replaced file is read from its start.
+          const base = last.openStart;
+          const back = Math.min(base, 128);
+          const r = await read(base - back, PIECE + back);
+          const at = back ? Log.splitAt(r.text, base - r.start) : 0;
+          const same = back === 0 || (at >= 0 && last.tail.endsWith(r.text.slice(0, at)));
+          if (r.size < base || !same) {
+            loadingDown = false;
+            await showEnd();
+            return;
+          }
+          size = r.size;
+          const fresh = r.text.slice(at);
+          // Only lines that are finished are taken; a half-written one is read again next time.
+          if (!fresh.includes("\n")) {
+            status();
+            return;
+          }
+          const p = pieceOf({ text: fresh, start: base, end: r.end, size: r.size }, true, false);
+          if (p.lines.length) {
+            const atBottom = grid.scrollHeight - grid.scrollTop - grid.clientHeight < 40;
+            const a = anchor();
+            if (last.open) {
+              last.lines.pop();
+              last.end = last.openStart;
+              last.open = false;
+            }
+            pieces.push(p);
+            let dropped = 0;
+            while (windowBytes() > MAX_WINDOW && pieces.length > 1) {
+              dropped += pieces.shift().lines.length;
+              doneUp = false;
+            }
+            prepare(false);
+            if (atBottom) grid.scrollTop = grid.scrollHeight;
+            else restore(a, -dropped);
+            drawRows();
+          } else {
+            status();
+          }
+        } catch {
+          // Reads are limited in number: the next poll tries again.
+        } finally {
+          loadingDown = false;
+        }
+      }
+
+      $("follow").onclick = (e) => {
+        following = !following;
+        e.currentTarget.setAttribute("aria-pressed", String(following));
+        clearInterval(timer);
+        if (following) {
+          timer = setInterval(poll, FOLLOW_MS);
+          poll();
+        }
+      };
+      $("start").onclick = showStart;
+      $("end").onclick = showEnd;
+
+      // ---- Filter ----
+
+      let debounce = 0;
+      query.addEventListener("input", () => {
+        clearTimeout(debounce);
+        debounce = setTimeout(() => {
+          refilter();
+          grid.scrollTop = 0;
+          drawRows();
+          status();
+        }, 150);
+      });
+      query.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && query.value) {
+          e.preventDefault();
+          e.stopPropagation();
+          query.value = "";
+          refilter();
+          drawRows();
+          status();
+        }
+      });
+      document.addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+          e.preventDefault();
+          query.focus();
+          query.select();
+        }
+      });
+
+      parent.postMessage({ folio: 1, event: "ready" }, "*");
+    </script>
+  </body>
+</html>
