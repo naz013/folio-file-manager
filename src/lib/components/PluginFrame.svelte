@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, untrack } from "svelte";
-  import { pluginUrl, readTextPreview } from "$lib/api/fs";
+  import { pluginUrl, pluginsPin, readTextPreview } from "$lib/api/fs";
   import {
     createBridge,
     isReady,
@@ -95,7 +95,10 @@
     let current = true;
     doc = null;
     failed = false;
-    fetch(url, { cache: "no-store" })
+    // The core serves nothing of a plugin until it is pinned to the files that were approved,
+    // so a file swapped after the approval is refused instead of run.
+    (plugin.digest ? pluginsPin(plugin.id, plugin.digest) : Promise.reject(new Error("no digest")))
+      .then(() => fetch(url, { cache: "no-store" }))
       .then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
       .then((html) => {
         if (!current) return;

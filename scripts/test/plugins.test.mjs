@@ -417,3 +417,13 @@ test("the app page never lets a frame go to a plugin address, and frames are not
   assert.match(frame, /srcdoc=\{doc\}/);
   assert.ok(!/<iframe[^>]*\ssrc=/.test(frame), "an iframe with a src link");
 });
+
+test("the frame pins the plugin to what was approved before it loads anything", () => {
+  const frame = readFileSync(
+    new URL("../../src/lib/components/PluginFrame.svelte", import.meta.url),
+    "utf8",
+  );
+  const pin = frame.indexOf("pluginsPin(plugin.id, plugin.digest)");
+  const load = frame.indexOf("fetch(url");
+  assert.ok(pin > 0 && load > pin, "pinned first, then fetched");
+});

@@ -218,7 +218,7 @@ pub fn run() {
             // a journal that can't open is a failed start.
             app.manage(open_journal(journal_file.as_deref())?);
             manage_stores(app);
-            app.manage(plugins::PluginsDir(
+            app.manage(plugins::PluginsDir::new(
                 app.path().app_data_dir().ok().map(|d| d.join("plugins")),
             ));
             // Always managed, so the commands never meet missing state; without an app
@@ -335,6 +335,7 @@ pub fn run() {
             commands::bin_purge,
             commands::scan_start,
             commands::plugins_list,
+            commands::plugins_pin,
             commands::plugins_folder,
             commands::scan_cancel,
             commands::scan_children,

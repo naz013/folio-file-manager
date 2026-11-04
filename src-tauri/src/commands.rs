@@ -1228,13 +1228,23 @@ pub fn scan_start(app: tauri::AppHandle, root: String, fast: Option<bool>) -> Cm
 /// The plugins found in the plugins folder, each with its manifest as written.
 #[tauri::command]
 pub fn plugins_list(dir: tauri::State<'_, PluginsDir>) -> Vec<plugins::Found> {
-    dir.0.as_deref().map(plugins::list).unwrap_or_default()
+    dir.path.as_deref().map(plugins::list).unwrap_or_default()
+}
+
+/// Approves a plugin for serving: only its files as they are now, and only if they are the code with
+/// `digest`, which the person agreed to. Until then (and after any change) it serves nothing.
+#[tauri::command(async)]
+pub fn plugins_pin(dir: tauri::State<'_, PluginsDir>, id: String, digest: String) -> CmdResult<()> {
+    dir.pin(&id, &digest)
 }
 
 /// The plugins folder, made if it isn't there yet, so it can be opened and filled.
 #[tauri::command]
 pub fn plugins_folder(dir: tauri::State<'_, PluginsDir>) -> CmdResult<String> {
-    let path = dir.0.as_deref().ok_or("There is no folder for plugins")?;
+    let path = dir
+        .path
+        .as_deref()
+        .ok_or("There is no folder for plugins")?;
     std::fs::create_dir_all(path).map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().into_owned())
 }

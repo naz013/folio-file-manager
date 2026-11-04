@@ -4,7 +4,9 @@
 //! This module only reads: it lists the manifests (the page checks and understands them) and
 //! answers `plugin://` requests with files from inside one plugin's folder.
 
+use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Mutex;
 
 use serde::Serialize;
 use tauri::http::{Request, Response, StatusCode};
@@ -29,8 +31,65 @@ const MAX_FILES: usize = 1000;
 /// A plugin whose served files add up to more than this is not read.
 const MAX_TOTAL: u64 = 64 << 20;
 
-/// The folder plugins live in; managed state, `None` when the system has no app data folder.
-pub struct PluginsDir(pub Option<PathBuf>);
+/// What was approved for one plugin: the hash of each file it may serve, by relative path.
+type Pin = HashMap<String, String>;
+
+/// The folder plugins live in, and the files approved to be served; managed state. The path is
+/// `None` when the system has no app data folder.
+pub struct PluginsDir {
+    pub path: Option<PathBuf>,
+    /// A plugin serves nothing until the page pins it with the digest the person approved, and
+    /// then only files whose bytes still hash to what the pin saw.
+    pins: Mutex<HashMap<String, Pin>>,
+}
+
+impl PluginsDir {
+    pub fn new(path: Option<PathBuf>) -> Self {
+        Self {
+            path,
+            pins: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Approves plugin `id` as it is on disk now, if that is exactly the code with `digest` (what
+    /// the person agreed to). The files are read once, and the hashes kept are the ones of the
+    /// bytes that made the digest. A plugin that no longer matches is unpinned and serves nothing.
+    pub fn pin(&self, id: &str, digest: &str) -> Result<(), String> {
+        let dir = self
+            .path
+            .as_deref()
+            .ok_or("There is no folder for plugins")?;
+        let home = plugin_home(dir, id).ok_or("Not a plugin folder")?;
+        let result = snapshot(&home);
+        let Ok(mut pins) = self.pins.lock() else {
+            return Err("Plugins are unavailable".to_owned());
+        };
+        match result {
+            Ok((now, pin)) if now == digest => {
+                pins.insert(id.to_owned(), pin);
+                Ok(())
+            }
+            Ok(_) => {
+                pins.remove(id);
+                Err("The plugin's files changed after they were approved".to_owned())
+            }
+            Err(why) => {
+                pins.remove(id);
+                Err(why)
+            }
+        }
+    }
+
+    /// Whether `bytes` is the file `rel` of plugin `id` as it was pinned.
+    fn is_pinned(&self, id: &str, rel: &str, bytes: &[u8]) -> bool {
+        let Ok(pins) = self.pins.lock() else {
+            return false;
+        };
+        pins.get(id)
+            .and_then(|pin| pin.get(rel))
+            .is_some_and(|hash| *hash == blake3::hash(bytes).to_hex().as_str())
+    }
+}
 
 /// One folder found under the plugins directory.
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -115,6 +174,12 @@ fn read_manifest(file: &Path) -> Result<String, String> {
 /// A hash of the files of the plugin in `root` that could be served (links are not followed),
 /// by relative path and content. Changing, adding or removing such a file changes it.
 pub fn digest(root: &Path) -> Result<String, String> {
+    snapshot(root).map(|(digest, _)| digest)
+}
+
+/// The digest of the plugin in `root`, and the hash of each file it was made from. Each file is
+/// read once, so the two cannot disagree about what was there.
+fn snapshot(root: &Path) -> Result<(String, Pin), String> {
     let mut files = Vec::new();
     let mut seen = 0usize;
     let mut total = 0u64;
@@ -147,24 +212,39 @@ pub fn digest(root: &Path) -> Result<String, String> {
     }
     files.sort();
     let mut hasher = blake3::Hasher::new();
+    let mut pin = Pin::new();
     for (rel, path) in files {
+        let file = std::fs::File::open(&path).map_err(|_| format!("{rel} can't be read"))?;
+        let mut one = blake3::Hasher::new();
+        one.update_reader(file)
+            .map_err(|_| format!("{rel} can't be read"))?;
+        let hash = one.finalize().to_hex().to_string();
         hasher.update(rel.as_bytes());
         hasher.update(&[0]);
-        let file = std::fs::File::open(&path).map_err(|_| format!("{rel} can't be read"))?;
-        hasher
-            .update_reader(file)
-            .map_err(|_| format!("{rel} can't be read"))?;
+        hasher.update(hash.as_bytes());
         hasher.update(&[0]);
+        pin.insert(rel, hash);
     }
-    Ok(hasher.finalize().to_hex().to_string())
+    Ok((hasher.finalize().to_hex().to_string(), pin))
+}
+
+/// The folder of plugin `id` under `dir`, if it is a real folder there and not a link (or a
+/// Windows junction) to somewhere else.
+fn plugin_home(dir: &Path, id: &str) -> Option<PathBuf> {
+    if !valid_id(id) {
+        return None;
+    }
+    let home = dir.join(id).canonicalize().ok()?;
+    (home == dir.canonicalize().ok()?.join(id)).then_some(home)
 }
 
 /// The file `rel` of plugin `id`, if it is a plain file inside that plugin's folder. `rel` is a
 /// forward-slash path made only of ordinary names.
 pub fn resolve(dir: &Path, id: &str, rel: &str) -> Option<PathBuf> {
-    if !valid_id(id) || rel.is_empty() || rel.contains(['\\', ':']) {
+    if rel.is_empty() || rel.contains(['\\', ':']) {
         return None;
     }
+    let home = plugin_home(dir, id)?;
     let mut path = dir.join(id);
     for part in Path::new(rel).components() {
         match part {
@@ -173,12 +253,6 @@ pub fn resolve(dir: &Path, id: &str, rel: &str) -> Option<PathBuf> {
         }
     }
     // Resolved on disk: a link inside the folder that leads outside it ends up elsewhere.
-    // The plugin's own folder must be a real folder inside the plugins folder, not a link
-    // (or a Windows junction) to somewhere else.
-    let home = dir.join(id).canonicalize().ok()?;
-    if home != dir.canonicalize().ok()?.join(id) {
-        return None;
-    }
     let target = path.canonicalize().ok()?;
     (target.starts_with(&home) && target.is_file()).then_some(target)
 }
@@ -216,7 +290,7 @@ fn status(code: StatusCode) -> Response<Vec<u8>> {
 
 /// Answers a `plugin://<id>/<file>` request.
 pub fn handle(plugins: &PluginsDir, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
-    let Some(dir) = plugins.0.as_deref() else {
+    let Some(dir) = plugins.path.as_deref() else {
         return status(StatusCode::NOT_FOUND);
     };
     let raw = request.uri().path().trim_start_matches('/');
@@ -235,7 +309,21 @@ pub fn handle(plugins: &PluginsDir, request: &Request<Vec<u8>>) -> Response<Vec<
     if std::fs::metadata(&file).map_or(true, |m| m.len() > MAX_FILE) {
         return status(StatusCode::PAYLOAD_TOO_LARGE);
     }
+    // The key the pin knows the file by: its path inside the plugin's folder.
+    let Some(key) = plugin_home(dir, id)
+        .and_then(|home| file.strip_prefix(home).ok().map(Path::to_path_buf))
+        .map(|rel| {
+            rel.components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/")
+        })
+    else {
+        return status(StatusCode::NOT_FOUND);
+    };
     match std::fs::read(&file) {
+        // What is served is what was approved, byte for byte; a file changed since is refused.
+        Ok(bytes) if !plugins.is_pinned(id, &key, &bytes) => status(StatusCode::FORBIDDEN),
         Ok(bytes) => Response::builder()
             .header("Content-Type", mime)
             .header("Content-Security-Policy", CSP)
@@ -269,7 +357,9 @@ mod tests {
         std::fs::write(demo.join("sub/app.js"), "1").unwrap();
         std::fs::write(demo.join("tool.exe"), "MZ").unwrap();
         std::fs::write(dir.path().join("secret.txt"), "nope").unwrap();
-        let plugins = PluginsDir(Some(dir.path().to_path_buf()));
+        let plugins = PluginsDir::new(Some(dir.path().to_path_buf()));
+        // Approved as it is, the way the page does when it opens the plugin.
+        plugins.pin("demo", &digest(&demo).unwrap()).unwrap();
         (dir, plugins)
     }
 
@@ -429,11 +519,53 @@ mod tests {
         assert_eq!(code("/nope/index.html"), StatusCode::NOT_FOUND);
         assert_eq!(code("/demo/tool.exe"), StatusCode::FORBIDDEN);
         assert_eq!(code("/demo/%ff.html"), StatusCode::BAD_REQUEST);
-        let none = PluginsDir(None);
+        let none = PluginsDir::new(None);
         assert_eq!(
             handle(&none, &request("/demo/index.html")).status(),
             StatusCode::NOT_FOUND
         );
+    }
+
+    #[test]
+    fn nothing_is_served_until_the_plugin_is_pinned_to_what_was_approved() {
+        let (dir, plugins) = setup();
+        let demo = dir.path().join("demo");
+        let fresh = PluginsDir::new(Some(dir.path().to_path_buf()));
+        let code = |p: &PluginsDir| handle(p, &request("/demo/index.html")).status();
+        assert_eq!(code(&fresh), StatusCode::FORBIDDEN, "never pinned");
+        // A pin for other code than what is on disk is refused, and serves nothing.
+        assert!(fresh.pin("demo", "0000").is_err());
+        assert_eq!(code(&fresh), StatusCode::FORBIDDEN);
+        assert!(fresh.pin("demo", &digest(&demo).unwrap()).is_ok());
+        assert_eq!(code(&fresh), StatusCode::OK);
+        // A file swapped after the approval is no longer served; the others still are.
+        std::fs::write(demo.join("index.html"), "<p>swapped</p>").unwrap();
+        assert_eq!(code(&plugins), StatusCode::FORBIDDEN);
+        assert_eq!(
+            handle(&plugins, &request("/demo/sub/app.js")).status(),
+            StatusCode::OK
+        );
+        // A file added after the approval is not served either.
+        std::fs::write(demo.join("new.js"), "evil()").unwrap();
+        assert_eq!(
+            handle(&plugins, &request("/demo/new.js")).status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[test]
+    fn a_failed_pin_removes_the_old_one() {
+        let (dir, plugins) = setup();
+        let demo = dir.path().join("demo");
+        let approved = digest(&demo).unwrap();
+        std::fs::write(demo.join("index.html"), "<p>swapped</p>").unwrap();
+        // The page still pins with the digest the person approved, which no longer matches.
+        assert!(plugins.pin("demo", &approved).is_err());
+        assert_eq!(
+            handle(&plugins, &request("/demo/index.html")).status(),
+            StatusCode::FORBIDDEN
+        );
+        assert!(plugins.pin("../demo", &approved).is_err());
     }
 
     #[test]

@@ -111,6 +111,9 @@ export interface PluginFound {
   digest: string | null;
 }
 export const pluginsList = () => invoke<PluginFound[]>("plugins_list");
+/** Lets a plugin be served: its files as they are must be the code with `digest` (what was approved). */
+export const pluginsPin = (id: string, digest: string) =>
+  invoke<void>("plugins_pin", { id, digest });
 /** The plugins folder (made if missing), for opening in the file manager. */
 export const pluginsFolder = () => invoke<string>("plugins_folder");
 
