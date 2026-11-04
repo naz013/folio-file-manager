@@ -7,6 +7,7 @@
 
 <script lang="ts">
   import { thumbUrl } from "$lib/api/fs";
+  import { thumbnailArt } from "$lib/plugins.svelte";
   import FileIcon from "./FileIcon.svelte";
 
   /**
@@ -16,6 +17,13 @@
    */
   let { path, name, size, ask }: { path: string; name: string; size: number; ask?: number } =
     $props();
+
+  // A plugin's picture for this kind of file comes first: for text, JSON and the like Windows
+  // answers with its file-type icon, which is no preview, and that would hide the plugin's art.
+  let fileName = $derived(name || path.split(/[\\/]/).pop() || "");
+  let pluginArt = $derived(
+    fileName.includes(".") ? thumbnailArt(fileName.split(".").pop()!.toLowerCase()) : null,
+  );
 
   // Thumbnails are requested at 2x for crisp rendering on HiDPI screens.
   let base = $derived(thumbUrl(path, (ask ?? size) * 2));
@@ -53,7 +61,9 @@
   let shown = $derived(refused === current && good ? good : current);
 </script>
 
-{#if failed}
+{#if pluginArt}
+  <FileIcon name={fileName} {size} />
+{:else if failed}
   <FileIcon {name} {size} />
 {:else if shown}
   <img

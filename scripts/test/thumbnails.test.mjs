@@ -125,3 +125,19 @@ test("every thumbnail a bundled plugin gives exists, is small, and can't run or 
   }
   assert.ok(seen >= 4, "the four bundled viewers each give a thumbnail");
 });
+
+test("a plugin's picture is chosen before Windows' own, which for plain files is only an icon", () => {
+  const src = readFileSync(
+    new URL("../../src/lib/components/Thumbnail.svelte", import.meta.url),
+    "utf8",
+  );
+  const art = src.indexOf("{#if pluginArt}");
+  const failed = src.indexOf("{:else if failed}");
+  const img = src.indexOf("{:else if shown}");
+  assert.ok(
+    art > 0 && art < failed && failed < img,
+    "plugin art, then the failed fallback, then the system picture",
+  );
+  // A caller that gives no name (a list row) still gets the picture: the name comes from the path.
+  assert.match(src, /name \|\| path\.split\(/);
+});

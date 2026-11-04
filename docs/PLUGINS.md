@@ -90,7 +90,7 @@ A **thumbnail** gives the files of some kinds a picture in place of the plain pa
 its folded corner, and what the file holds, with room for a badge in the lower left). Folio draws the
 badge itself, with the file's extension on the `color` (`#rrggbb`; grey if left out). The picture is
 a static image: it is not made from the file, can't run anything and is only shown while the plugin
-is on. A system thumbnail, where Windows has one for the file, still comes first. The artwork is
+is on. It takes the place of the system's picture for those kinds of file, which for text and data files is only a file-type icon; a plugin's art is shown instead. The artwork is
 designed in Penpot (Design System > Components > Thumbnails, "Plugin thumbnails · bundled").
 
 Unknown fields are ignored. Settings shows what is wrong with a manifest that can't be read.
