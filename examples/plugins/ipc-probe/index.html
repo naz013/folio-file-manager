@@ -12,12 +12,25 @@
           13px system-ui,
           sans-serif;
       }
+      ul {
+        margin: 0;
+        padding: 0;
+      }
       li {
+        list-style: none;
         margin: 4px 0;
+        padding: 6px 10px;
+        border-radius: 6px;
+        background: rgba(128, 128, 128, 0.12);
       }
       .bad {
         color: #c00;
         font-weight: 600;
+        background: rgba(204, 0, 0, 0.12);
+      }
+      button {
+        margin-top: 10px;
+        padding: 6px 12px;
       }
     </style>
   </head>
@@ -90,18 +103,19 @@
           return `status ${r.status}`;
         });
       }
-      // Going to a plugin address: the page would then be trusted like Folio's own, so the app
-      // page must refuse the frame that tries. Only from the srcdoc page, so it can't loop.
+      // Going to a plugin address would make the page trusted like Folio's own, so the app page
+      // must refuse it. A refusal replaces this page with a "blocked" notice, so it waits for a
+      // click. Only from the srcdoc page, so it can't loop.
       if (location.href === "about:srcdoc") {
-        setTimeout(() => {
-          const li = document.createElement("li");
-          li.className = "bad";
-          li.textContent =
-            "CHECK: the frame is going to its own plugin address. If this page appears twice or an Explorer window opens, frame-src is OPEN";
-          out.append(li);
+        const btn = document.createElement("button");
+        btn.textContent = "Try to leave for the plugin address (the page goes blank if refused)";
+        btn.onclick = () => {
           location.href = new URL("index.html", document.baseURI).href;
-        }, 1500);
+        };
+        document.body.append(btn);
       }
+      // Tell Folio the page has loaded, so it does not show "did not respond".
+      parent.postMessage({ folio: 1, event: "ready" }, "*");
     </script>
   </body>
 </html>
