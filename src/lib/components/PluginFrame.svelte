@@ -4,6 +4,7 @@
   import {
     createBridge,
     isReady,
+    pageDoc,
     type Event as PluginEvent,
     type Loaded,
     type Manifest,
@@ -31,6 +32,9 @@
   let frame: HTMLIFrameElement | undefined = $state();
   let ready = $state(false);
   let silent = $state(false);
+  /** The page's document, once read; the frame is made from it (see `pageDoc`). */
+  let doc: string | null = $state(null);
+  let failed = $state(false);
   /** What waits for the page to be ready, in the order it was asked. */
   let waiting: { event: PluginEvent; paths: string[] }[] = [];
 
@@ -84,6 +88,32 @@
     bridge.handle(e.data).then((answer) => answer && post(answer));
   }
 
+  // The page is read here and handed to the frame as its document, never as a link to
+  // `plugin.localhost`: Tauri trusts that address like Folio's own page (see `pageDoc`).
+  $effect(() => {
+    const url = pluginUrl(plugin.id, manifest.entry);
+    let current = true;
+    doc = null;
+    failed = false;
+    fetch(url, { cache: "no-store" })
+      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
+      .then((html) => {
+        if (!current) return;
+        const where = new URL(url);
+        doc = pageDoc(
+          html,
+          url.slice(0, url.lastIndexOf("/") + 1),
+          `${where.protocol}//${where.host}`,
+        );
+      })
+      .catch(() => {
+        if (current) failed = true;
+      });
+    return () => {
+      current = false;
+    };
+  });
+
   const timer = setTimeout(() => {
     if (!ready) silent = true;
   }, READY_MS);
@@ -93,14 +123,21 @@
 <svelte:window {onmessage} />
 
 <div class="plugin" class:hidden>
-  <iframe
-    bind:this={frame}
-    title={plugin.manifest.name}
-    src={pluginUrl(plugin.id, manifest.entry)}
-    sandbox="allow-scripts"
-    referrerpolicy="no-referrer"
-  ></iframe>
-  {#if silent && !hidden}
+  {#if doc !== null}
+    <iframe
+      bind:this={frame}
+      title={plugin.manifest.name}
+      srcdoc={doc}
+      sandbox="allow-scripts"
+      referrerpolicy="no-referrer"
+    ></iframe>
+  {/if}
+  {#if failed && !hidden}
+    <p class="note" role="status">
+      {manifest.name} could not be loaded.
+      {#if onskip}<button onclick={onskip}>Show normally</button>{/if}
+    </p>
+  {:else if silent && !hidden}
     <p class="note" role="status">
       {manifest.name} did not respond.
       {#if onskip}<button onclick={onskip}>Show normally</button>{/if}

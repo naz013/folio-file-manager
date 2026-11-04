@@ -84,7 +84,7 @@ Smart folders (`smart.rs`) are saved searches kept in the same SQLite file as th
 
 ### Plugins
 
-- A plugin is a folder (`plugin.json` and web files) under the app data `plugins` folder. Each runs in a `sandbox="allow-scripts"` iframe, served by the `plugin://` protocol (`plugins.rs`) from its own folder only, with a policy that blocks the network; the app page's `frame-src` keeps frames on that protocol.
+- A plugin is a folder (`plugin.json` and web files) under the app data `plugins` folder. Each runs in a `sandbox="allow-scripts"` iframe, served by the `plugin://` protocol (`plugins.rs`) from its own folder only, with a policy that blocks the network. The frame's page is given as `srcdoc` (never a link to the protocol's address, which Tauri would trust like Folio's own page); the app page's `frame-src about:` keeps frames at that.
 - The page talks to Folio through `postMessage` (`lib/plugins.ts`: manifest, permissions, matching, and the bridge). Folio answers only its own frame and only for permissions the person granted in Settings; there is no write API (ADR 0005). Authoring guide: [PLUGINS.md](PLUGINS.md).
 
 ### Native integration (Windows first)
