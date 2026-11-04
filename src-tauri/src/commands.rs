@@ -1063,7 +1063,12 @@ pub fn tag_toggle(
     paths: Vec<String>,
     tag: i64,
 ) -> CmdResult<crate::tags::Toggled> {
-    tags.toggle(&self::paths(paths), tag)
+    let paths = self::paths(paths);
+    let toggled = tags.toggle(&paths, tag)?;
+    // Mirrored to the system's own tags (Finder, `user.xdg.tags`); a file that can't take them
+    // is still tagged in Folio.
+    tags.sync_with_system(&paths);
+    Ok(toggled)
 }
 
 /// Every item with the tag, from any folder: (path, entry, the item's tag ids).
@@ -1215,7 +1220,10 @@ pub fn tags_import(
 /// The tagged items directly in `dir`: (name, tag ids).
 #[tauri::command(async)]
 pub fn tags_in_dir(tags: tauri::State<'_, Tags>, dir: String) -> Vec<(String, Vec<i64>)> {
-    tags.in_dir(&PathBuf::from(dir))
+    let dir = PathBuf::from(dir);
+    // Tags given in Finder or another program since the last look come in first.
+    tags.sync_dir_with_system(&dir);
+    tags.in_dir(&dir)
 }
 
 // ---- System clipboard (Windows) ----

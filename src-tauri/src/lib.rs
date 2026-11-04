@@ -21,6 +21,7 @@ mod journal;
     )
 )]
 mod mft;
+mod native_tags;
 mod ops;
 mod perf;
 mod platform;
@@ -34,6 +35,7 @@ mod session;
 mod shelf;
 mod slow;
 mod smart;
+mod tag_sync;
 mod tags;
 mod thumbs;
 mod watch;

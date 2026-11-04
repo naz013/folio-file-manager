@@ -1313,6 +1313,7 @@ dependencies = [
  "lopdf",
  "notify-debouncer-mini",
  "percent-encoding",
+ "plist",
  "png",
  "rusqlite",
  "serde",
@@ -1326,6 +1327,7 @@ dependencies = [
  "tokio",
  "trash",
  "windows 0.62.2",
+ "xattr",
  "zip",
 ]
 

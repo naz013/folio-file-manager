@@ -25,7 +25,7 @@ const COLORS: [(&str, &str); 7] = [
 
 /// Ids 1 to 7 are the colour tags; named tags come after.
 const COLOR_TAGS: i64 = 7;
-const MAX_NAME: usize = 40;
+pub(crate) const MAX_NAME: usize = 40;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Tag {
@@ -234,6 +234,15 @@ impl Tags {
                  tag_id   INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
                  PRIMARY KEY (identity, tag_id)
              );
+             -- The names a file's tags had when Folio and the system's tags last agreed (see
+             -- tag_sync.rs). Kept apart from `files`, which drops a file with no tag.
+             CREATE TABLE IF NOT EXISTS native_base (
+                 identity TEXT PRIMARY KEY,
+                 names    TEXT NOT NULL,
+                 norm     TEXT NOT NULL,
+                 dir      TEXT NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS native_base_dir ON native_base (dir);
              CREATE TABLE IF NOT EXISTS smart_folders (
                  id       INTEGER PRIMARY KEY,
                  name     TEXT NOT NULL UNIQUE COLLATE NOCASE,
