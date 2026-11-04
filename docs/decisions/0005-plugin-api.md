@@ -15,7 +15,7 @@ sees anywhere, unless the person has said so for that plugin and that ability.
 1. **A plugin is a folder** under `<app data>/plugins/<id>/` with a `plugin.json` manifest and
    web files (HTML, JS, CSS, images). The folder name is the plugin's id (`a-z`, `0-9`, `-`).
    Folio never runs anything from it outside the page below. There is no install step beyond
-   copying the folder; Settings › Plugins lists what is there.
+   copying the folder; the Plugins screen lists what is there.
 2. **The page runs in a sandboxed iframe**: `sandbox="allow-scripts"` and nothing else, so it
    has an opaque origin (no cookies, storage, or access to Folio's page), cannot open windows,
    submit forms, navigate the window, or use powerful features. Its files are served by the
@@ -36,7 +36,7 @@ sees anywhere, unless the person has said so for that plugin and that ability.
      Reading is as text, with what `read_text_preview` allows (size limit, not for files only in
      the cloud). **There is no way to write, move or delete** in this version: every change to
      files stays in the Rust core and its journal (CLAUDE.md).
-4. **Permissions are asked for in the manifest and granted by the person**, in Settings, listing
+4. **Permissions are asked for in the manifest and granted by the person**, on the Plugins screen, listing
    in plain words what the plugin can do. A plugin is off until then. A plugin whose version or
    requested permissions change is off again until re-approved. The grant is kept with Folio's
    settings, by plugin id.

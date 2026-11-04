@@ -84,6 +84,7 @@
     type Moved,
     BIN_PATH,
     CLEANUP_PATH,
+    PLUGINS_PATH,
     SETTINGS_PATH,
     STORAGE_PATH,
     placeOf,
@@ -97,6 +98,7 @@
   import ConflictDialog from "$lib/components/ConflictDialog.svelte";
   import ContextMenu, { type MenuItem } from "$lib/components/ContextMenu.svelte";
   import QuickLook from "$lib/components/QuickLook.svelte";
+  import PluginsView from "$lib/components/PluginsView.svelte";
   import AboutDialog from "$lib/components/AboutDialog.svelte";
   import ShortcutsDialog from "$lib/components/ShortcutsDialog.svelte";
   import SmartFolderDialog from "$lib/components/SmartFolderDialog.svelte";
@@ -2301,6 +2303,7 @@
       ...action("About Folio", undefined, () => (aboutOpen = true)),
       ...action("Recycle Bin", "", () => navigate(BIN_PATH)),
       ...action("Storage breakdown", "", () => showScreen(STORAGE_PATH)),
+      ...action("Plugins", "", () => showScreen(PLUGINS_PATH)),
       ...action("Clean up large and old files", "", () => {
         openCleanup("large");
       }),
@@ -3065,7 +3068,10 @@
             onabout={() => (aboutOpen = true)}
             onshortcuts={() => (shortcutsOpen = true)}
             onhelp={() => (helpOpen = true)}
+            onplugins={() => showScreen(PLUGINS_PATH)}
           />
+        {:else if place === "plugins"}
+          <PluginsView />
         {:else if view === "columns" && !resultView && !search}
           <ColumnView
             bind:this={fileView}

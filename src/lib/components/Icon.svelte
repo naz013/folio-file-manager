@@ -40,6 +40,9 @@
     clipboard:
       '<rect x="5" y="5" width="14" height="16" rx="2"/><path d="M9 5V3h6v2M9 11h6M9 15h4"/>',
     check: '<path d="M5 12.5l4.5 4.5L19 7"/>',
+    alert: '<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17h.01"/>',
+    plugin:
+      '<path d="M10 4a2 2 0 1 1 4 0v2h4a1 1 0 0 1 1 1v4h-2a2 2 0 1 0 0 4h2v4a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-4h2a2 2 0 1 0 0-4H5V7a1 1 0 0 1 1-1h4z"/>',
     x: '<path d="M6 6l12 12M18 6L6 18"/>',
     minimize: '<path d="M5 12h14"/>',
     maximize: '<rect x="5" y="5" width="14" height="14" rx="2"/>',

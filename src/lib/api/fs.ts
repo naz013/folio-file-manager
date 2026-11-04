@@ -146,14 +146,16 @@ export const BIN_PATH = "folio:recycle-bin";
 export const STORAGE_PATH = "folio:storage";
 export const CLEANUP_PATH = "folio:cleanup";
 export const SETTINGS_PATH = "folio:settings";
+export const PLUGINS_PATH = "folio:plugins";
 
-export type Place = "bin" | "storage" | "cleanup" | "settings";
+export type Place = "bin" | "storage" | "cleanup" | "settings" | "plugins";
 
 const PLACES: Record<string, { place: Place; title: string }> = {
   [BIN_PATH]: { place: "bin", title: "Recycle Bin" },
   [STORAGE_PATH]: { place: "storage", title: "Storage" },
   [CLEANUP_PATH]: { place: "cleanup", title: "Cleanup" },
   [SETTINGS_PATH]: { place: "settings", title: "Settings" },
+  [PLUGINS_PATH]: { place: "plugins", title: "Plugins" },
 };
 
 /** The screen a tab's path stands for, or null for a real folder. */

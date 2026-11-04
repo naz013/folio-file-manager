@@ -7,7 +7,7 @@ of web files that runs in a sandbox and can do only what you allow. The reasonin
 
 ## Installing
 
-1. In Settings › Plugins, choose **Open folder**. Folio makes the plugins folder if it isn't
+1. Open the Plugins screen (Settings › Manage plugins, or Ctrl+K and type "plugins"), and choose **Open folder**. Folio makes the plugins folder if it isn't
    there.
 2. Copy a plugin folder into it. The folder's name is the plugin's id and must match `"id"` in the
    manifest (lower-case letters, digits and hyphens, up to 40 characters).
@@ -49,7 +49,7 @@ a part of Windows, and its messages are shown as `Name (plugin): …`.
 | Field         | Meaning                                                                           |
 | ------------- | --------------------------------------------------------------------------------- |
 | `id`          | Same as the folder name.                                                          |
-| `name`        | Shown in Settings and before its messages. Up to 60 characters.                   |
+| `name`        | Shown on the Plugins screen and before its messages. Up to 60 characters.         |
 | `version`     | Any text up to 20 characters. Changing it turns the plugin off until re-approved. |
 | `description` | Optional, up to 200 characters.                                                   |
 | `api`         | The plugin API version, `1`. A higher number than Folio knows disables it.        |

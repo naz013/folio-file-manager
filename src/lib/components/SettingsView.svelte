@@ -7,20 +7,12 @@
     crashState,
     listDir,
     openPath,
-    pluginsFolder,
     tagsExport,
     type CrashState,
   } from "$lib/api/fs";
   import { SCALE_STOPS, nearestStop } from "$lib/gridScale";
   import type { Motion } from "$lib/motion";
-  import { PERMISSIONS } from "$lib/plugins";
-  import {
-    disablePlugin,
-    enablePlugin,
-    plugins,
-    reloaded,
-    reloadPlugins,
-  } from "$lib/plugins.svelte";
+  import { plugins } from "$lib/plugins.svelte";
   import { SPRING_DELAYS_MS, settings, updateSettings } from "$lib/settings.svelte";
   import { themes, type Theme } from "$lib/theme";
   import { checkForUpdate, updateStatusText, updates } from "$lib/updates.svelte";
@@ -28,23 +20,7 @@
   /** Fast scan reads the NTFS file table, so only Windows offers it. */
   const onWindows = navigator.userAgent.includes("Windows");
 
-  /** The plugin whose permissions are being read before it is turned on. */
-  let reviewing = $state<string | null>(null);
-  let pluginsNote = $state("");
-
-  // What a plugin asks may have changed on a reload: the person reads it again.
-  $effect(() => {
-    void reloaded.n;
-    reviewing = null;
-  });
-
-  async function openPluginsFolder() {
-    try {
-      await openPath(await pluginsFolder());
-    } catch (e) {
-      pluginsNote = String(e);
-    }
-  }
+  const enabledPlugins = $derived(plugins.list.filter((p) => p.enabled).length);
 
   let {
     theme,
@@ -52,6 +28,7 @@
     onabout,
     onshortcuts,
     onhelp,
+    onplugins,
   }: {
     theme: Theme;
     ontheme: (theme: Theme) => void;
@@ -61,6 +38,8 @@
     onshortcuts: () => void;
     /** Open the help topics. */
     onhelp: () => void;
+    /** Open the Plugins screen. */
+    onplugins: () => void;
   } = $props();
 
   let dialog: HTMLElement;
@@ -335,82 +314,19 @@
 
     <section>
       <h3>Plugins</h3>
-      <p class="note">
-        Plugins add actions to the right-click menu and previews to Quick Look. Each runs in a
-        sandbox: it can't read or change your files, or use the network, except for what you allow
-        below. A plugin is a folder with a plugin.json inside the plugins folder.
-      </p>
       <div class="row">
-        <span>Plugins folder</span>
+        <div>
+          <span>Plugins</span>
+          <p class="note">
+            {enabledPlugins
+              ? `${enabledPlugins} on. Turn plugins on or off, and read what each can do.`
+              : "Add actions and previews. Turn them on or off, and read what each can do."}
+          </p>
+        </div>
         <div class="buttons">
-          <button onclick={openPluginsFolder}>Open folder</button>
-          <button onclick={reloadPlugins}>Reload</button>
+          <button onclick={onplugins}>Manage plugins</button>
         </div>
       </div>
-      {#if pluginsNote}<p class="error" role="alert">{pluginsNote}</p>{/if}
-      {#each plugins.list as p (p.id)}
-        <div class="plugin">
-          <div class="row">
-            <div>
-              <strong>{p.manifest?.name ?? p.id}</strong>
-              {#if p.manifest}<span class="note">v{p.manifest.version}</span>{/if}
-              {#if p.manifest?.description}<p class="note">{p.manifest.description}</p>{/if}
-            </div>
-            {#if p.manifest}
-              <input
-                type="checkbox"
-                class="switch"
-                role="switch"
-                aria-label="Turn on {p.manifest.name}"
-                checked={p.enabled}
-                onchange={(e) => {
-                  if (!e.currentTarget.checked) {
-                    disablePlugin(p.id);
-                    reviewing = null;
-                  } else {
-                    // Turned on only once the person has read what it can do.
-                    e.currentTarget.checked = false;
-                    reviewing = p.id;
-                  }
-                }}
-              />
-            {/if}
-          </div>
-          {#if p.error}<p class="error" role="alert">{p.error}</p>{/if}
-          {#if p.changed}
-            <p class="note" role="status">
-              Its version, permissions or files have changed since you turned it on, so it is off.
-              Turn it on again to review it.
-            </p>
-          {/if}
-          {#if p.manifest && (p.enabled || reviewing === p.id)}
-            <ul class="can">
-              {#each p.manifest.permissions as perm (perm)}<li>{PERMISSIONS[perm]}</li>{/each}
-              {#if !p.manifest.permissions.length}<li>Nothing beyond drawing its own page</li>{/if}
-            </ul>
-            <p class="note">
-              {#each p.manifest.actions as a (a.id)}Action: {a.title}.
-              {/each}
-              {#each p.manifest.previews as v (v.id)}Preview: {v.title} ({v.extensions.join(", ")}).
-              {/each}
-            </p>
-          {/if}
-          {#if p.manifest && reviewing === p.id}
-            <div class="buttons">
-              <button
-                onclick={() => {
-                  if (p.manifest) enablePlugin(p.manifest, p.digest);
-                  reviewing = null;
-                }}>Allow and turn on</button
-              >
-              <button onclick={() => (reviewing = null)}>Cancel</button>
-            </div>
-          {/if}
-        </div>
-      {/each}
-      {#if plugins.loaded && !plugins.list.length}
-        <p class="note">No plugins yet. Put a plugin folder in the plugins folder, then Reload.</p>
-      {/if}
     </section>
 
     <section>
@@ -662,23 +578,6 @@
   .note {
     margin: var(--space-xs) 0 0;
     color: var(--text-tertiary);
-    font-size: var(--font-size-caption);
-  }
-
-  .plugin {
-    padding-bottom: var(--space-sm);
-    border-bottom: 1px solid var(--border-default);
-  }
-
-  .plugin .row {
-    border-bottom: 0;
-    padding-bottom: 0;
-  }
-
-  .can {
-    margin: var(--space-xs) 0 0;
-    padding-left: var(--space-lg);
-    color: var(--text-secondary);
     font-size: var(--font-size-caption);
   }
 
