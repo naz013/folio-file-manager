@@ -30,7 +30,7 @@ files.
 
 | Plugin          | What it does                                                                                                                                                                                                                                                                                                            |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Text viewer     | Quick Look for text and code files: line numbers, wrapping, search (Ctrl+F). Loads more of a large file as you scroll, up to 2 MB                                                                                                                                                                                       |
+| Text viewer     | Quick Look and a page icon for text and code files: line numbers, wrapping, search (Ctrl+F). Loads more of a large file as you scroll, up to 2 MB                                                                                                                                                                       |
 | CSV viewer      | Quick Look for `.csv` and `.tsv`: a table with a fixed header, sortable columns (numbers sort as numbers), a row filter, the delimiter found for you (or chosen), a header-row switch, and copy cell or row. Only the rows in view are drawn, so large files stay quick; reads up to 8 MB, 500,000 rows and 300 columns |
 | Markdown viewer | Quick Look for `.md`, `.markdown`, `.mdown`, `.mkd`: headings, lists, tasks, tables, code, quotes, front matter, with search and a Source view. Links are shown with their address but not opened, remote images are not loaded, and any HTML in the file is shown as text. Reads the first 1 MB                        |
 | JSON viewer     | Quick Look for `.json`, `.geojson`, `.jsonld`, `.har`: a tree to fold and search, copy a path or value, pretty and raw views, and where a syntax error is. Reads files up to 4 MB; a larger one shows its first 4 MB as raw text only                                                                                   |
@@ -61,17 +61,18 @@ files.
 }
 ```
 
-| Field         | Meaning                                                                           |
-| ------------- | --------------------------------------------------------------------------------- |
-| `id`          | Same as the folder name.                                                          |
-| `name`        | Shown on the Plugins screen and before its messages. Up to 60 characters.         |
-| `version`     | Any text up to 20 characters. Changing it turns the plugin off until re-approved. |
-| `description` | Optional, up to 200 characters.                                                   |
-| `api`         | The plugin API version, `1`. A higher number than Folio knows disables it.        |
-| `entry`       | The page, an `.html` file in the folder. Default `index.html`.                    |
-| `permissions` | What it asks for; see below. Default none.                                        |
-| `actions`     | Menu items. At most 20. Needs the `selection` permission.                         |
-| `previews`    | Quick Look pages. At most 10, and at most 20 file types claimed in all.           |
+| Field         | Meaning                                                                             |
+| ------------- | ----------------------------------------------------------------------------------- |
+| `id`          | Same as the folder name.                                                            |
+| `name`        | Shown on the Plugins screen and before its messages. Up to 60 characters.           |
+| `version`     | Any text up to 20 characters. Changing it turns the plugin off until re-approved.   |
+| `description` | Optional, up to 200 characters.                                                     |
+| `api`         | The plugin API version, `1`. A higher number than Folio knows disables it.          |
+| `entry`       | The page, an `.html` file in the folder. Default `index.html`.                      |
+| `permissions` | What it asks for; see below. Default none.                                          |
+| `actions`     | Menu items. At most 20. Needs the `selection` permission.                           |
+| `previews`    | Quick Look pages. At most 10, and at most 20 file types claimed in all.             |
+| `thumbnails`  | Pictures for kinds of file in the grid and lists. At most 10, 40 file types in all. |
 
 An **action** has an `id` (lower-case letters, digits, `-`, `_`), a `title`, `kinds` (`"file"`,
 `"folder"`; default `["file"]`), `extensions` (files only; none means any file) and `multiple`
@@ -82,6 +83,15 @@ view for those files while the plugin is on. A preview opens on every such file 
 to, so it may not claim kinds of file that hold secrets (`kdbx`, `pem`, `key`, `pfx`, `p12`,
 `ppk`, `env`, `gpg`, `ovpn`, `rdp`, and a few more); an action may, because you run it on
 purpose.
+
+A **thumbnail** gives the files of some kinds a picture in place of the plain page icon:
+`{ "extensions": ["json"], "image": "thumb.svg", "color": "#f59f00" }`. The `image` is an `.svg`,
+`.png` or `.webp` file in the plugin's folder, drawn at 56 x 72 like Folio's own page icon (the page,
+its folded corner, and what the file holds, with room for a badge in the lower left). Folio draws the
+badge itself, with the file's extension on the `color` (`#rrggbb`; grey if left out). The picture is
+a static image: it is not made from the file, can't run anything and is only shown while the plugin
+is on. A system thumbnail, where Windows has one for the file, still comes first. The artwork is
+designed in Penpot (Design System > Components > Thumbnails, "Plugin thumbnails · bundled").
 
 Unknown fields are ignored. Settings shows what is wrong with a manifest that can't be read.
 

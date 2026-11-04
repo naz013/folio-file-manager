@@ -35,6 +35,19 @@ export interface PreviewDef {
   extensions: string[];
 }
 
+/**
+ * The picture a plugin gives to files of some kinds, in place of the plain page icon: an image
+ * of the page (56 x 72, an .svg, .png or .webp in the plugin's folder) and the colour of the
+ * badge that Folio draws on it with the file's extension.
+ */
+export interface ThumbDef {
+  /** Lower case, no dot. */
+  extensions: string[];
+  image: string;
+  /** `#rrggbb`. */
+  color: string;
+}
+
 export interface Manifest {
   id: string;
   name: string;
@@ -44,6 +57,7 @@ export interface Manifest {
   permissions: Permission[];
   actions: ActionDef[];
   previews: PreviewDef[];
+  thumbnails: ThumbDef[];
 }
 
 export type Parsed = { ok: true; manifest: Manifest } | { ok: false; error: string };
@@ -52,6 +66,11 @@ const NAME = /^[a-z0-9][a-z0-9_-]{0,39}$/;
 const EXT = /^[a-z0-9]{1,10}$/;
 const MAX_ACTIONS = 20;
 const MAX_PREVIEWS = 10;
+const MAX_THUMBNAILS = 10;
+/** The kinds of file a plugin may give a picture to, in all. */
+const MAX_THUMB_EXTENSIONS = 40;
+/** Used when a thumbnail names no colour for its badge. */
+const DEFAULT_BADGE = "#8e8e93";
 const MAX_EXTENSIONS = 50;
 /** A preview runs on every file of its kind that is merely browsed to, so it may claim few. */
 const MAX_PREVIEW_EXTENSIONS = 20;
@@ -121,6 +140,14 @@ function extensions(v: unknown): string[] | null {
     if (!out.includes(ext)) out.push(ext);
   }
   return out;
+}
+
+/** A path inside the plugin folder: forward slashes, plain names, an image Folio can show. */
+function imagePath(v: unknown): string | null {
+  if (typeof v !== "string" || v.length > 100) return null;
+  const parts = v.split("/");
+  const plain = parts.every((p) => p && p !== "." && p !== ".." && !/[\\:]/.test(p));
+  return plain && /\.(svg|png|webp)$/i.test(v) ? v : null;
 }
 
 /** A path inside the plugin folder: forward slashes, plain names, an .html file. */
@@ -220,6 +247,26 @@ export function parseManifest(id: string, source: string): Parsed {
     if (secret) return fail(`Preview "${p.id}" can't claim .${secret} files: they hold secrets`);
     previews.push({ id: p.id, title, extensions: exts });
   }
+  const thumbnails: ThumbDef[] = [];
+  const rawThumbs = raw.thumbnails ?? [];
+  if (!Array.isArray(rawThumbs) || rawThumbs.length > MAX_THUMBNAILS) {
+    return fail(`"thumbnails" must be a list of at most ${MAX_THUMBNAILS}`);
+  }
+  for (const t of rawThumbs) {
+    if (!isObject(t)) return fail('Each thumbnail needs "extensions" and an "image"');
+    const exts = extensions(t.extensions);
+    if (!exts?.length) return fail('A thumbnail needs "extensions", like ["json"]');
+    const image = imagePath(t.image);
+    if (!image) return fail('A thumbnail\'s "image" must be an .svg, .png or .webp in the folder');
+    const color = t.color === undefined ? DEFAULT_BADGE : t.color;
+    if (typeof color !== "string" || !/^#[0-9a-fA-F]{6}$/.test(color)) {
+      return fail('A thumbnail\'s "color" must look like "#1f9d55"');
+    }
+    thumbnails.push({ extensions: exts, image, color: color.toLowerCase() });
+  }
+  if (new Set(thumbnails.flatMap((t) => t.extensions)).size > MAX_THUMB_EXTENSIONS) {
+    return fail(`Thumbnails may cover at most ${MAX_THUMB_EXTENSIONS} file types in all`);
+  }
   const claimed = new Set(previews.flatMap((p) => p.extensions));
   if (claimed.size > MAX_PREVIEW_EXTENSIONS) {
     return fail(`Previews may claim at most ${MAX_PREVIEW_EXTENSIONS} file types in all`);
@@ -227,7 +274,7 @@ export function parseManifest(id: string, source: string): Parsed {
 
   return {
     ok: true,
-    manifest: { id, name, version, description, entry, permissions, actions, previews },
+    manifest: { id, name, version, description, entry, permissions, actions, previews, thumbnails },
   };
 }
 
@@ -383,6 +430,18 @@ export function actionsFor(plugins: Loaded[], items: Item[]): ActionHit[] {
 export interface PreviewHit {
   plugin: Loaded & { manifest: Manifest };
   preview: PreviewDef;
+}
+
+/** The picture an enabled plugin gives to files with this extension, if any. */
+export function thumbnailFor(
+  plugins: Loaded[],
+  ext: string,
+): { plugin: Loaded & { manifest: Manifest }; thumb: ThumbDef } | null {
+  for (const plugin of plugins.filter(usable)) {
+    const thumb = plugin.manifest.thumbnails.find((t) => t.extensions.includes(ext));
+    if (thumb) return { plugin, thumb };
+  }
+  return null;
 }
 
 /** The first enabled plugin that previews this kind of file. */

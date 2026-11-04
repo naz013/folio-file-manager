@@ -32,5 +32,32 @@
         "sql"
       ]
     }
+  ],
+  "thumbnails": [
+    {
+      "extensions": [
+        "txt",
+        "log",
+        "ini",
+        "cfg",
+        "conf",
+        "yaml",
+        "yml",
+        "toml",
+        "xml",
+        "sh",
+        "bat",
+        "ps1",
+        "py",
+        "js",
+        "ts",
+        "rs",
+        "go",
+        "css",
+        "sql"
+      ],
+      "image": "thumb.svg",
+      "color": "#6b7280"
+    }
   ]
 }

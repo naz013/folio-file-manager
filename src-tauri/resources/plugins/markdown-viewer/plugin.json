@@ -12,5 +12,12 @@
       "title": "Markdown viewer",
       "extensions": ["md", "markdown", "mdown", "mkd"]
     }
+  ],
+  "thumbnails": [
+    {
+      "extensions": ["md", "markdown", "mdown", "mkd"],
+      "image": "thumb.svg",
+      "color": "#1d1d22"
+    }
   ]
 }

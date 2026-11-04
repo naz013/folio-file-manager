@@ -150,6 +150,7 @@ change in place, `--ease-emphasized` for things that arrive; `--motion-shift` (6
 - One accent color. Tag colors are for tags only, never for UI chrome.
 - The Tags screen offers nine hues in five shades each (`--tag-<hue>-1` lightest to `-5` darkest; shade 3 is the hue, stored as its plain name). The tag dialog and the keys 1 to 7 keep the seven base colours. Mirror any change in Penpot first.
 - Selection in the grid: grey thumbnail plate + accent name pill (Finder-style).
+- File thumbnails are a 56 x 72 page with a folded corner, the file's content hinted in the middle, and a coloured badge with the extension in the lower left. Plugins may give the page art (an SVG, no badge) for their kinds of file; Folio draws the badge. The bundled ones are in Penpot under Components > Thumbnails, in the row "Plugin thumbnails · bundled".
 - Destructive actions name the exact outcome ("Move 9.9 GB to Recycle Bin").
 - Section labels in the sidebar use Title case, tertiary color.
 - Icons: 1.75–2 px stroke, rounded caps, 16 px in chrome, 20 px in docs.

@@ -12,5 +12,12 @@
       "title": "CSV viewer",
       "extensions": ["csv", "tsv"]
     }
+  ],
+  "thumbnails": [
+    {
+      "extensions": ["csv", "tsv"],
+      "image": "thumb.svg",
+      "color": "#12a594"
+    }
   ]
 }

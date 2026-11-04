@@ -12,5 +12,12 @@
       "title": "JSON viewer",
       "extensions": ["json", "geojson", "jsonld", "har"]
     }
+  ],
+  "thumbnails": [
+    {
+      "extensions": ["json", "geojson", "jsonld", "har"],
+      "image": "thumb.svg",
+      "color": "#f59f00"
+    }
   ]
 }
