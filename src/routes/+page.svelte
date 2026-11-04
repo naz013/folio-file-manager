@@ -3071,7 +3071,14 @@
             onplugins={() => showScreen(PLUGINS_PATH)}
           />
         {:else if place === "plugins"}
-          <PluginsView />
+          <PluginsView
+            onopen={(p) => {
+              // The folder's own tab, if it already has one.
+              const open = tabs.findIndex((t) => t.path === p);
+              if (open >= 0) activate(open);
+              else openTab(p);
+            }}
+          />
         {:else if view === "columns" && !resultView && !search}
           <ColumnView
             bind:this={fileView}

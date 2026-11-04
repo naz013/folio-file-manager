@@ -12,6 +12,13 @@
   import EmptyState from "./EmptyState.svelte";
   import Icon from "./Icon.svelte";
 
+  let {
+    onopen,
+  }: {
+    /** Show a folder in a tab of Folio. */
+    onopen: (path: string) => void;
+  } = $props();
+
   let dialog: HTMLElement;
   onMount(() => dialog.focus());
 
@@ -25,10 +32,13 @@
     reviewing = null;
   });
 
-  async function openFolder() {
+  /** The plugins folder in a tab of Folio, or in the system's file manager. */
+  async function openFolder(inSystem = false) {
     note = "";
     try {
-      await openPath(await pluginsFolder());
+      const folder = await pluginsFolder();
+      if (inSystem) await openPath(folder);
+      else onopen(folder);
     } catch (e) {
       note = String(e);
     }
@@ -42,7 +52,8 @@
     <header>
       <h2 id="plugins-title">Plugins</h2>
       <div class="buttons">
-        <button onclick={openFolder}>Open folder</button>
+        <button onclick={() => openFolder()}>Open folder</button>
+        <button onclick={() => openFolder(true)}>Show in Explorer</button>
         <button onclick={reloadPlugins}>Reload</button>
       </div>
     </header>
@@ -177,7 +188,7 @@
         icon="plugin"
         text="No plugins yet. Put a plugin folder in the plugins folder, then Reload."
         action="Open folder"
-        onaction={openFolder}
+        onaction={() => openFolder()}
       />
     {/if}
   </div>

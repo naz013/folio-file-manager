@@ -7,7 +7,7 @@ of web files that runs in a sandbox and can do only what you allow. The reasonin
 
 ## Installing
 
-1. Open the Plugins screen (Settings › Manage plugins, or Ctrl+K and type "plugins"), and choose **Open folder**. Folio makes the plugins folder if it isn't
+1. Open the Plugins screen (Settings › Manage plugins, or Ctrl+K and type "plugins"), and choose **Open folder** to see the plugins folder in a tab (**Show in Explorer** opens it in the system's file manager). Folio makes the plugins folder if it isn't
    there.
 2. Copy a plugin folder into it. The folder's name is the plugin's id and must match `"id"` in the
    manifest (lower-case letters, digits and hyphens, up to 40 characters).
