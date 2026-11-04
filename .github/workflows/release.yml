@@ -28,25 +28,25 @@ jobs:
               --draft --title "Folio ${GITHUB_REF_NAME}" --notes ""
           fi
 
-  # macOS (Apple silicon and Intel) and Linux. These are not code-signed or notarized: macOS
-  # shows a Gatekeeper warning until an Apple Developer ID is set up.
+  # macOS (one universal build for Apple silicon and Intel) and Linux. The macOS app and DMG are
+  # signed and notarized when the Apple secrets exist (see docs/RELEASING.md); without them they
+  # are built unsigned and Gatekeeper warns. The Linux packages are not signed.
   unix:
     needs: draft
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: macos-arm
+          - name: macos
             os: macos-latest
-            target: aarch64-apple-darwin
-            bundles: app,dmg
-          - name: macos-intel
-            os: macos-latest
-            target: x86_64-apple-darwin
+            target: universal-apple-darwin
+            # A universal binary holds both architectures, so both are compiled.
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
             bundles: app,dmg
           - name: linux
             os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
+            rust_targets: x86_64-unknown-linux-gnu
             bundles: appimage,deb,rpm
     runs-on: ${{ matrix.os }}
     steps:
@@ -57,7 +57,7 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.rust_targets }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -77,6 +77,51 @@ jobs:
         run: node scripts/release-notes.mjs "${GITHUB_REF_NAME}"
       - name: Collect the third-party licenses
         run: npm run licenses
+      # Signing and notarizing are on when all the Apple secrets exist. The certificate goes into
+      # a keychain made for this job only (the runner is thrown away afterwards), and the
+      # variables Tauri reads are set only then, so an unsigned build never sees empty ones.
+      - name: Prepare macOS signing and notarization
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set_count=0
+          for v in "$APPLE_CERTIFICATE" "$APPLE_CERTIFICATE_PASSWORD" "$APPLE_ID" "$APPLE_PASSWORD" "$APPLE_TEAM_ID"; do
+            [ -n "$v" ] && set_count=$((set_count + 1))
+          done
+          if [ "$set_count" -eq 0 ]; then
+            echo "::warning::No Apple secrets: this build will NOT be signed or notarized."
+            exit 0
+          fi
+          # Some set and some not is a mistake, not a choice: do not ship an unsigned build by accident.
+          if [ "$set_count" -ne 5 ]; then
+            echo "Only $set_count of the 5 Apple secrets are set; set all of them or none."
+            exit 1
+          fi
+          keychain="$RUNNER_TEMP/folio.keychain-db"
+          keychain_password=$(uuidgen)
+          echo "::add-mask::$keychain_password"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/folio.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/folio.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/folio.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain" login.keychain-db
+          identity=$(security find-identity -v -p codesigning "$keychain" | grep "Developer ID Application" | head -n 1 | sed -E 's/.*"(.*)"/\1/')
+          [ -n "$identity" ] || { echo "No valid Developer ID Application certificate in the .p12 (missing, expired, or its certificate chain is not included)"; exit 1; }
+          {
+            echo "APPLE_SIGNING_IDENTITY=$identity"
+            echo "APPLE_ID=$APPLE_ID"
+            echo "APPLE_PASSWORD=$APPLE_PASSWORD"
+            echo "APPLE_TEAM_ID=$APPLE_TEAM_ID"
+            echo "NOTARIZED=true"
+          } >> "$GITHUB_ENV"
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -89,6 +134,47 @@ jobs:
           uploadUpdaterJson: true
           # --bundles replaces the Windows-only "nsis" target of the release config.
           args: --config src-tauri/tauri.release.conf.json --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+      # Tauri notarizes and staples the app, but builds the disk image from it afterwards, so the
+      # image itself has no ticket. It is signed, submitted and stapled here, and the draft's copy
+      # is replaced, because tauri-action has already uploaded the plain one.
+      - name: Notarize the disk image
+        if: runner.os == 'macOS' && env.NOTARIZED == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          dmg=$(ls src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg | head -n 1)
+          codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$dmg"
+          xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple "$dmg"
+          # The asset has the same name, so --clobber replaces it in the draft.
+          gh release upload "${GITHUB_REF_NAME}" "$dmg" --clobber
+
+      # Fails the release if the app is not one binary for both architectures, or, when it was
+      # signed, if the signature, the notarization ticket or Gatekeeper's verdict is not good. The
+      # files are in the draft by now; a failure here turns the job red, and the draft is not to be
+      # published.
+      - name: Check the macOS app and disk image
+        if: runner.os == 'macOS'
+        run: |
+          bundle=src-tauri/target/${{ matrix.target }}/release/bundle
+          app="$bundle/macos/Folio.app"
+          dmg=$(ls "$bundle"/dmg/*.dmg | head -n 1)
+          [ -d "$app" ] && [ -n "$dmg" ] || { echo "No app or disk image was built."; exit 1; }
+          exe=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$app/Contents/Info.plist")
+          archs=$(lipo -archs "$app/Contents/MacOS/$exe")
+          echo "Architectures: $archs"
+          case "$archs" in *arm64*) ;; *) echo "No Apple silicon code."; exit 1;; esac
+          case "$archs" in *x86_64*) ;; *) echo "No Intel code."; exit 1;; esac
+          if [ "$NOTARIZED" = "true" ]; then
+            codesign --verify --deep --strict --verbose=2 "$app"
+            xcrun stapler validate "$app"
+            xcrun stapler validate "$dmg"
+            spctl --assess --type execute --verbose=2 "$app"
+            spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
+          else
+            echo "::warning::Not signed or notarized: Gatekeeper will warn."
+          fi
 
   windows:
     needs: draft

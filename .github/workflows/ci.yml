@@ -147,6 +147,44 @@ jobs:
       - name: Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+  # The macOS app of every commit on main, unsigned: one universal binary (Apple silicon and
+  # Intel) in a disk image, checked for both architectures. Releases (signed, notarized) are
+  # built by release.yml.
+  build-macos:
+    if: github.event_name != 'pull_request'
+    needs: [frontend, rust-macos]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - name: Collect the third-party licenses
+        run: npm run licenses
+      - name: Build the app
+        run: npm run tauri build -- --target universal-apple-darwin --bundles app,dmg
+      - name: Check both architectures are in it
+        run: |
+          app=src-tauri/target/universal-apple-darwin/release/bundle/macos/Folio.app
+          exe=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$app/Contents/Info.plist")
+          archs=$(lipo -archs "$app/Contents/MacOS/$exe")
+          echo "Architectures: $archs"
+          case "$archs" in *arm64*x86_64*|*x86_64*arm64*) ;; *) echo "Not universal."; exit 1;; esac
+      - uses: actions/upload-artifact@v7
+        with:
+          name: folio-macos-${{ github.sha }}
+          path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 14
+
   # Windows-only code (shell thumbnails, context menu, drag) is only compiled here,
   # so it also runs on PRs to catch FFI breakage before merge.
   rust-windows:
