@@ -1,0 +1,790 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="color-scheme" content="light dark" />
+    <title>JSON viewer</title>
+    <style>
+      :root {
+        --line: color-mix(in srgb, CanvasText 14%, transparent);
+        --dim: color-mix(in srgb, CanvasText 50%, transparent);
+        --hit: color-mix(in srgb, gold 45%, transparent);
+        --cur: color-mix(in srgb, orange 75%, transparent);
+        --sel: color-mix(in srgb, CanvasText 10%, transparent);
+        --key: light-dark(#0b5cad, #7cb7ff);
+        --str: light-dark(#0a7d33, #8fd19e);
+        --num: light-dark(#b45309, #f0b27a);
+        --lit: light-dark(#7c3aed, #c4a1ff);
+        --bad: light-dark(#b00020, #ff8a80);
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+        background: Canvas;
+        color: CanvasText;
+        font:
+          13px system-ui,
+          sans-serif;
+      }
+      .bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-bottom: 1px solid var(--line);
+      }
+      .bar input[type="search"] {
+        flex: 1;
+        min-width: 80px;
+        max-width: 260px;
+        padding: 4px 8px;
+        font: inherit;
+        color: inherit;
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+      }
+      button {
+        padding: 3px 8px;
+        font: inherit;
+        color: inherit;
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+      button[aria-pressed="true"] {
+        background: var(--hit);
+      }
+      .seg {
+        display: inline-flex;
+      }
+      .seg button {
+        border-radius: 0;
+        margin-left: -1px;
+      }
+      .seg button:first-child {
+        border-radius: 6px 0 0 6px;
+        margin-left: 0;
+      }
+      .seg button:last-child {
+        border-radius: 0 6px 6px 0;
+      }
+      .count,
+      .info {
+        color: var(--dim);
+        white-space: nowrap;
+      }
+      .spacer {
+        flex: 1;
+      }
+      .callout {
+        margin: 0;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--line);
+        background: color-mix(in srgb, var(--bad) 12%, transparent);
+      }
+      .callout.note {
+        background: var(--sel);
+      }
+      .callout b {
+        color: var(--bad);
+      }
+      .callout pre {
+        margin: 6px 0 0;
+        font:
+          12px/1.4 ui-monospace,
+          "Cascadia Mono",
+          Consolas,
+          monospace;
+        white-space: pre-wrap;
+      }
+      #view {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        padding: 6px 0;
+        font:
+          12.5px/1.55 ui-monospace,
+          "Cascadia Mono",
+          Consolas,
+          monospace;
+        tab-size: 2;
+      }
+      .row {
+        display: flex;
+        align-items: baseline;
+        padding-right: 12px;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .row:hover {
+        background: var(--sel);
+      }
+      .row.sel {
+        background: var(--sel);
+        outline: 1px solid var(--line);
+      }
+      .row.cur {
+        background: color-mix(in srgb, orange 25%, transparent);
+      }
+      .kids {
+        margin-left: 18px;
+        border-left: 1px solid var(--line);
+      }
+      .tg,
+      .sp {
+        flex: none;
+        width: 18px;
+        padding: 0;
+        text-align: center;
+        border: 0;
+        color: var(--dim);
+      }
+      .tg:hover {
+        color: CanvasText;
+      }
+      .key,
+      .colon {
+        flex: none;
+      }
+      .row > .str,
+      .row > .num,
+      .row > .lit {
+        flex: 0 1 auto;
+        min-width: 0;
+      }
+      .key {
+        color: var(--key);
+      }
+      .str {
+        color: var(--str);
+      }
+      .num {
+        color: var(--num);
+      }
+      .lit {
+        color: var(--lit);
+      }
+      .colon {
+        margin-right: 6px;
+      }
+      .meta {
+        margin-left: 8px;
+        color: var(--dim);
+      }
+      .more {
+        margin: 2px 0 2px 18px;
+      }
+      mark {
+        color: inherit;
+        background: var(--hit);
+        border-radius: 2px;
+      }
+      mark.cur {
+        background: var(--cur);
+      }
+      .line {
+        display: flex;
+      }
+      .line.err {
+        background: color-mix(in srgb, var(--bad) 18%, transparent);
+      }
+      .n {
+        flex: none;
+        box-sizing: content-box;
+        width: calc(var(--digits, 3) * 1ch);
+        padding: 0 10px 0 12px;
+        text-align: right;
+        color: var(--dim);
+        user-select: none;
+      }
+      .t {
+        flex: 1;
+        padding-right: 12px;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .msg {
+        padding: 24px;
+        color: var(--dim);
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="bar">
+      <div class="seg" role="group" aria-label="View">
+        <button id="m-tree" aria-pressed="true">Tree</button>
+        <button id="m-pretty" aria-pressed="false">Pretty</button>
+        <button id="m-raw" aria-pressed="false">Raw</button>
+      </div>
+      <input id="q" type="search" placeholder="Search (Ctrl+F)" aria-label="Search" />
+      <button id="prev" title="Previous match (Shift+Enter)" aria-label="Previous match">↑</button>
+      <button id="next" title="Next match (Enter)" aria-label="Next match">↓</button>
+      <span id="count" class="count" role="status"></span>
+      <span class="spacer"></span>
+      <button id="expand" title="Open every level">Expand all</button>
+      <button id="collapse" title="Fold everything">Collapse all</button>
+      <button id="cpath" title="Copy the path of the selected row" disabled>Copy path</button>
+      <button id="cvalue" title="Copy the value of the selected row" disabled>Copy value</button>
+    </div>
+    <div id="top"></div>
+    <div id="view" tabindex="0"><p class="msg">Waiting…</p></div>
+    <script>
+      // A file's text is untrusted: it is only ever put on the page with textContent.
+      const MAX_HITS = 2000;
+      const CHUNK = 200;
+      const MAX_DEPTH = 400;
+      const $ = (id) => document.getElementById(id);
+      const view = $("view");
+      const query = $("q");
+
+      let text = "";
+      let truncated = false;
+      let doc;
+      let hasDoc = false;
+      let error = null;
+      let mode = "raw";
+      let entries = [];
+      let expanded = new Set();
+      let limits = new Map();
+      let rowOf = new Map();
+      let selected = null;
+      let hits = [];
+      let current = -1;
+      let needle = "";
+
+      // The page talks to Folio with messages; see docs/PLUGINS.md.
+      let nextId = 1;
+      const pending = new Map();
+      function call(method, params) {
+        return new Promise((resolve, reject) => {
+          const id = nextId++;
+          pending.set(id, { resolve, reject });
+          parent.postMessage({ folio: 1, id, method, params }, "*");
+        });
+      }
+      window.addEventListener("message", (e) => {
+        const m = e.data;
+        if (!m || m.folio !== 1) return;
+        if (m.id !== undefined) {
+          const waiting = pending.get(m.id);
+          pending.delete(m.id);
+          if (m.error !== undefined) waiting?.reject(new Error(m.error));
+          else waiting?.resolve(m.result);
+        } else if (m.event === "preview" && m.preview === "json") {
+          open(m.path);
+        }
+      });
+
+      const el = (tag, cls, txt) => {
+        const e = document.createElement(tag);
+        if (cls) e.className = cls;
+        if (txt !== undefined) e.textContent = txt;
+        return e;
+      };
+      const kind = (v) => (v === null ? "null" : Array.isArray(v) ? "array" : typeof v);
+      const isContainer = (v) => v !== null && typeof v === "object";
+      const pk = (path) => JSON.stringify(path);
+      /** `$.a.b[3]["odd key"]` */
+      const pathText = (path) =>
+        path.reduce(
+          (s, k) =>
+            typeof k === "number"
+              ? `${s}[${k}]`
+              : /^[A-Za-z_$][\w$]*$/.test(k)
+                ? `${s}.${k}`
+                : `${s}[${JSON.stringify(k)}]`,
+          "$",
+        );
+
+      function message(txt) {
+        view.className = "";
+        view.replaceChildren(el("p", "msg", txt));
+      }
+
+      async function open(path) {
+        try {
+          const r = await call("read", { path });
+          load(r.text, r.truncated);
+        } catch (e) {
+          message(e.message);
+        }
+      }
+
+      /** Where the first mistake in `t` is, found by reading it: `{ at, m }`, or null if none. */
+      function errorAt(t) {
+        let i = 0;
+        const ws = () => {
+          while (i < t.length && " \t\n\r".includes(t[i])) i++;
+        };
+        const fail = (m) => {
+          throw { at: i, m };
+        };
+        const str = () => {
+          i++;
+          while (i < t.length) {
+            const ch = t[i];
+            if (ch === '"') {
+              i++;
+              return;
+            }
+            if (ch === "\\") {
+              const n = t[i + 1];
+              if (n === "u") {
+                if (!/^[0-9a-fA-F]{4}$/.test(t.slice(i + 2, i + 6)))
+                  fail("Bad \\u escape in a string");
+                i += 6;
+              } else if (n !== undefined && '"\\/bfnrt'.includes(n)) i += 2;
+              else fail("Bad escape in a string");
+            } else if (ch < " ") fail("A line break or control character inside a string");
+            else i++;
+          }
+          fail("A string is never closed");
+        };
+        const value = (depth) => {
+          if (depth > MAX_DEPTH) fail("Nested too deeply");
+          ws();
+          const c = t[i];
+          if (c === "{") {
+            i++;
+            ws();
+            if (t[i] === "}") return void i++;
+            for (;;) {
+              ws();
+              if (t[i] !== '"') fail("Expected a key in quotes");
+              str();
+              ws();
+              if (t[i] !== ":") fail("Expected ':' after a key");
+              i++;
+              value(depth + 1);
+              ws();
+              if (t[i] === ",") i++;
+              else if (t[i] === "}") return void i++;
+              else fail("Expected ',' or '}'");
+            }
+          }
+          if (c === "[") {
+            i++;
+            ws();
+            if (t[i] === "]") return void i++;
+            for (;;) {
+              value(depth + 1);
+              ws();
+              if (t[i] === ",") i++;
+              else if (t[i] === "]") return void i++;
+              else fail("Expected ',' or ']'");
+            }
+          }
+          if (c === '"') return str();
+          const m = /^(-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?|true|false|null)/.exec(
+            t.slice(i, i + 400),
+          );
+          if (!m) fail(c === undefined ? "The text ends too soon" : `Unexpected '${c}'`);
+          i += m[0].length;
+        };
+        try {
+          value(0);
+          ws();
+          if (i < t.length) fail("Text after the end of the value");
+        } catch (e) {
+          if (e && typeof e.at === "number") return e;
+          return null;
+        }
+        return null;
+      }
+
+      /** Why the text isn't JSON, with a line and column when it can be found. */
+      function explain(e, t) {
+        const where = errorAt(t);
+        if (where) {
+          const before = t.slice(0, where.at);
+          return {
+            message: where.m,
+            line: before.split("\n").length,
+            col: where.at - before.lastIndexOf("\n"),
+          };
+        }
+        return { message: String(e && e.message ? e.message : e), line: 0, col: 0 };
+      }
+
+      function load(t, trunc) {
+        text = t.charCodeAt(0) === 0xfeff ? t.slice(1) : t;
+        truncated = trunc;
+        error = null;
+        hasDoc = false;
+        doc = undefined;
+        entries = [];
+        selected = null;
+        expanded = new Set([pk([])]);
+        limits = new Map();
+        if (!truncated) {
+          try {
+            doc = JSON.parse(text);
+            buildIndex();
+            hasDoc = true;
+          } catch (e) {
+            error = explain(e, text);
+            if (e instanceof RangeError || /too deeply/.test(String(e.message))) {
+              error = { message: "Nested too deeply to show as a tree", line: 0, col: 0 };
+            }
+          }
+        }
+        $("m-tree").disabled = $("m-pretty").disabled = !hasDoc;
+        $("expand").disabled = $("collapse").disabled = !hasDoc;
+        setMode(hasDoc ? "tree" : "raw");
+      }
+
+      /** Every node, flat, so a search sees what isn't drawn yet. */
+      function buildIndex() {
+        const walk = (key, v, path) => {
+          if (path.length > MAX_DEPTH) throw new Error("too deeply nested");
+          const container = isContainer(v);
+          entries.push({
+            path,
+            key,
+            value: container ? null : String(v),
+            container,
+          });
+          if (container) {
+            for (const [k, child] of Object.entries(v)) {
+              walk(Array.isArray(v) ? null : k, child, [...path, Array.isArray(v) ? Number(k) : k]);
+            }
+          }
+        };
+        walk(null, doc, []);
+      }
+
+      function setMode(m) {
+        mode = m;
+        for (const name of ["tree", "pretty", "raw"]) {
+          $(`m-${name}`).setAttribute("aria-pressed", String(name === m));
+        }
+        $("cpath").disabled = $("cvalue").disabled = m !== "tree" || !selected;
+        render();
+      }
+
+      function render() {
+        const top = $("top");
+        top.replaceChildren();
+        if (error) {
+          const box = el("div", "callout");
+          const where = error.line ? ` (line ${error.line}, column ${error.col})` : "";
+          const b = el("b", null, "Not valid JSON");
+          box.append(b, document.createTextNode(`: ${error.message}${where}`));
+          top.append(box);
+        } else if (truncated) {
+          top.append(
+            el(
+              "div",
+              "callout note",
+              "This file is larger than the part Folio hands to a preview, so only its start is shown as text.",
+            ),
+          );
+        }
+        needle = query.value.toLowerCase();
+        hits = [];
+        current = -1;
+        if (mode === "tree") {
+          if (needle) hits = findHits();
+          renderTree();
+        } else renderText(mode === "pretty" ? JSON.stringify(doc, null, 2) : text);
+        if (hits.length) go(0);
+        else status();
+      }
+
+      /** `str` into `parent`, the search text marked. Marks are returned in order. */
+      function marked(parent, str, marks) {
+        if (!needle) {
+          parent.append(str);
+          return;
+        }
+        const hay = str.toLowerCase();
+        let from = 0;
+        let at;
+        while ((at = hay.indexOf(needle, from)) !== -1) {
+          if (at > from) parent.append(str.slice(from, at));
+          const m = el("mark", null, str.slice(at, at + needle.length));
+          parent.append(m);
+          marks?.push(m);
+          from = at + needle.length;
+        }
+        parent.append(str.slice(from));
+      }
+
+      // ---- Tree ----
+
+      /** The nodes whose key or value holds the search text (all of them, drawn or not). */
+      function findHits() {
+        const found = [];
+        for (const e of entries) {
+          if (found.length >= MAX_HITS) break;
+          const inKey = e.key !== null && String(e.key).toLowerCase().includes(needle);
+          const inValue = e.value !== null && e.value.toLowerCase().includes(needle);
+          if (inKey || inValue) found.push(e.path);
+        }
+        return found;
+      }
+
+      function renderTree() {
+        const top = view.scrollTop;
+        rowOf = new Map();
+        view.className = "tree";
+        view.replaceChildren(node(null, doc, [], true));
+        view.scrollTop = top;
+      }
+
+      function spacer() {
+        return el("span", "sp");
+      }
+
+      function node(key, v, path, last) {
+        const wrap = el("div", "node");
+        const id = pk(path);
+        const k = kind(v);
+        const container = isContainer(v);
+        const count = container ? Object.keys(v).length : 0;
+        const open = container && count > 0 && expanded.has(id);
+        const row = el("div", "row");
+        rowOf.set(id, row);
+        if (selected && selected.id === id) row.classList.add("sel");
+
+        if (container && count > 0) {
+          const tg = el("button", "tg", open ? "▾" : "▸");
+          tg.setAttribute("aria-label", open ? "Collapse" : "Expand");
+          tg.setAttribute("aria-expanded", String(open));
+          tg.onclick = (e) => {
+            e.stopPropagation();
+            if (expanded.has(id)) expanded.delete(id);
+            else expanded.add(id);
+            renderTree();
+          };
+          row.append(tg);
+        } else {
+          row.append(spacer());
+        }
+        if (key !== null) {
+          const ks = el("span", "key");
+          marked(ks, JSON.stringify(String(key)));
+          row.append(ks, el("span", "colon", ":"));
+        }
+        if (container) {
+          const [o, c] = k === "array" ? ["[", "]"] : ["{", "}"];
+          if (count === 0) row.append(o + c);
+          else if (open) row.append(o);
+          else {
+            row.append(`${o} … ${c}`);
+            const unit = k === "array" ? "item" : "key";
+            row.append(el("span", "meta", `${count} ${unit}${count === 1 ? "" : "s"}`));
+          }
+        } else {
+          const shown = k === "string" ? JSON.stringify(v) : String(v);
+          const vs = el("span", k === "string" ? "str" : k === "number" ? "num" : "lit");
+          marked(vs, shown);
+          row.append(vs);
+        }
+        if (!last && !open) row.append(",");
+        row.onclick = () => select(id, path, v, row);
+        wrap.append(row);
+
+        if (open) {
+          const kids = el("div", "kids");
+          const items = Object.entries(v);
+          const limit = limits.get(id) ?? CHUNK;
+          const array = k === "array";
+          items.slice(0, limit).forEach(([ck, cv], i) => {
+            const childPath = [...path, array ? Number(ck) : ck];
+            kids.append(node(array ? null : ck, cv, childPath, i === items.length - 1));
+          });
+          if (items.length > limit) {
+            const more = el(
+              "button",
+              "more",
+              `Show ${Math.min(CHUNK, items.length - limit)} more (${items.length - limit} left)`,
+            );
+            more.onclick = () => {
+              limits.set(id, limit + CHUNK);
+              renderTree();
+            };
+            kids.append(more);
+          }
+          wrap.append(kids);
+          const close = el("div", "row");
+          close.append(spacer(), (k === "array" ? "]" : "}") + (last ? "" : ","));
+          wrap.append(close);
+        }
+        return wrap;
+      }
+
+      function select(id, path, value, row) {
+        if (selected) rowOf.get(selected.id)?.classList.remove("sel");
+        selected = { id, path, value };
+        row.classList.add("sel");
+        $("cpath").disabled = $("cvalue").disabled = false;
+      }
+
+      /** Opens every level above `path` (and the batches that hold it), so its row exists. */
+      function reveal(path) {
+        let v = doc;
+        for (let i = 0; i < path.length; i++) {
+          const id = pk(path.slice(0, i));
+          expanded.add(id);
+          const index = Object.keys(v).indexOf(String(path[i]));
+          if (index >= (limits.get(id) ?? CHUNK)) limits.set(id, index + CHUNK);
+          v = v[path[i]];
+        }
+      }
+
+      // ---- Text (pretty and raw) ----
+
+      function renderText(str) {
+        const lines = str.split(/\r\n|\n|\r/);
+        view.className = "text";
+        view.style.setProperty("--digits", String(String(lines.length).length));
+        const frag = document.createDocumentFragment();
+        const marks = [];
+        lines.forEach((line, i) => {
+          const row = el("div", error && error.line === i + 1 ? "line err" : "line");
+          const t = el("span", "t");
+          marked(t, line, marks.length < MAX_HITS ? marks : null);
+          row.append(el("span", "n", String(i + 1)), t);
+          frag.append(row);
+        });
+        view.replaceChildren(frag);
+        hits = marks;
+        const bad = view.querySelector(".line.err");
+        if (bad && !needle) bad.scrollIntoView({ block: "center" });
+      }
+
+      // ---- Search ----
+
+      function status() {
+        let t = "";
+        if (needle) {
+          const more = hits.length >= MAX_HITS ? "+" : "";
+          t = hits.length ? `${current + 1} of ${hits.length}${more}` : "No matches";
+        } else if (hasDoc) {
+          const unit = Array.isArray(doc) ? "item" : "key";
+          t = isContainer(doc)
+            ? `${Object.keys(doc).length} ${unit}${Object.keys(doc).length === 1 ? "" : "s"} · ${(text.length / 1024).toFixed(1)} KB`
+            : kind(doc);
+        }
+        $("count").textContent = t;
+      }
+
+      function go(index) {
+        if (!hits.length) return;
+        const was = hits[current];
+        current = (index + hits.length) % hits.length;
+        if (mode === "tree") {
+          reveal(hits[current]);
+          renderTree();
+          const row = rowOf.get(pk(hits[current]));
+          row?.classList.add("cur");
+          row?.scrollIntoView({ block: "center", inline: "nearest" });
+        } else {
+          was?.classList?.remove("cur");
+          hits[current].classList.add("cur");
+          hits[current].scrollIntoView({ block: "center", inline: "nearest" });
+        }
+        status();
+      }
+
+      let timer = 0;
+      let shown = "";
+      query.addEventListener("input", () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          shown = query.value;
+          render();
+        }, 150);
+      });
+      query.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          clearTimeout(timer);
+          if (hits.length && query.value === shown) go(current + (e.shiftKey ? -1 : 1));
+          else if (query.value !== shown) {
+            shown = query.value;
+            render();
+          }
+        } else if (e.key === "Escape" && query.value) {
+          e.preventDefault();
+          e.stopPropagation();
+          query.value = "";
+          shown = "";
+          render();
+        }
+      });
+      $("next").onclick = () => go(current + 1);
+      $("prev").onclick = () => go(current - 1);
+      for (const m of ["tree", "pretty", "raw"]) $(`m-${m}`).onclick = () => setMode(m);
+      $("expand").onclick = () => {
+        let n = 0;
+        for (const e of entries) {
+          if (e.container && e.path.length <= 8 && n++ < 3000) expanded.add(pk(e.path));
+        }
+        setMode("tree");
+      };
+      $("collapse").onclick = () => {
+        expanded = new Set([pk([])]);
+        setMode("tree");
+      };
+
+      // ---- Copy ----
+
+      let flash = 0;
+      async function copy(str, what) {
+        let ok = false;
+        try {
+          await navigator.clipboard.writeText(str);
+          ok = true;
+        } catch {
+          // A sandboxed page may not be given the clipboard; the old way works on a click.
+          const box = el("textarea");
+          box.value = str;
+          box.style.position = "fixed";
+          box.style.opacity = "0";
+          document.body.append(box);
+          box.select();
+          try {
+            ok = document.execCommand("copy");
+          } catch {
+            ok = false;
+          }
+          box.remove();
+        }
+        $("count").textContent = ok ? `Copied ${what}` : "Could not copy";
+        clearTimeout(flash);
+        flash = setTimeout(status, 1500);
+      }
+      $("cpath").onclick = () => selected && copy(pathText(selected.path), "path");
+      $("cvalue").onclick = () => {
+        if (!selected) return;
+        const v = selected.value;
+        copy(typeof v === "string" ? v : JSON.stringify(v, null, 2), "value");
+      };
+
+      document.addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+          e.preventDefault();
+          query.focus();
+          query.select();
+        }
+      });
+
+      parent.postMessage({ folio: 1, event: "ready" }, "*");
+    </script>
+  </body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "id": "json-viewer",
+  "name": "JSON viewer",
+  "version": "1.0.0",
+  "description": "Quick Look for JSON files: a tree you can fold and search, pretty and raw views.",
+  "api": 1,
+  "entry": "index.html",
+  "permissions": ["read"],
+  "previews": [
+    {
+      "id": "json",
+      "title": "JSON viewer",
+      "extensions": ["json", "geojson", "jsonld", "har"]
+    }
+  ]
+}

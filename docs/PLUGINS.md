@@ -28,9 +28,10 @@ you turn them on and read what they can do, and are checked file by file when se
 the same id in your plugins folder replaces the built-in one, and has to be approved on its own
 files.
 
-| Plugin      | What it does                                                                |
-| ----------- | --------------------------------------------------------------------------- |
-| Text viewer | Quick Look for text and code files: line numbers, wrapping, search (Ctrl+F) |
+| Plugin      | What it does                                                                                                                                                                                                                     |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Text viewer | Quick Look for text and code files: line numbers, wrapping, search (Ctrl+F)                                                                                                                                                      |
+| JSON viewer | Quick Look for `.json`, `.geojson`, `.jsonld`, `.har`: a tree to fold and search, copy a path or value, pretty and raw views, and where a syntax error is. Files larger than the 256 KB a preview is given show as raw text only |
 
 ## The manifest
 
