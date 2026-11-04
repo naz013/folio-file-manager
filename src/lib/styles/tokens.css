@@ -223,13 +223,30 @@
  * modes: text 4.5:1 or more, white or dark text on the accent and its hover and pressed fills
  * 4.5:1 or more). The one exception is quiet (tertiary) text on --bg-pressed, 4.2 to 4.4:1,
  * which only shows while a button is held down. Keep to this when changing a color above. With "increase contrast" on in the OS, borders and quiet text go
- * stronger still. The repeated :root outranks the data-theme rules above.
+ * stronger still. The repeated :root outranks the data-theme rules above; the light borders come
+ * first, and the dark ones follow for a dark OS and for a forced dark theme.
  */
 @media (prefers-contrast: more) {
   :root:root:root {
-    --border-default: light-dark(#767680, #8e8e98);
-    --border-strong: light-dark(#5e5e69, #a4a4ae);
+    --border-default: #767680;
+    --border-strong: #5e5e69;
     --text-secondary: var(--text-primary);
     --text-tertiary: var(--text-primary);
+  }
+}
+
+/* The dark borders are spelled out, not written with light-dark(): WebKitGTK before 2.46 (the
+   Linux web view) doesn't know that function, and a border left without a value disappears. */
+@media (prefers-contrast: more) and (prefers-color-scheme: dark) {
+  :root:root:root:not([data-theme="light"]) {
+    --border-default: #8e8e98;
+    --border-strong: #a4a4ae;
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root:root:root[data-theme="dark"] {
+    --border-default: #8e8e98;
+    --border-strong: #a4a4ae;
   }
 }

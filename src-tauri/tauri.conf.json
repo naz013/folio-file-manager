@@ -38,6 +38,20 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "category": "Utility",
+    "shortDescription": "A lightweight, beautiful file manager",
+    "longDescription": "Folio is a fast file manager with tabs, two panes, tags, Quick Look previews and safe cleanup. Deleted files go to the Trash and can be brought back.",
+    "copyright": "Folio contributors",
+    "license": "AGPL-3.0-only",
+    "linux": {
+      "deb": {
+        "section": "utils",
+        "recommends": ["xdg-utils", "webp-pixbuf-loader"]
+      },
+      "rpm": {
+        "recommends": ["xdg-utils", "webp-pixbuf-loader"]
+      }
+    },
     "resources": {
       "resources/THIRD-PARTY-LICENSES.txt": "THIRD-PARTY-LICENSES.txt",
       "resources/plugins/": "plugins/"

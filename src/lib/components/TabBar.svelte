@@ -229,6 +229,12 @@
     outline: none;
   }
 
+  /* WebKitGTK before 2.48 doesn't know scrollbar-width, and the app-wide scrollbar style would
+     show a bar under the tabs. */
+  .strip::-webkit-scrollbar {
+    display: none;
+  }
+
   .tab {
     display: flex;
     align-items: center;

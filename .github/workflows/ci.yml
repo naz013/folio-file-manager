@@ -66,6 +66,68 @@ jobs:
       - name: Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+  # The Linux packages of every commit on main: a .deb and an .rpm, built on the oldest Ubuntu
+  # the release uses so they run on older distros too. The release adds the AppImage, which
+  # needs a download of its own tools and is left out here.
+  build-linux:
+    if: github.event_name != 'pull_request'
+    needs: [frontend, rust-linux]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev patchelf
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - name: Collect the third-party licenses
+        run: npm run licenses
+      - name: Build the packages
+        run: npm run tauri build -- --bundles deb,rpm
+      - uses: actions/upload-artifact@v7
+        with:
+          name: folio-linux-${{ github.sha }}
+          path: |
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/rpm/*.rpm
+          if-no-files-found: error
+          retention-days: 14
+
+  # Installs each package in a plain image of a distro it is meant for, with only what the
+  # package itself asks for, then checks the program links, the launcher and icon are there,
+  # and it starts. This is what finds a missing dependency.
+  package-smoke:
+    needs: build-linux
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: "ubuntu:22.04", ext: deb }
+          - { image: "ubuntu:24.04", ext: deb }
+          - { image: "debian:12", ext: deb }
+          - { image: "fedora:43", ext: rpm }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: folio-linux-${{ github.sha }}
+          path: packages
+      - name: Install and start it in ${{ matrix.image }}
+        run: |
+          pkg=$(find packages -name '*.${{ matrix.ext }}' | head -n 1)
+          [ -n "$pkg" ] || { echo "no .${{ matrix.ext }} in the artifact"; exit 1; }
+          docker run --rm -v "$PWD:/work" -w /work "${{ matrix.image }}" \
+            sh scripts/linux-smoke.sh "/work/$pkg"
+
   # macOS differs from Linux in file system case rules and in libc type widths, and Docker
   # can't run macOS, so it is checked here. Pull requests run it too, to catch breakage
   # before merge.

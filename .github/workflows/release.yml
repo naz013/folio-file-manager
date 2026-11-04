@@ -47,7 +47,7 @@ jobs:
           - name: linux
             os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            bundles: appimage,deb
+            bundles: appimage,deb,rpm
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
