@@ -354,6 +354,45 @@ export function previewFor(plugins: Loaded[], item: Item): PreviewHit | null {
   return null;
 }
 
+// ---- The page itself ----
+
+const escapeAttr = (s: string) =>
+  s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/** What a plugin page may load: its own folder's files, never the network or any frame. */
+export const pageCsp = (origin: string) =>
+  [
+    "default-src 'none'",
+    `script-src ${origin} 'unsafe-inline'`,
+    `style-src ${origin} 'unsafe-inline'`,
+    `img-src ${origin} data:`,
+    `font-src ${origin} data:`,
+    "connect-src 'none'",
+    "frame-src 'none'",
+    "form-action 'none'",
+    "base-uri 'none'",
+  ].join("; ");
+
+/**
+ * The document a plugin's frame is given (as `srcdoc`) in place of a link to its page.
+ *
+ * Tauri trusts a page whose address is on one of its own protocols (`plugin.localhost`) like
+ * Folio's page, and on Windows it puts its command channel and key into every frame. A plugin
+ * page at that address could therefore run Folio's commands. A `srcdoc` page has no such
+ * address, so Tauri treats what it sends as coming from an untrusted page and refuses it.
+ *
+ * `base` is the folder the page's own files are loaded from, `origin` the protocol's origin
+ * (`scheme://host`). Our `<base>` and policy come first, so they hold before any plugin code
+ * runs, and the page's own `<base>` is refused by `base-uri 'none'`.
+ */
+export function pageDoc(html: string, base: string, origin: string): string {
+  return (
+    `<!doctype html><html><head><base href="${escapeAttr(base)}">` +
+    `<meta http-equiv="Content-Security-Policy" content="${escapeAttr(pageCsp(origin))}">` +
+    html
+  );
+}
+
 // ---- The conversation with a plugin's page ----
 
 /** Every message either way carries this, so a stray message isn't mistaken for one. */

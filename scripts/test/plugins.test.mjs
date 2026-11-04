@@ -8,6 +8,8 @@ import {
   isGranted,
   isReady,
   load,
+  pageCsp,
+  pageDoc,
   parseManifest,
   previewFor,
 } from "../../src/lib/plugins.ts";
@@ -373,4 +375,45 @@ test("the IPC probe plugin is a valid preview that asks for nothing", () => {
   assert.ok(r.ok, r.error);
   assert.deepEqual(r.manifest.permissions, []);
   assert.deepEqual(r.manifest.previews[0].extensions, ["probe"]);
+});
+
+test("a page is given as a document with our base and policy ahead of its own markup", () => {
+  const origin = "http://plugin.localhost";
+  const html = "<!doctype html><html><head><title>x</title></head><body>hi</body></html>";
+  const doc = pageDoc(html, `${origin}/demo/sub/`, origin);
+  assert.ok(
+    doc.startsWith('<!doctype html><html><head><base href="http://plugin.localhost/demo/sub/">'),
+  );
+  assert.ok(doc.indexOf("<base") < doc.indexOf("Content-Security-Policy"));
+  assert.ok(doc.indexOf("Content-Security-Policy") < doc.indexOf(html));
+  assert.ok(doc.endsWith(html));
+  // A quote in the address can't close the attribute.
+  assert.ok(!pageDoc("", 'http://x/"><script>1</script>', origin).includes("<script>"));
+  const csp = pageCsp(origin);
+  for (const part of [
+    "default-src 'none'",
+    "connect-src 'none'",
+    "frame-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
+    `script-src ${origin} 'unsafe-inline'`,
+    `img-src ${origin} data:`,
+  ]) {
+    assert.ok(csp.includes(part), part);
+  }
+  assert.ok(!csp.includes("*"));
+});
+
+test("the app page never lets a frame go to a plugin address, and frames are not links", () => {
+  // A page at plugin.localhost counts as Folio's own to Tauri and could run its commands, so the
+  // plugin frame must be a document (srcdoc) and the app page must refuse a frame going there.
+  const app = readFileSync(new URL("../../src/app.html", import.meta.url), "utf8");
+  const policy = app.match(/http-equiv="Content-Security-Policy"\s+content="([^"]*)"/)?.[1];
+  assert.equal(policy, "frame-src about:");
+  const frame = readFileSync(
+    new URL("../../src/lib/components/PluginFrame.svelte", import.meta.url),
+    "utf8",
+  );
+  assert.match(frame, /srcdoc=\{doc\}/);
+  assert.ok(!/<iframe[^>]*\ssrc=/.test(frame), "an iframe with a src link");
 });

@@ -45,6 +45,20 @@ sees anywhere, unless the person has said so for that plugin and that ability.
    own frame). More (toolbar buttons, sidebar sections) can be added to the manifest later;
    an unknown field is ignored, a newer `api` than Folio's disables the plugin with a message.
 
+## Amendment — the page is a document, not a link
+
+A first version put the plugin page in `<iframe src="http://plugin.localhost/…">`. That was an
+escape: Tauri counts any address on one of its own protocols as local (trusted like Folio's page,
+so the `default` capability applies), and on Windows it puts its command channel and invoke key
+into **every** frame, not only the main one. A plugin page could call `__TAURI_INTERNALS__.invoke`
+and run Folio's commands (found by the `ipc-probe` example, which opened Explorer). Now the page's
+HTML is read by Folio and given to the frame as `srcdoc`, with a `<base>` pointing at the plugin's
+folder and a Content-Security-Policy ahead of its own markup (`pageDoc` in `plugins.ts`). A
+`srcdoc` page has no plugin address, so what it sends is treated as from an untrusted page and
+refused. The app page allows frames only at `about:` (`frame-src about:`), so a plugin can't send
+its frame to a plugin address either. Never add a plugin address to that policy, and run
+`examples/plugins/ipc-probe` after any change to how plugin pages are loaded.
+
 ## Consequences
 
 - A plugin can show anything on its own page, and may mislead a person by what it shows;

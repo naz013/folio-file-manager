@@ -51,9 +51,6 @@
       attempt("parent.__TAURI_INTERNALS__", () => parent.__TAURI_INTERNALS__ && "object");
       attempt("parent.document", () => parent.document && "document");
       attempt("top.location.href", () => top.location.href);
-      // Tauri's helpers are injected into the main frame only.
-      attempt("window.__TAURI_INTERNALS__", () => window.__TAURI_INTERNALS__ && "object");
-      attempt("window.__TAURI__", () => window.__TAURI__ && "object");
       // The webview's message channel, with a forged command and no valid invoke key.
       attempt("chrome.webview.postMessage", () => {
         const w = window.chrome && window.chrome.webview;
@@ -92,6 +89,18 @@
           const r = await fetch(url, { method: "POST", body: "{}" });
           return `status ${r.status}`;
         });
+      }
+      // Going to a plugin address: the page would then be trusted like Folio's own, so the app
+      // page must refuse the frame that tries. Only from the srcdoc page, so it can't loop.
+      if (location.href === "about:srcdoc") {
+        setTimeout(() => {
+          const li = document.createElement("li");
+          li.className = "bad";
+          li.textContent =
+            "CHECK: the frame is going to its own plugin address. If this page appears twice or an Explorer window opens, frame-src is OPEN";
+          out.append(li);
+          location.href = new URL("index.html", document.baseURI).href;
+        }, 1500);
       }
     </script>
   </body>
