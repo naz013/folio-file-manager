@@ -8,6 +8,10 @@ mod clipboard;
 pub mod clock;
 #[cfg(windows)]
 mod drives;
+#[cfg(target_os = "linux")]
+mod thumb_linux;
+#[cfg(target_os = "macos")]
+mod thumb_mac;
 #[cfg(windows)]
 mod win;
 #[cfg(windows)]
@@ -218,7 +222,15 @@ pub fn thumbnail_png(path: &Path, size: u32) -> Result<Vec<u8>, String> {
     {
         win::thumbnail_png(path, size)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        thumb_mac::thumbnail_png(path, size)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        thumb_linux::thumbnail_png(path, size)
+    }
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     {
         let _ = (path, size);
         Err("thumbnails are not implemented on this platform yet".into())
@@ -226,8 +238,6 @@ pub fn thumbnail_png(path: &Path, size: u32) -> Result<Vec<u8>, String> {
 }
 
 /// Encodes straight (non-premultiplied) RGBA pixels as PNG.
-// Unused on Linux until thumbnails and drag-out are ported there (1.1).
-#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
     let mut encoder = png::Encoder::new(&mut out, width, height);

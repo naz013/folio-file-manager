@@ -47,7 +47,9 @@ pub fn start_drag<F: Fn(DragResult, CursorPosition) + Send + 'static>(
                     log::debug!("Preparing URIs for drag data");
                     let uris: Vec<String> = paths
                         .iter()
-                        .map(|path| format!("file://{}", path.display()))
+                        // Percent-encoded, as a drop target expects: a name with a space or a
+                        // `#` would otherwise name another file.
+                        .map(|path| gtk::gio::prelude::FileExt::uri(&gtk::gio::File::for_path(path)).to_string())
                         .collect();
                     let uris: Vec<&str> = uris.iter().map(|s| s.as_str()).collect();
                     log::debug!("Setting URIs: {:?}", uris);

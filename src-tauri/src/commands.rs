@@ -185,45 +185,46 @@ pub async fn open_path(path: String) -> CmdResult<()> {
 /// Drops back onto Folio arrive through the webview's regular drag-drop events.
 #[tauri::command]
 pub async fn start_drag(window: tauri::WebviewWindow, paths: Vec<String>) -> CmdResult<()> {
-    #[cfg(not(target_os = "linux"))]
-    {
-        let files: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
-        let first = files.first().cloned().ok_or("Nothing to drag")?;
-        // A cloud-only file drags with a blank image; so does a folder, whose picture the shell
-        // may build from the files inside it.
-        let preview = slow::THUMBNAILS
-            .within(slow::THUMBNAIL, move || {
-                let draw = !first.is_dir();
-                draw.then(|| crate::platform::thumbnail_png(&first, 64))
-                    .and_then(Result::ok)
-                    .map_or_else(|| crate::platform::encode_png(1, 1, &[0, 0, 0, 0]), Ok)
-            })
-            .await
-            .ok_or("The file is not answering")??;
-        let target = window.clone();
-        window
-            .run_on_main_thread(move || {
-                if let Err(e) = drag::start_drag(
-                    &target,
-                    drag::DragItem::Files(files),
-                    drag::Image::Raw(preview),
-                    |_, _| {},
-                    // Copy or move is the target's call, from the keys held during the drag.
-                    drag::Options {
-                        mode: drag::DragMode::CopyOrMove,
-                        ..drag::Options::default()
-                    },
-                ) {
+    let files: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    let first = files.first().cloned().ok_or("Nothing to drag")?;
+    // A cloud-only file drags with a blank image; so does a folder, whose picture the shell
+    // may build from the files inside it.
+    let preview = slow::THUMBNAILS
+        .within(slow::THUMBNAIL, move || {
+            let draw = !first.is_dir();
+            draw.then(|| crate::platform::thumbnail_png(&first, 64))
+                .and_then(Result::ok)
+                .map_or_else(|| crate::platform::encode_png(1, 1, &[0, 0, 0, 0]), Ok)
+        })
+        .await
+        .ok_or("The file is not answering")??;
+    let target = window.clone();
+    window
+        .run_on_main_thread(move || {
+            // Windows and macOS take the window; Linux needs its GTK window.
+            #[cfg(target_os = "linux")]
+            let target = match target.gtk_window() {
+                Ok(gtk) => gtk,
+                Err(e) => {
                     eprintln!("native drag failed: {e}");
+                    return;
                 }
-            })
-            .map_err(|e| e.to_string())
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let _ = (window, paths);
-        Err("Dragging to other apps is not supported on Linux yet".into())
-    }
+            };
+            if let Err(e) = drag::start_drag(
+                &target,
+                drag::DragItem::Files(files),
+                drag::Image::Raw(preview),
+                |_, _| {},
+                // Copy or move is the target's call, from the keys held during the drag.
+                drag::Options {
+                    mode: drag::DragMode::CopyOrMove,
+                    ..drag::Options::default()
+                },
+            ) {
+                eprintln!("native drag failed: {e}");
+            }
+        })
+        .map_err(|e| e.to_string())
 }
 
 /// Names the one file the webview may read through `preview://`, replacing the last. `None`

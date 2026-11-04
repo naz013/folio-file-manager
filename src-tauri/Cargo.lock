@@ -1304,6 +1304,7 @@ dependencies = [
  "blake3",
  "drag",
  "flate2",
+ "gdk-pixbuf",
  "image",
  "imagesize",
  "jwalk",
