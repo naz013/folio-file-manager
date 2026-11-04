@@ -6,7 +6,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import type { Tag } from "$lib/api/fs";
-  import { tagColor, TAG_COLORS } from "$lib/tags";
+  import { shadeName, tagColor, TAG_HUES, TAG_SHADES } from "$lib/tags";
   import EmptyState from "./EmptyState.svelte";
 
   let {
@@ -83,18 +83,24 @@
       />
       <span class="chip"></span>
     </label>
-    {#each TAG_COLORS as c (c)}
-      <label class="swatch" title={label(c)}>
-        <input
-          type="radio"
-          name={group}
-          checked={value === c}
-          onchange={() => pick(c)}
-          aria-label={label(c)}
-        />
-        <span class="chip" style:background={tagColor(c)}></span>
-      </label>
-    {/each}
+    <div class="palette">
+      {#each TAG_HUES as hue (hue)}
+        {#each TAG_SHADES as shade (shade)}
+          {@const c = shadeName(hue, shade)}
+          {@const name = shade === 3 ? label(hue) : `${label(hue)}, shade ${shade} of 5`}
+          <label class="swatch" title={name}>
+            <input
+              type="radio"
+              name={group}
+              checked={value === c}
+              onchange={() => pick(c)}
+              aria-label={name}
+            />
+            <span class="chip" style:background={tagColor(c)}></span>
+          </label>
+        {/each}
+      {/each}
+    </div>
   </div>
 {/snippet}
 
@@ -417,8 +423,16 @@
 
   .picker {
     display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-xs);
+    align-items: flex-start;
+    gap: var(--space-sm);
+  }
+
+  /* One column for each hue, light at the top to dark at the bottom. */
+  .palette {
+    display: grid;
+    grid-auto-flow: column;
+    grid-template-rows: repeat(5, auto);
+    gap: var(--space-2xs) var(--space-xs);
   }
 
   .swatch {

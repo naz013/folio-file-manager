@@ -139,11 +139,23 @@ fn check_tag<'a>(
     Ok((name, color))
 }
 
+/// The hues a named tag can have; the shade 3 of each is the hue itself.
+const HUES: [&str; 9] = [
+    "red", "orange", "yellow", "green", "teal", "blue", "purple", "pink", "gray",
+];
+
+/// Whether `c` is a hue (`red`) or one of its shades 1 to 5 (`red-1`), as the palette in
+/// `tokens.css` names them.
+fn is_palette_color(c: &str) -> bool {
+    HUES.contains(&c)
+        || c.split_once('-').is_some_and(|(hue, shade)| {
+            HUES.contains(&hue) && matches!(shade, "1" | "2" | "3" | "4" | "5")
+        })
+}
+
 fn check_color(color: Option<&str>) -> Result<(), String> {
     match color {
-        Some(c) if !COLORS.iter().any(|(_, known)| *known == c) => {
-            Err(format!("\"{c}\" is not one of the tag colours"))
-        }
+        Some(c) if !is_palette_color(c) => Err(format!("\"{c}\" is not one of the tag colours")),
         _ => Ok(()),
     }
 }
@@ -755,7 +767,7 @@ mod tests {
             "names are unique, ignoring case"
         );
         assert!(t.create("   ", None).is_err());
-        assert!(t.create("x", Some("pink")).is_err());
+        assert!(t.create("x", Some("magenta")).is_err());
         assert!(t.delete(3).is_err(), "colour tags stay");
         t.delete(work.id).unwrap();
         assert_eq!(t.list().len(), 7);
@@ -780,7 +792,12 @@ mod tests {
 
         t.recolor(work.id, Some("green")).unwrap();
         t.recolor(home.id, None).unwrap();
-        assert!(t.recolor(work.id, Some("pink")).is_err());
+        t.recolor(work.id, Some("pink-5")).unwrap();
+        t.recolor(work.id, Some("teal")).unwrap();
+        assert!(t.recolor(work.id, Some("pinkish")).is_err());
+        assert!(t.recolor(work.id, Some("red-6")).is_err());
+        assert!(t.recolor(work.id, Some("-1")).is_err());
+        t.recolor(work.id, Some("green")).unwrap();
         assert!(
             t.recolor(3, Some("red")).is_err(),
             "a colour tag is its colour"
@@ -930,7 +947,7 @@ mod tests {
         let mut backup = t.backup(None).unwrap();
         backup.tags.push(BackupTag {
             name: "Future".into(),
-            color: Some("teal".into()),
+            color: Some("magenta".into()),
         });
         assert_eq!(t.restore(&backup, None).unwrap().tags_created, 1);
         let made = t.list().into_iter().find(|x| x.name == "Future").unwrap();

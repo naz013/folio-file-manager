@@ -12,6 +12,56 @@
   --tag-blue: #0a84ff;
   --tag-purple: #af52de;
   --tag-gray: #8e8e93;
+  --tag-teal: #30b0c7;
+  --tag-pink: #ff375f;
+
+  /* core: tag shades, 1 lightest to 5 darkest; 3 is the colour itself. Mixed from the base so a
+     change to a base colour carries to its shades. Only the tag screen's picker offers them. */
+  --tag-red-1: color-mix(in srgb, var(--tag-red) 40%, white);
+  --tag-red-2: color-mix(in srgb, var(--tag-red) 70%, white);
+  --tag-red-3: var(--tag-red);
+  --tag-red-4: color-mix(in srgb, var(--tag-red) 75%, black);
+  --tag-red-5: color-mix(in srgb, var(--tag-red) 50%, black);
+  --tag-orange-1: color-mix(in srgb, var(--tag-orange) 40%, white);
+  --tag-orange-2: color-mix(in srgb, var(--tag-orange) 70%, white);
+  --tag-orange-3: var(--tag-orange);
+  --tag-orange-4: color-mix(in srgb, var(--tag-orange) 75%, black);
+  --tag-orange-5: color-mix(in srgb, var(--tag-orange) 50%, black);
+  --tag-yellow-1: color-mix(in srgb, var(--tag-yellow) 40%, white);
+  --tag-yellow-2: color-mix(in srgb, var(--tag-yellow) 70%, white);
+  --tag-yellow-3: var(--tag-yellow);
+  --tag-yellow-4: color-mix(in srgb, var(--tag-yellow) 75%, black);
+  --tag-yellow-5: color-mix(in srgb, var(--tag-yellow) 50%, black);
+  --tag-green-1: color-mix(in srgb, var(--tag-green) 40%, white);
+  --tag-green-2: color-mix(in srgb, var(--tag-green) 70%, white);
+  --tag-green-3: var(--tag-green);
+  --tag-green-4: color-mix(in srgb, var(--tag-green) 75%, black);
+  --tag-green-5: color-mix(in srgb, var(--tag-green) 50%, black);
+  --tag-teal-1: color-mix(in srgb, var(--tag-teal) 40%, white);
+  --tag-teal-2: color-mix(in srgb, var(--tag-teal) 70%, white);
+  --tag-teal-3: var(--tag-teal);
+  --tag-teal-4: color-mix(in srgb, var(--tag-teal) 75%, black);
+  --tag-teal-5: color-mix(in srgb, var(--tag-teal) 50%, black);
+  --tag-blue-1: color-mix(in srgb, var(--tag-blue) 40%, white);
+  --tag-blue-2: color-mix(in srgb, var(--tag-blue) 70%, white);
+  --tag-blue-3: var(--tag-blue);
+  --tag-blue-4: color-mix(in srgb, var(--tag-blue) 75%, black);
+  --tag-blue-5: color-mix(in srgb, var(--tag-blue) 50%, black);
+  --tag-purple-1: color-mix(in srgb, var(--tag-purple) 40%, white);
+  --tag-purple-2: color-mix(in srgb, var(--tag-purple) 70%, white);
+  --tag-purple-3: var(--tag-purple);
+  --tag-purple-4: color-mix(in srgb, var(--tag-purple) 75%, black);
+  --tag-purple-5: color-mix(in srgb, var(--tag-purple) 50%, black);
+  --tag-pink-1: color-mix(in srgb, var(--tag-pink) 40%, white);
+  --tag-pink-2: color-mix(in srgb, var(--tag-pink) 70%, white);
+  --tag-pink-3: var(--tag-pink);
+  --tag-pink-4: color-mix(in srgb, var(--tag-pink) 75%, black);
+  --tag-pink-5: color-mix(in srgb, var(--tag-pink) 50%, black);
+  --tag-gray-1: color-mix(in srgb, var(--tag-gray) 40%, white);
+  --tag-gray-2: color-mix(in srgb, var(--tag-gray) 70%, white);
+  --tag-gray-3: var(--tag-gray);
+  --tag-gray-4: color-mix(in srgb, var(--tag-gray) 75%, black);
+  --tag-gray-5: color-mix(in srgb, var(--tag-gray) 50%, black);
 
   /* core: status */
   --status-success: #34c759;

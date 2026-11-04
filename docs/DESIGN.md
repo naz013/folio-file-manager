@@ -148,6 +148,7 @@ change in place, `--ease-emphasized` for things that arrive; `--motion-shift` (6
 ## UX rules
 
 - One accent color. Tag colors are for tags only, never for UI chrome.
+- The Tags screen offers nine hues in five shades each (`--tag-<hue>-1` lightest to `-5` darkest; shade 3 is the hue, stored as its plain name). The tag dialog and the keys 1 to 7 keep the seven base colours. Mirror any change in Penpot first.
 - Selection in the grid: grey thumbnail plate + accent name pill (Finder-style).
 - Destructive actions name the exact outcome ("Move 9.9 GB to Recycle Bin").
 - Section labels in the sidebar use Title case, tertiary color.
