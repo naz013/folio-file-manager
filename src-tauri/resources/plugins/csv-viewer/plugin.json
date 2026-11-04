@@ -1,0 +1,16 @@
+{
+  "id": "csv-viewer",
+  "name": "CSV viewer",
+  "version": "1.0.0",
+  "description": "Quick Look for CSV and TSV files: a table you can sort and filter, with the delimiter found for you.",
+  "api": 1,
+  "entry": "index.html",
+  "permissions": ["read"],
+  "previews": [
+    {
+      "id": "csv",
+      "title": "CSV viewer",
+      "extensions": ["csv", "tsv"]
+    }
+  ]
+}

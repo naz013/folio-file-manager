@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="color-scheme" content="light dark" />
+    <title>CSV viewer</title>
+    <style>
+      :root {
+        --line: color-mix(in srgb, CanvasText 14%, transparent);
+        --dim: color-mix(in srgb, CanvasText 55%, transparent);
+        --soft: color-mix(in srgb, CanvasText 6%, transparent);
+        --hit: color-mix(in srgb, gold 45%, transparent);
+        --sel: color-mix(in srgb, CanvasText 14%, transparent);
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+        background: Canvas;
+        color: CanvasText;
+        font:
+          13px system-ui,
+          sans-serif;
+      }
+      .bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-bottom: 1px solid var(--line);
+      }
+      .bar input[type="search"],
+      select {
+        padding: 4px 8px;
+        font: inherit;
+        color: inherit;
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+      }
+      .bar input[type="search"] {
+        flex: 1;
+        min-width: 100px;
+        max-width: 260px;
+      }
+      select option {
+        color: CanvasText;
+        background: Canvas;
+      }
+      button {
+        padding: 3px 8px;
+        font: inherit;
+        color: inherit;
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+      button[aria-pressed="true"] {
+        background: var(--hit);
+      }
+      .count {
+        color: var(--dim);
+        white-space: nowrap;
+      }
+      .spacer {
+        flex: 1;
+      }
+      .callout {
+        margin: 0;
+        padding: 6px 12px;
+        border-bottom: 1px solid var(--line);
+        background: var(--soft);
+      }
+      #grid {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        position: relative;
+      }
+      #inner {
+        position: relative;
+        min-width: 100%;
+      }
+      .head {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        display: flex;
+        background: Canvas;
+        border-bottom: 1px solid var(--line);
+        font-weight: 600;
+      }
+      #body {
+        position: relative;
+      }
+      .row {
+        position: absolute;
+        left: 0;
+        display: flex;
+        height: 26px;
+        box-sizing: border-box;
+        border-bottom: 1px solid var(--line);
+      }
+      .row:nth-child(even) {
+        background: var(--soft);
+      }
+      .cell {
+        flex: none;
+        box-sizing: border-box;
+        padding: 0 10px;
+        line-height: 25px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .head .cell {
+        padding: 0 10px;
+        line-height: 28px;
+        cursor: pointer;
+        user-select: none;
+        border-right: 1px solid var(--line);
+      }
+      .head .cell:hover {
+        background: var(--soft);
+      }
+      .head .idx {
+        cursor: default;
+      }
+      .idx {
+        color: var(--dim);
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      .num {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      .arrow {
+        margin-left: 4px;
+        color: var(--dim);
+      }
+      .cell.sel {
+        background: var(--sel);
+        outline: 1px solid var(--dim);
+        outline-offset: -1px;
+      }
+      mark {
+        color: inherit;
+        background: var(--hit);
+        border-radius: 2px;
+      }
+      .msg {
+        padding: 24px;
+        color: var(--dim);
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="bar">
+      <button id="hdr" aria-pressed="true" title="Treat the first row as column names">
+        Header row
+      </button>
+      <select id="delim" aria-label="Delimiter"></select>
+      <input id="q" type="search" placeholder="Filter rows" aria-label="Filter rows" />
+      <span id="count" class="count" role="status"></span>
+      <span class="spacer"></span>
+      <button id="ccell" title="Copy the selected cell" disabled>Copy cell</button>
+      <button id="crow" title="Copy the selected row, tab-separated" disabled>Copy row</button>
+    </div>
+    <div id="top"></div>
+    <div id="grid" tabindex="0"><p class="msg">Waiting…</p></div>
+    <script src="csv.js"></script>
+    <script>
+      // A file's text is untrusted: it is only ever put on the page with textContent.
+      const ROW_H = 26;
+      const PAGE = 4 * 1024 * 1024;
+      /** How much of a file is read at most: every row is an entry in memory. */
+      const MAX_LOAD = 8 * 1024 * 1024;
+      const MAX_ROWS = 500000;
+      const MAX_COLS = 300;
+      const $ = (id) => document.getElementById(id);
+      const grid = $("grid");
+      const query = $("q");
+
+      let raw = "";
+      let note = "";
+      let size = 0;
+      let detected = ",";
+      let delim = null; // null: the detected one
+      let hasHeader = true;
+      let data = [];
+      let names = [];
+      let cols = 0;
+      let widths = [];
+      let numeric = [];
+      let idxWidth = 50;
+      let sort = { col: -1, dir: 1 };
+      let order = [];
+      let vis = [];
+      let hay = null;
+      let needle = "";
+      let sel = null;
+      let cut = "";
+
+      // The page talks to Folio with messages; see docs/PLUGINS.md.
+      let nextId = 1;
+      const pending = new Map();
+      function call(method, params) {
+        return new Promise((resolve, reject) => {
+          const id = nextId++;
+          pending.set(id, { resolve, reject });
+          parent.postMessage({ folio: 1, id, method, params }, "*");
+        });
+      }
+      window.addEventListener("message", (e) => {
+        const m = e.data;
+        if (!m || m.folio !== 1) return;
+        if (m.id !== undefined) {
+          const waiting = pending.get(m.id);
+          pending.delete(m.id);
+          if (m.error !== undefined) waiting?.reject(new Error(m.error));
+          else waiting?.resolve(m.result);
+        } else if (m.event === "preview" && m.preview === "csv") {
+          open(m.path);
+        }
+      });
+
+      const el = (tag, cls, txt) => {
+        const e = document.createElement(tag);
+        if (cls) e.className = cls;
+        if (txt !== undefined) e.textContent = txt;
+        return e;
+      };
+      const fmtSize = (n) =>
+        n < 1048576 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1048576).toFixed(1)} MB`;
+      const fmtNum = (n) => n.toLocaleString("en-US");
+
+      function message(txt) {
+        grid.replaceChildren(el("p", "msg", txt));
+      }
+
+      async function open(path) {
+        try {
+          let text = "";
+          let at = 0;
+          for (;;) {
+            const r = await call("readRange", { path, offset: at, length: PAGE });
+            text += r.text;
+            size = r.size;
+            if (r.end >= r.size || r.end <= at) {
+              at = r.size;
+              break;
+            }
+            at = r.end;
+            if (at >= MAX_LOAD) break;
+          }
+          raw = text;
+          cut = "";
+          if (at < size) {
+            // The last row is cut short: leave it out.
+            const nl = raw.lastIndexOf("\n");
+            if (nl > 0) raw = raw.slice(0, nl + 1);
+            cut = `Showing the first ${fmtSize(at)} of ${fmtSize(size)}`;
+          }
+          detected = CSV.detect(raw);
+          delim = null;
+          hasHeader = null;
+          setup();
+        } catch (e) {
+          message(e.message);
+        }
+      }
+
+      /** Reads the rows again for the delimiter and header choice, and draws. */
+      function setup() {
+        const d = delim ?? detected;
+        const rows = CSV.parse(raw, d, MAX_ROWS + 1);
+        const extra = [];
+        if (rows.length > MAX_ROWS) {
+          rows.length = MAX_ROWS;
+          extra.push(`first ${fmtNum(MAX_ROWS)} rows`);
+        }
+        cols = Math.min(
+          rows.reduce((m, r) => Math.max(m, r.length), 0),
+          MAX_COLS,
+        );
+        if (rows.some((r) => r.length > MAX_COLS)) extra.push(`first ${MAX_COLS} columns`);
+        if (hasHeader === null) {
+          const first = rows[0] || [];
+          hasHeader =
+            rows.length > 1 && first.some((c) => c) && !first.some((c) => CSV.isNumber(c));
+        }
+        $("hdr").setAttribute("aria-pressed", String(hasHeader));
+        const head = hasHeader ? rows[0] || [] : [];
+        data = hasHeader ? rows.slice(1) : rows;
+        names = Array.from({ length: cols }, (_, c) => (hasHeader && head[c]) || CSV.letters(c));
+        note = [cut, extra.length ? `Showing the ${extra.join(" and ")}` : ""]
+          .filter(Boolean)
+          .join(" · ");
+        // The delimiter list shows what "Auto" found.
+        const sel0 = $("delim");
+        sel0.replaceChildren();
+        sel0.append(new Option(`Auto (${CSV.NAMES[detected]})`, ""));
+        for (const c of CSV.CANDIDATES) sel0.append(new Option(CSV.NAMES[c], c));
+        sel0.value = delim ?? "";
+        measure();
+        sort = { col: -1, dir: 1 };
+        hay = null;
+        sel = null;
+        $("ccell").disabled = $("crow").disabled = true;
+        $("top").replaceChildren();
+        if (note) $("top").append(el("p", "callout", note));
+        refresh(true);
+      }
+
+      /** Column widths and kinds, from the start of the table. */
+      function measure() {
+        const sample = data.slice(0, 300);
+        widths = [];
+        numeric = [];
+        for (let c = 0; c < cols; c++) {
+          let chars = names[c].length + 3;
+          let nums = 0;
+          let filled = 0;
+          for (const r of sample) {
+            const v = r[c] ?? "";
+            chars = Math.max(chars, Math.min(v.length, 60));
+            if (v) {
+              filled++;
+              if (CSV.isNumber(v)) nums++;
+            }
+          }
+          widths.push(Math.min(420, Math.max(60, Math.round(chars * 7.4 + 24))));
+          numeric.push(filled > 0 && nums / filled >= 0.9);
+        }
+        idxWidth = Math.max(44, String(data.length + 1).length * 8 + 24);
+      }
+
+      // ---- Order and filter ----
+
+      const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+      function reorder() {
+        order = Array.from({ length: data.length }, (_, i) => i);
+        if (sort.col < 0) return;
+        const c = sort.col;
+        const dir = sort.dir;
+        if (numeric[c]) {
+          const keys = data.map((r) => (CSV.isNumber(r[c] ?? "") ? Number(r[c]) : NaN));
+          order.sort((a, b) => {
+            const x = keys[a];
+            const y = keys[b];
+            if (Number.isNaN(x) || Number.isNaN(y)) return Number.isNaN(x) - Number.isNaN(y);
+            return (x - y) * dir;
+          });
+        } else {
+          order.sort((a, b) => {
+            const x = data[a][c] ?? "";
+            const y = data[b][c] ?? "";
+            if (!x || !y) return (x === "") - (y === "");
+            return collator.compare(x, y) * dir;
+          });
+        }
+      }
+
+      function refilter() {
+        needle = query.value.toLowerCase();
+        if (!needle) {
+          vis = order;
+          return;
+        }
+        if (!hay) hay = data.map((r) => r.join("\u0001").toLowerCase());
+        vis = order.filter((i) => hay[i].includes(needle));
+      }
+
+      function refresh(resetScroll) {
+        reorder();
+        refilter();
+        drawHead();
+        $("body").style.height = `${vis.length * ROW_H}px`;
+        if (resetScroll) grid.scrollTop = 0;
+        drawRows();
+        status();
+      }
+
+      // ---- Drawing ----
+
+      function width() {
+        return idxWidth + widths.reduce((a, b) => a + b, 0);
+      }
+
+      function drawHead() {
+        const inner = $("inner") || el("div");
+        inner.id = "inner";
+        if (!$("body")) {
+          const body = el("div");
+          body.id = "body";
+          inner.append(el("div", "head"), body);
+          grid.replaceChildren(inner);
+        }
+        inner.style.width = `${width()}px`;
+        const head = inner.querySelector(".head");
+        head.replaceChildren();
+        const corner = el("div", "cell idx", "#");
+        corner.style.width = `${idxWidth}px`;
+        head.append(corner);
+        names.forEach((name, c) => {
+          const h = el("div", `cell${numeric[c] ? " num" : ""}`, name);
+          h.style.width = `${widths[c]}px`;
+          h.title = `${name}: click to sort`;
+          if (sort.col === c) h.append(el("span", "arrow", sort.dir === 1 ? "▲" : "▼"));
+          h.onclick = () => {
+            // Ascending, then descending, then the file's own order.
+            if (sort.col !== c) sort = { col: c, dir: 1 };
+            else if (sort.dir === 1) sort = { col: c, dir: -1 };
+            else sort = { col: -1, dir: 1 };
+            refresh(false);
+          };
+          head.append(h);
+        });
+      }
+
+      /** `str` into `parent`, the filter text marked. */
+      function marked(parent, str) {
+        if (!needle) {
+          parent.textContent = str;
+          return;
+        }
+        const lower = str.toLowerCase();
+        let from = 0;
+        let at = lower.indexOf(needle);
+        if (at === -1) {
+          parent.textContent = str;
+          return;
+        }
+        while (at !== -1) {
+          if (at > from) parent.append(str.slice(from, at));
+          parent.append(el("mark", null, str.slice(at, at + needle.length)));
+          from = at + needle.length;
+          at = lower.indexOf(needle, from);
+        }
+        parent.append(str.slice(from));
+      }
+
+      /** Only the rows in view (and a few beyond) are elements. */
+      function drawRows() {
+        const body = $("body");
+        if (!body) return;
+        const headH = 29;
+        const top = Math.max(0, grid.scrollTop - headH);
+        const first = Math.max(0, Math.floor(top / ROW_H) - 8);
+        const last = Math.min(vis.length, Math.ceil((top + grid.clientHeight) / ROW_H) + 8);
+        const frag = document.createDocumentFragment();
+        for (let k = first; k < last; k++) {
+          const i = vis[k];
+          const r = data[i];
+          const row = el("div", "row");
+          row.style.top = `${k * ROW_H}px`;
+          row.style.width = `${width()}px`;
+          const idx = el("div", "cell idx", String(i + (hasHeader ? 2 : 1)));
+          idx.style.width = `${idxWidth}px`;
+          row.append(idx);
+          for (let c = 0; c < cols; c++) {
+            const v = r[c] ?? "";
+            const cell = el("div", `cell${numeric[c] ? " num" : ""}`);
+            cell.style.width = `${widths[c]}px`;
+            if (v.length > 12) cell.title = v.length > 400 ? `${v.slice(0, 400)}…` : v;
+            marked(cell, v);
+            if (sel && sel.i === i && sel.c === c) cell.classList.add("sel");
+            cell.onclick = () => {
+              sel = { i, c };
+              $("ccell").disabled = $("crow").disabled = false;
+              drawRows();
+            };
+            row.append(cell);
+          }
+          frag.append(row);
+        }
+        body.replaceChildren(frag);
+      }
+
+      function status() {
+        const total = data.length;
+        const base = `${fmtNum(total)} row${total === 1 ? "" : "s"} × ${cols} column${cols === 1 ? "" : "s"}`;
+        $("count").textContent = needle
+          ? `${fmtNum(vis.length)} of ${fmtNum(total)} rows`
+          : `${base} · ${fmtSize(size)}`;
+        if (!total && !cols) message("This file is empty.");
+      }
+
+      grid.addEventListener("scroll", drawRows, { passive: true });
+      window.addEventListener("resize", drawRows);
+
+      // ---- Controls ----
+
+      let timer = 0;
+      query.addEventListener("input", () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => refresh(true), 200);
+      });
+      query.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && query.value) {
+          e.preventDefault();
+          e.stopPropagation();
+          query.value = "";
+          refresh(true);
+        }
+      });
+      $("hdr").onclick = () => {
+        hasHeader = !hasHeader;
+        setup();
+      };
+      $("delim").onchange = (e) => {
+        delim = e.currentTarget.value || null;
+        hasHeader = null;
+        setup();
+      };
+      document.addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+          e.preventDefault();
+          query.focus();
+          query.select();
+        }
+      });
+
+      // ---- Copy ----
+
+      let flash = 0;
+      async function copy(str, what) {
+        let ok = false;
+        try {
+          await navigator.clipboard.writeText(str);
+          ok = true;
+        } catch {
+          // A sandboxed page may not be given the clipboard; the old way works on a click.
+          const box = el("textarea");
+          box.value = str;
+          box.style.position = "fixed";
+          box.style.opacity = "0";
+          document.body.append(box);
+          box.select();
+          try {
+            ok = document.execCommand("copy");
+          } catch {
+            ok = false;
+          }
+          box.remove();
+        }
+        $("count").textContent = ok ? `Copied ${what}` : "Could not copy";
+        clearTimeout(flash);
+        flash = setTimeout(status, 1500);
+      }
+      $("ccell").onclick = () => sel && copy(data[sel.i][sel.c] ?? "", "cell");
+      $("crow").onclick = () =>
+        sel && copy(Array.from({ length: cols }, (_, c) => data[sel.i][c] ?? "").join("\t"), "row");
+
+      parent.postMessage({ folio: 1, event: "ready" }, "*");
+    </script>
+  </body>
+</html>
