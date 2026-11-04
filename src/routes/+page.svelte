@@ -12,6 +12,8 @@
     findConflicts,
     tagCreate,
     tagDelete,
+    tagRename,
+    tagRecolor,
     tagList,
     clipboardMirror,
     onScanDone,
@@ -85,6 +87,7 @@
     BIN_PATH,
     CLEANUP_PATH,
     PLUGINS_PATH,
+    TAGS_PATH,
     SETTINGS_PATH,
     STORAGE_PATH,
     placeOf,
@@ -98,6 +101,7 @@
   import ConflictDialog from "$lib/components/ConflictDialog.svelte";
   import ContextMenu, { type MenuItem } from "$lib/components/ContextMenu.svelte";
   import QuickLook from "$lib/components/QuickLook.svelte";
+  import TagsView from "$lib/components/TagsView.svelte";
   import PluginsView from "$lib/components/PluginsView.svelte";
   import AboutDialog from "$lib/components/AboutDialog.svelte";
   import ShortcutsDialog from "$lib/components/ShortcutsDialog.svelte";
@@ -634,6 +638,8 @@
   /** Shows `target` in the active tab. Resolves to false on error, null if a newer navigation took over. */
   async function load(target: string, quiet = false): Promise<boolean | null> {
     const gen = ++navGen;
+    // Counts on the Tags screen are as of when it is shown.
+    if (target === TAGS_PATH) loadTagDefs();
     stopSearch();
     // Looking at the same folder again (leaving a search) keeps the bar.
     if (target !== path) searchOpen = false;
@@ -1882,7 +1888,7 @@
       ),
     );
     if (!done) return;
-    await refresh();
+    await Promise.all([refresh(), loadTagDefs()]);
     const name = tagDefs.find((t) => t.id === id)?.name ?? "tag";
     const count = picked.length - done.skipped;
     const left = done.skipped ? ` (${plural(done.skipped, "item")} can't be tagged)` : "";
@@ -1931,6 +1937,17 @@
     } catch (e) {
       return String(e);
     }
+  }
+
+  /** Runs a change to a tag from the Tags screen. Resolves to why it failed, or null. */
+  async function changeTag(change: () => Promise<unknown>): Promise<string | null> {
+    try {
+      await change();
+    } catch (e) {
+      return String(e);
+    }
+    await loadTagDefs();
+    return null;
   }
 
   async function removeTag(id: number) {
@@ -2039,7 +2056,11 @@
   }
 
   /** Shows every item with `tag`, from any folder, in the list. */
-  const openTagView = (tag: Tag) => openResultView({ name: tag.name, tag });
+  async function openTagView(tag: Tag) {
+    // From a screen such as Tags, the items replace it in this tab.
+    if (place) await load(lastFolder || startPath(home));
+    await openResultView({ name: tag.name, tag });
+  }
 
   /** Shows what a smart folder matches now; it stays current while it is open. */
   const openSmart = (smart: SmartFolder) => openResultView({ name: smart.name, smart });
@@ -2304,6 +2325,7 @@
       ...action("Recycle Bin", "", () => navigate(BIN_PATH)),
       ...action("Storage breakdown", "", () => showScreen(STORAGE_PATH)),
       ...action("Plugins", "", () => showScreen(PLUGINS_PATH)),
+      ...action("All tags", "", () => showScreen(TAGS_PATH)),
       ...action("Clean up large and old files", "", () => {
         openCleanup("large");
       }),
@@ -2935,6 +2957,7 @@
     tags={tagDefs}
     activeTag={resultView && "tag" in resultView ? resultView.tag.id : null}
     ontag={openTagView}
+    onalltags={() => showScreen(TAGS_PATH)}
     {smartFolders}
     activeSmart={resultView && "smart" in resultView ? resultView.smart.id : null}
     onsmart={openSmart}
@@ -3069,6 +3092,15 @@
             onshortcuts={() => (shortcutsOpen = true)}
             onhelp={() => (helpOpen = true)}
             onplugins={() => showScreen(PLUGINS_PATH)}
+          />
+        {:else if place === "tags"}
+          <TagsView
+            tags={tagDefs}
+            onopen={openTagView}
+            oncreate={createTag}
+            onrename={(id, name) => changeTag(() => tagRename(id, name))}
+            onrecolor={(id, color) => changeTag(() => tagRecolor(id, color))}
+            ondelete={(id) => changeTag(() => tagDelete(id))}
           />
         {:else if place === "plugins"}
           <PluginsView

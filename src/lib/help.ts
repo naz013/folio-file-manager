@@ -47,7 +47,7 @@ export const TOPICS: readonly HelpTopic[] = [
     title: "Tags",
     body: [
       "Select files, right-click and choose Tags to colour-label them, or press 1 to 7 to toggle a colour tag. Tags are kept by Folio and never change your files.",
-      "Pick a tag in the sidebar to see everything with it, from any folder. A smart folder saves a search, such as a tag and a date, and works out its answer afresh each time you open it.",
+      "Pick a tag in the sidebar to see everything with it, from any folder. All tags, under the list, opens a screen to make, rename, recolour and delete your own tags. A smart folder saves a search, such as a tag and a date, and works out its answer afresh each time you open it.",
     ],
   },
   {

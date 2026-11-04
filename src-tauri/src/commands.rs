@@ -957,6 +957,16 @@ pub fn tag_delete(tags: tauri::State<'_, Tags>, id: i64) -> CmdResult<()> {
     tags.delete(id)
 }
 
+#[tauri::command]
+pub fn tag_rename(tags: tauri::State<'_, Tags>, id: i64, name: String) -> CmdResult<()> {
+    tags.rename(id, &name)
+}
+
+#[tauri::command]
+pub fn tag_recolor(tags: tauri::State<'_, Tags>, id: i64, color: Option<String>) -> CmdResult<()> {
+    tags.recolor(id, color.as_deref())
+}
+
 /// Gives the tag to `paths`, or takes it from them if they all have it.
 #[tauri::command(async)]
 pub fn tag_toggle(

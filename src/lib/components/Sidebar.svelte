@@ -3,6 +3,7 @@
   import Icon, { type IconName } from "./Icon.svelte";
   import {
     BIN_PATH,
+    TAGS_PATH,
     joinPath,
     listDrives,
     type Drive,
@@ -52,6 +53,7 @@
     tags,
     activeTag,
     ontag,
+    onalltags,
     smartFolders,
     activeSmart,
     onsmart,
@@ -82,6 +84,8 @@
     activeTag: number | null;
     /** Show every item with this tag. */
     ontag: (tag: Tag) => void;
+    /** Open the Tags screen. */
+    onalltags: () => void;
     smartFolders: SmartFolder[];
     /** The smart folder the list shows, if any. */
     activeSmart: number | null;
@@ -271,6 +275,15 @@
             compact
           />
         {/each}
+        <button
+          class="item"
+          class:selected={current === TAGS_PATH}
+          aria-current={current === TAGS_PATH ? "page" : undefined}
+          onclick={onalltags}
+        >
+          <Icon name="tag" size={14} />
+          <span>All tags</span>
+        </button>
       </div>
     {/if}
 

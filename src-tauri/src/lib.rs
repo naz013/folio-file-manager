@@ -290,6 +290,8 @@ pub fn run() {
             commands::tag_list,
             commands::tag_create,
             commands::tag_delete,
+            commands::tag_rename,
+            commands::tag_recolor,
             commands::tag_toggle,
             commands::tags_export,
             commands::tags_import,

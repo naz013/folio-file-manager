@@ -33,6 +33,8 @@ pub struct Tag {
     pub name: String,
     /// One of the seven colour names, or `None` for a plain named tag.
     pub color: Option<String>,
+    /// How many items carry the tag.
+    pub items: i64,
 }
 
 /// What `toggle` did.
@@ -133,12 +135,17 @@ fn check_tag<'a>(
     if name.chars().count() > MAX_NAME {
         return Err(format!("A tag name can have at most {MAX_NAME} characters"));
     }
-    if let Some(c) = color
-        && !COLORS.iter().any(|(_, known)| *known == c)
-    {
-        return Err(format!("\"{c}\" is not one of the tag colours"));
-    }
+    check_color(color)?;
     Ok((name, color))
+}
+
+fn check_color(color: Option<&str>) -> Result<(), String> {
+    match color {
+        Some(c) if !COLORS.iter().any(|(_, known)| *known == c) => {
+            Err(format!("\"{c}\" is not one of the tag colours"))
+        }
+        _ => Ok(()),
+    }
 }
 
 /// `path` with the exporting computer's home folder `from` swapped for this one's `to`, if
@@ -242,9 +249,11 @@ impl Tags {
     pub fn list(&self) -> Vec<Tag> {
         let conn = self.conn();
         let Ok(mut stmt) = conn.prepare(
-            "SELECT id, name, color FROM tags
-             ORDER BY CASE WHEN id <= 7 THEN 0 ELSE 1 END,
-                      CASE WHEN id <= 7 THEN id ELSE 0 END, name",
+            "SELECT t.id, t.name, t.color,
+                    (SELECT COUNT(*) FROM file_tags f WHERE f.tag_id = t.id)
+             FROM tags t
+             ORDER BY CASE WHEN t.id <= 7 THEN 0 ELSE 1 END,
+                      CASE WHEN t.id <= 7 THEN t.id ELSE 0 END, t.name",
         ) else {
             return Vec::new();
         };
@@ -253,6 +262,7 @@ impl Tags {
                 id: r.get(0)?,
                 name: r.get(1)?,
                 color: r.get(2)?,
+                items: r.get(3)?,
             })
         })
         .map(|rows| rows.filter_map(Result::ok).collect())
@@ -273,12 +283,50 @@ impl Tags {
                 id: conn.last_insert_rowid(),
                 name: name.to_owned(),
                 color: color.map(str::to_owned),
+                items: 0,
             }),
             Err(rusqlite::Error::SqliteFailure(e, _))
                 if e.code == rusqlite::ErrorCode::ConstraintViolation =>
             {
                 Err(format!("There is already a tag named \"{name}\""))
             }
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    /// Gives a named tag another name. The colour tags keep theirs.
+    pub fn rename(&self, id: i64, name: &str) -> Result<(), String> {
+        if id <= COLOR_TAGS {
+            return Err("The colour tags can't be renamed".into());
+        }
+        let (name, _) = check_tag(name, None)?;
+        let conn = self.conn();
+        match conn.execute("UPDATE tags SET name = ?2 WHERE id = ?1", params![id, name]) {
+            Ok(0) => Err("That tag no longer exists".into()),
+            Ok(_) => Ok(()),
+            Err(rusqlite::Error::SqliteFailure(e, _))
+                if e.code == rusqlite::ErrorCode::ConstraintViolation =>
+            {
+                Err(format!("There is already a tag named \"{name}\""))
+            }
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    /// Changes the colour of a named tag, or takes it away with `None`. A colour tag is its
+    /// colour, so it stays as it is.
+    pub fn recolor(&self, id: i64, color: Option<&str>) -> Result<(), String> {
+        if id <= COLOR_TAGS {
+            return Err("The colour tags can't change colour".into());
+        }
+        check_color(color)?;
+        let conn = self.conn();
+        match conn.execute(
+            "UPDATE tags SET color = ?2 WHERE id = ?1",
+            params![id, color],
+        ) {
+            Ok(0) => Err("That tag no longer exists".into()),
+            Ok(_) => Ok(()),
             Err(e) => Err(e.to_string()),
         }
     }
@@ -711,6 +759,41 @@ mod tests {
         assert!(t.delete(3).is_err(), "colour tags stay");
         t.delete(work.id).unwrap();
         assert_eq!(t.list().len(), 7);
+    }
+
+    #[test]
+    fn named_tags_are_renamed_and_recoloured_and_counted() {
+        let t = index();
+        let dir = tempfile::tempdir().unwrap();
+        let a = file(&dir.path().join("a.txt"));
+        let b = file(&dir.path().join("b.txt"));
+        let work = t.create("Work", None).unwrap();
+        let home = t.create("Home", Some("blue")).unwrap();
+        t.toggle(&[a, b], work.id).unwrap();
+
+        t.rename(work.id, "  Job ").unwrap();
+        assert!(t.rename(work.id, "home").is_err(), "taken, ignoring case");
+        assert!(t.rename(work.id, "  ").is_err());
+        assert!(t.rename(3, "Mine").is_err(), "colour tags keep their names");
+        assert!(t.rename(9999, "Ghost").is_err());
+        t.rename(home.id, "HOME").unwrap();
+
+        t.recolor(work.id, Some("green")).unwrap();
+        t.recolor(home.id, None).unwrap();
+        assert!(t.recolor(work.id, Some("pink")).is_err());
+        assert!(
+            t.recolor(3, Some("red")).is_err(),
+            "a colour tag is its colour"
+        );
+
+        let list = t.list();
+        let job = list.iter().find(|x| x.id == work.id).unwrap();
+        assert_eq!(
+            (job.name.as_str(), job.color.as_deref(), job.items),
+            ("Job", Some("green"), 2)
+        );
+        let home = list.iter().find(|x| x.id == home.id).unwrap();
+        assert_eq!((home.color.as_deref(), home.items), (None, 0));
     }
 
     /// The tags of the items directly in `dir`, as (name, tag names): ids differ between indexes.

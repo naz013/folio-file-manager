@@ -147,8 +147,9 @@ export const STORAGE_PATH = "folio:storage";
 export const CLEANUP_PATH = "folio:cleanup";
 export const SETTINGS_PATH = "folio:settings";
 export const PLUGINS_PATH = "folio:plugins";
+export const TAGS_PATH = "folio:tags";
 
-export type Place = "bin" | "storage" | "cleanup" | "settings" | "plugins";
+export type Place = "bin" | "storage" | "cleanup" | "settings" | "plugins" | "tags";
 
 const PLACES: Record<string, { place: Place; title: string }> = {
   [BIN_PATH]: { place: "bin", title: "Recycle Bin" },
@@ -156,6 +157,7 @@ const PLACES: Record<string, { place: Place; title: string }> = {
   [CLEANUP_PATH]: { place: "cleanup", title: "Cleanup" },
   [SETTINGS_PATH]: { place: "settings", title: "Settings" },
   [PLUGINS_PATH]: { place: "plugins", title: "Plugins" },
+  [TAGS_PATH]: { place: "tags", title: "Tags" },
 };
 
 /** The screen a tab's path stands for, or null for a real folder. */
@@ -376,11 +378,16 @@ export interface Tag {
   name: string;
   /** One of the seven colour names, or null for a plain named tag. */
   color: string | null;
+  /** How many items carry the tag. */
+  items: number;
 }
 export const tagList = () => invoke<Tag[]>("tag_list");
 export const tagCreate = (name: string, color: string | null) =>
   invoke<Tag>("tag_create", { name, color });
 export const tagDelete = (id: number) => invoke<void>("tag_delete", { id });
+export const tagRename = (id: number, name: string) => invoke<void>("tag_rename", { id, name });
+export const tagRecolor = (id: number, color: string | null) =>
+  invoke<void>("tag_recolor", { id, color });
 /**
  * Tags `paths` with `tag`, or untags them if they all have it. `skipped` counts items that
  * couldn't be tagged.
