@@ -1,6 +1,6 @@
 {
   "name": "folio",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Folio — a lightweight, beautiful file manager",
   "type": "module",
   "scripts": {
