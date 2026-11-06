@@ -131,7 +131,11 @@ pub fn install(app: &tauri::App) -> tauri::Result<()> {
         if !ours {
             return;
         }
-        if let Some(window) = app.get_focused_window() {
+        let focused = app
+            .webview_windows()
+            .into_values()
+            .find(|w| w.is_focused().unwrap_or(false));
+        if let Some(window) = focused {
             let _ = app.emit_to(window.label(), "menu-action", id);
         }
     });
