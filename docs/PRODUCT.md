@@ -1,6 +1,6 @@
 # Folio — Product Definition
 
-> Working name. A beautiful, lightweight, cross-platform file manager.
+> A beautiful, lightweight, cross-platform file manager.
 > Windows first, then macOS and Linux. Finder-inspired, but calmer and more capable.
 
 ## Vision

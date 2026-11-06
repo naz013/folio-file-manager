@@ -4,7 +4,7 @@ A beautiful, lightweight file manager. Windows first, then macOS and Linux.
 Tabs, color tags, drag & drop, a space breakdown and safe cleanup — in a calm,
 Finder-inspired UI.
 
-> Status: **0.1 Skeleton** in progress. Folio is a working name.
+> Status: **0.1 Skeleton** in progress.
 
 ## Documentation
 

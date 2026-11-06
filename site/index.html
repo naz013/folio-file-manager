@@ -6,7 +6,7 @@
     <title>Folio — a calm file manager</title>
     <meta
       name="description"
-      content="Folio is a lightweight file manager with tabs, color tags, drag and drop, a space breakdown and safe cleanup. Windows first."
+      content="Folio is a lightweight file manager for Windows, macOS and Linux, with tabs, color tags, drag and drop, a space breakdown and safe cleanup."
     />
     <link rel="icon" href="favicon.png" />
     <link rel="stylesheet" href="tokens.css" />
@@ -25,8 +25,9 @@
       <section class="wrap hero">
         <h1>A calm place for your files.</h1>
         <p class="lead">
-          Folio is a lightweight, Finder-inspired file manager. Tabs, color tags, drag and drop, a
-          space breakdown and cleanup that always goes through the Recycle Bin.
+          Folio is a lightweight, Finder-inspired file manager for Windows, macOS and Linux. Tabs,
+          color tags, drag and drop, a space breakdown and cleanup that always goes through the
+          trash.
         </p>
         <div class="actions">
           <a
@@ -34,10 +35,34 @@
             href="https://github.com/naz013/folio-file-manager/releases/latest"
             id="download"
           >
-            Download for Windows
+            Download Folio
           </a>
-          <span class="note">Windows installer</span>
+          <span class="note" id="download-note">Windows, macOS and Linux</span>
         </div>
+      </section>
+
+      <section class="wrap downloads" aria-labelledby="downloads">
+        <h2 id="downloads">Download</h2>
+        <ul>
+          <li data-os="windows">
+            <h3>Windows</h3>
+            <p>Installer (.exe), with automatic updates.</p>
+          </li>
+          <li data-os="macos">
+            <h3>macOS</h3>
+            <p>One disk image (.dmg) for Apple silicon and Intel.</p>
+          </li>
+          <li data-os="linux">
+            <h3>Linux</h3>
+            <p>AppImage, .deb and .rpm packages.</p>
+          </li>
+        </ul>
+        <p class="note">
+          Pick your file from the
+          <a class="link" href="https://github.com/naz013/folio-file-manager/releases/latest"
+            >latest release</a
+          >. Folio updates itself after that.
+        </p>
       </section>
 
       <section class="wrap features" aria-labelledby="features">
@@ -55,7 +80,9 @@
           </li>
           <li>
             <h3>Safe by design</h3>
-            <p>Deletes go to the Recycle Bin. Cleanup never removes anything permanently.</p>
+            <p>
+              Deletes go to the Recycle Bin or Trash. Cleanup never removes anything permanently.
+            </p>
           </li>
           <li>
             <h3>See where space goes</h3>
@@ -66,9 +93,9 @@
             <p>Follows your system theme, with a design that stays out of the way.</p>
           </li>
           <li>
-            <h3>More coming</h3>
+            <h3>On every desktop</h3>
             <p>
-              macOS and Linux follow Windows. See the
+              The same app on Windows, macOS and Linux. See what is next on the
               <a
                 class="link"
                 href="https://github.com/naz013/folio-file-manager/blob/main/docs/ROADMAP.md"
@@ -81,8 +108,25 @@
     </main>
 
     <footer class="wrap foot">
-      <span>Folio is a working name.</span>
+      <span>Folio is free software under the AGPL-3.0.</span>
       <a class="link" href="https://github.com/naz013/folio-file-manager/releases">All releases</a>
     </footer>
+    <script>
+      // Point the main button at the visitor's system. Without JavaScript it stays generic.
+      const ua = navigator.userAgent;
+      const os = /Windows/i.test(ua)
+        ? "windows"
+        : /Mac/i.test(ua) && !/iPhone|iPad/i.test(ua)
+          ? "macos"
+          : /Linux/i.test(ua) && !/Android/i.test(ua)
+            ? "linux"
+            : null;
+      if (os) {
+        const names = { windows: "Windows", macos: "macOS", linux: "Linux" };
+        document.getElementById("download").textContent = "Download for " + names[os];
+        document.getElementById("download-note").textContent = "Also for the other systems below";
+        document.querySelector('[data-os="' + os + '"]').classList.add("current");
+      }
+    </script>
   </body>
 </html>
