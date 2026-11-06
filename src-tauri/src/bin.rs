@@ -4,6 +4,9 @@
 
 use serde::{Deserialize, Serialize};
 
+/// How many items are deleted between two progress reports.
+const PURGE_BATCH: usize = 20;
+
 /// One item in the bin.
 #[derive(Serialize, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -143,9 +146,22 @@ mod system {
         ))
     }
 
-    /// Deletes the items for good.
-    pub fn purge(refs: &[BinRef]) -> Result<(), String> {
-        os_limited::purge_all(pick(refs)?).map_err(|e| e.to_string())
+    /// Deletes the items for good, a few at a time, saying how many are gone after each
+    /// batch. Stops at the first failure; what was already deleted stays deleted.
+    pub fn purge(refs: &[BinRef], progress: &mut dyn FnMut(usize)) -> Result<(), String> {
+        let items = pick(refs)?;
+        let mut done = 0;
+        for batch in items.chunks(super::PURGE_BATCH) {
+            os_limited::purge_all(batch.to_vec()).map_err(|e| {
+                format!(
+                    "{e}. {done} of {} items were deleted before this.",
+                    refs.len()
+                )
+            })?;
+            done += batch.len();
+            progress(done);
+        }
+        Ok(())
     }
 }
 
@@ -175,7 +191,7 @@ mod system {
         Err(NO.into())
     }
 
-    pub fn purge(_refs: &[BinRef]) -> Result<(), String> {
+    pub fn purge(_refs: &[BinRef], _progress: &mut dyn FnMut(usize)) -> Result<(), String> {
         Err(NO.into())
     }
 }
@@ -196,7 +212,7 @@ mod tests {
             original: file.to_string_lossy().into_owned(),
             deleted: 0,
         };
-        assert!(purge(&[forged]).is_err());
+        assert!(purge(&[forged], &mut |_| {}).is_err());
         assert!(file.exists());
     }
 
@@ -224,6 +240,6 @@ mod tests {
         assert!(restore(std::slice::from_ref(&r)).is_err());
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "mine");
         // Tidy up: this one item goes for good.
-        purge(&[r]).unwrap();
+        purge(&[r], &mut |_| {}).unwrap();
     }
 }

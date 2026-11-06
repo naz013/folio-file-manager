@@ -1260,8 +1260,16 @@ pub async fn bin_restore(items: Vec<crate::bin::BinRef>) -> CmdResult<()> {
 
 /// Deletes items from the Recycle Bin for good. Only the bin view calls this, after asking.
 #[tauri::command]
-pub async fn bin_purge(items: Vec<crate::bin::BinRef>) -> CmdResult<()> {
-    blocking(move || crate::bin::purge(&items)).await
+pub async fn bin_purge(
+    items: Vec<crate::bin::BinRef>,
+    progress: tauri::ipc::Channel<usize>,
+) -> CmdResult<()> {
+    blocking(move || {
+        crate::bin::purge(&items, &mut |done| {
+            let _ = progress.send(done);
+        })
+    })
+    .await
 }
 
 // ---- Disk scanner ----

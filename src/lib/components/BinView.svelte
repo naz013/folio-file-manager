@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { binName } from "$lib/shortcuts";
-  import { binList, binPurge, binRestore, binSizes, type BinItem, type BinSize } from "$lib/api/fs";
+  import { binList, binRestore, binSizes, type BinItem, type BinSize } from "$lib/api/fs";
+  import { purgeWithProgress, purging } from "$lib/binPurge.svelte";
   import { formatDate, formatSize } from "$lib/format";
   import EmptyState from "./EmptyState.svelte";
 
@@ -23,7 +24,9 @@
   let chosen = $state<string[]>([]);
   /** What is waiting for a confirmation: deleting the chosen items, or everything. */
   let asking = $state<"chosen" | "all" | null>(null);
-  let busy = $state(false);
+  let working = $state(false);
+  /** Busy with an action here, or a permanent delete is still running (even from before). */
+  const busy = $derived(working || purging.active);
 
   const parentOf = (path: string) => path.replace(/[\\/][^\\/]*$/, "");
   /** The items the pending confirmation is about, as they were listed. */
@@ -54,7 +57,7 @@
   }
 
   async function act(run: () => Promise<void>) {
-    busy = true;
+    working = true;
     error = "";
     try {
       await run();
@@ -62,7 +65,7 @@
       error = String(e);
     }
     asking = null;
-    busy = false;
+    working = false;
     await load();
   }
 
@@ -72,7 +75,14 @@
       onrestored();
     });
 
-  const purge = () => act(() => binPurge(refs(asked)));
+  const purge = () => act(() => purgeWithProgress(refs(asked)));
+
+  // A delete that finished while this view was away: show what is left.
+  let wasPurging = purging.active;
+  $effect(() => {
+    if (wasPurging && !purging.active) load();
+    wasPurging = purging.active;
+  });
 
   const sizeOf = (i: BinItem) => {
     const s = sizes[i.id];
@@ -122,6 +132,15 @@
       </p>
       <button onclick={() => (asking = null)}>Cancel</button>
       <button class="danger" disabled={busy} onclick={purge}>Delete permanently</button>
+    </div>
+  {/if}
+
+  {#if purging.active}
+    <div class="progress" role="status">
+      <p>
+        Deleting permanently: {purging.done} of {purging.total}. Keep Folio open until this is done.
+      </p>
+      <progress max={purging.total} value={purging.done}></progress>
     </div>
   {/if}
 
@@ -231,6 +250,22 @@
   .confirm p {
     flex: 1;
     margin: 0;
+  }
+
+  .progress {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+  }
+
+  .progress p {
+    margin: 0;
+    color: var(--text-secondary);
+  }
+
+  .progress progress {
+    width: 100%;
+    accent-color: var(--accent-default);
   }
 
   .error {

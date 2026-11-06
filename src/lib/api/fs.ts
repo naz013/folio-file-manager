@@ -232,7 +232,11 @@ export const binSizes = () => invoke<BinSize[]>("bin_sizes");
 export type BinRef = Pick<BinItem, "id" | "original" | "deleted">;
 export const binRestore = (items: BinRef[]) => invoke<void>("bin_restore", { items });
 /** Deletes items from the Recycle Bin for good; ask first. */
-export const binPurge = (items: BinRef[]) => invoke<void>("bin_purge", { items });
+export const binPurge = (items: BinRef[], onProgress: (done: number) => void) => {
+  const progress = new Channel<number>();
+  progress.onmessage = onProgress;
+  return invoke<void>("bin_purge", { items, progress });
+};
 
 /** A folder with its size from the scan cache. */
 export interface SizedDir {
