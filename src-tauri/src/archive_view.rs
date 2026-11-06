@@ -564,7 +564,13 @@ mod tests {
         assert_eq!(l.entries[1].path, "doc\u{2039}U+202E\u{203A}fdp.exe");
         // A climbing name is shown as the text it is, and nothing is created.
         assert_eq!(l.entries[0].path, "../../etc/passwd");
-        assert!(!dir.path().join("../../etc/passwd").exists());
+        // (Not `exists()` on the climbing path: on Linux it resolves to the real /etc/passwd.)
+        let left: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(left, [std::ffi::OsString::from("evil.zip")]);
     }
 
     #[test]

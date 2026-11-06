@@ -23,7 +23,8 @@ npm run tauri dev
 
 `main` is protected by the ruleset in [.github/rulesets/main.json](.github/rulesets/main.json):
 no deletion, no force-push, linear history. Everyone except the repository admin changes it
-through a pull request whose `frontend`, `rust-linux` and `rust-windows` checks pass. The admin
+through a pull request that has one approval from a code owner (`.github/CODEOWNERS`) and whose
+`frontend`, `licenses`, `rust-linux`, `rust-windows` and `rust-macos` checks pass. The admin
 may still push to `main` directly (the ruleset's bypass), which is how maintainer work lands:
 commit on the feature branch, rebase onto `main`, fast-forward `main`, push.
 
