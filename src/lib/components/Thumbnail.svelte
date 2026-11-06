@@ -3,6 +3,16 @@
   const SETTLE_MS = 80;
   /** The wait before a failed picture is asked for once more. */
   const RETRY_MS = 400;
+  /** How many loaded pictures are remembered; the webview holds the decoded ones, so it is bounded. */
+  const WARM_MAX = 1500;
+  /** Pictures that loaded, oldest first. A tile scrolled back into view shows one at once. */
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity -- a plain lookup table, nothing renders from it
+  const warm = new Set<string>();
+  const remember = (src: string) => {
+    warm.delete(src);
+    warm.add(src);
+    if (warm.size > WARM_MAX) warm.delete(warm.values().next().value!);
+  };
 </script>
 
 <script lang="ts">
@@ -49,6 +59,12 @@
   let asked = $state<{ path: string; src: string } | null>(null);
   $effect(() => {
     const next = { path, src };
+    // A picture seen before comes from the cache: no need to wait to see if the tile stays.
+    if (warm.has(src)) {
+      asked = next;
+      loadedPath = path;
+      return;
+    }
     const timer = setTimeout(() => (asked = next), SETTLE_MS);
     return () => clearTimeout(timer);
   });
@@ -77,6 +93,7 @@
     onload={() => {
       loadedPath = path;
       good = shown;
+      if (shown) remember(shown);
     }}
     onerror={() => {
       if (retrying === base) {
