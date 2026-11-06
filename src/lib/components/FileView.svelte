@@ -840,7 +840,14 @@
   }
 
   .row.selected {
-    background: var(--accent-default);
+    /* A faint line along the bottom edge keeps neighbouring selected rows apart. */
+    background:
+      linear-gradient(
+        to top,
+        color-mix(in srgb, var(--text-on-accent) 30%, transparent) 1px,
+        transparent 1px
+      ),
+      var(--accent-default);
     color: var(--text-on-accent);
   }
 
