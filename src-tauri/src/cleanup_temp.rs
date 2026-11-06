@@ -502,17 +502,17 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "macOS moves the creation date back when the change date is set to the past"
+    )]
     fn a_file_must_have_been_left_alone_for_its_places_minimum() {
         let f = fixture(Os::Windows);
         let local = f.env.local_app_data.clone().unwrap();
         file(&f.temp.join("a.tmp"), 30, 10);
         file(&local.join("CrashDumps").join("x.dmp"), 30, 10);
         let at = |days: i64| temp_files(&f.env, now() + days * DAY, 100).files.len();
-        // Not on macOS, where giving a file an old change date also moves its creation
-        // date back, so the test can't make a file that is new but looks old.
-        if !cfg!(target_os = "macos") {
-            assert_eq!(at(0), 0, "made moments ago");
-        }
+        assert_eq!(at(0), 0, "made moments ago");
         assert_eq!(at(3), 0, "under a week");
         assert_eq!(
             at(8),
