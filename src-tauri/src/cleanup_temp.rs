@@ -508,7 +508,11 @@ mod tests {
         file(&f.temp.join("a.tmp"), 30, 10);
         file(&local.join("CrashDumps").join("x.dmp"), 30, 10);
         let at = |days: i64| temp_files(&f.env, now() + days * DAY, 100).files.len();
-        assert_eq!(at(0), 0, "made moments ago");
+        // Not on macOS, where giving a file an old change date also moves its creation
+        // date back, so the test can't make a file that is new but looks old.
+        if !cfg!(target_os = "macos") {
+            assert_eq!(at(0), 0, "made moments ago");
+        }
         assert_eq!(at(3), 0, "under a week");
         assert_eq!(
             at(8),

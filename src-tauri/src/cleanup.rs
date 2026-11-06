@@ -1446,8 +1446,12 @@ mod tests {
         let found = old_downloads(dir.path(), |_, _| false, arrival, 90, 100, now);
         assert_eq!(found.len(), 1);
         assert!(found[0].path.ends_with("ancient.zip"));
-        // And the real thing: a file made just now has just arrived.
-        assert!(arrived(&dir.path().join("extracted.zip")) >= now - 5);
+        // And the real thing: a file made just now has just arrived. Not on macOS, where
+        // giving a file an old change date also moves its creation date back to match, so
+        // the test can't make "created now, changed long ago".
+        if !cfg!(target_os = "macos") {
+            assert!(arrived(&dir.path().join("extracted.zip")) >= now - 5);
+        }
     }
 
     #[test]
@@ -1796,6 +1800,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "macOS moves the creation date back when the change date is set to the past"
+    )]
     fn a_file_made_just_now_counts_as_touched_now_whatever_its_change_date() {
         let dir = tempfile::tempdir().unwrap();
         let path = put_bytes(dir.path(), "x.bin", 1, 10, 400);

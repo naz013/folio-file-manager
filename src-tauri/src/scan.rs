@@ -845,6 +845,11 @@ impl Scanner {
     /// happened in, after a short pause so a burst is one refresh.
     pub fn watch(&self, root: &Path) -> notify_debouncer_mini::notify::Result<()> {
         let inner = Arc::downgrade(&self.inner);
+        // Some backends (FSEvents on macOS) report paths with links resolved, such as
+        // `/private/var/..` for a root given as `/var/..`. Those are put back under the
+        // root as it was given, which is how the cache knows it.
+        let resolved = std::fs::canonicalize(root).ok().filter(|r| r != root);
+        let given = root.to_path_buf();
         let mut debouncer = new_debouncer(
             Duration::from_millis(500),
             move |res: DebounceEventResult| {
@@ -854,6 +859,12 @@ impl Scanner {
                 let mut dirs: Vec<PathBuf> = events
                     .iter()
                     .filter_map(|e| e.path.parent().map(Path::to_path_buf))
+                    .map(|dir| match &resolved {
+                        Some(r) => dir
+                            .strip_prefix(r)
+                            .map_or(dir.clone(), |rest| given.join(rest)),
+                        None => dir,
+                    })
                     .collect();
                 dirs.sort();
                 dirs.dedup();

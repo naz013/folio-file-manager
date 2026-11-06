@@ -1606,6 +1606,12 @@ fn depth_of(root: &Path) -> usize {
 /// Levels in the deep trees. Building and deleting a tree this deep is slow (the OS
 /// resolves the whole path each time), so the walk runs on a thread with a small stack
 /// instead: a recursive walk would overflow it long before the bottom.
+///
+/// macOS refuses paths over `PATH_MAX` (1024 bytes, against 4096 on Linux), which 1,000
+/// two-byte levels exceed, so it gets a tree that fits.
+#[cfg(target_os = "macos")]
+const DEEP: usize = 400;
+#[cfg(not(target_os = "macos"))]
 const DEEP: usize = 1_000;
 const SMALL_STACK: usize = 128 * 1024;
 
