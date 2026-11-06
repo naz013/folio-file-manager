@@ -61,9 +61,10 @@ pub fn free_space(path: &Path) -> Option<u64> {
         if unsafe { libc::statvfs(c_path.as_ptr(), &raw mut stat) } != 0 {
             return None;
         }
-        #[expect(
+        #[allow(
             clippy::useless_conversion,
-            reason = "the `statvfs` fields are `u64` on 64-bit Linux only"
+            clippy::unnecessary_fallible_conversions,
+            reason = "the `statvfs` field types differ: `u64` on 64-bit Linux, `u32` on macOS"
         )]
         u64::try_from(stat.f_bavail)
             .ok()?

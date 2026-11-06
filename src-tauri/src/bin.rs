@@ -19,6 +19,13 @@ pub struct BinItem {
 
 /// An item as it was listed: all three must still match for it to be acted on.
 #[derive(Deserialize, Debug)]
+#[cfg_attr(
+    target_os = "macos",
+    expect(
+        dead_code,
+        reason = "the macOS stub of the bin does not act on items yet"
+    )
+)]
 pub struct BinRef {
     pub id: String,
     pub original: String,
