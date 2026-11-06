@@ -94,9 +94,9 @@ regenerate them, and the CI `licenses` job runs `npm run licenses:check` on ever
 
 ## Making a release
 
-1. Set the new version in `package.json`, `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`.
+1. Nothing to bump: the **Release** workflow sets the version in `package.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock` and `src-tauri/tauri.conf.json` from the tag (`scripts/set-version.mjs`), on every platform. The version in the repo is only a placeholder, so local builds show it.
 2. Optional: write the release notes as the body of a draft release for the tag first. The app shows them once after an update, so write for users. Without one, GitHub's generated notes are used, and they only list merged pull requests: if there are none, the app shows no notes. Do not edit the draft after pushing the tag; the app carries the text as it was then.
-3. Commit, then tag and push: `git tag v0.5.0 && git push origin main v0.5.0`.
+3. Tag and push: `git tag v0.5.0 && git push origin v0.5.0`.
 4. The **Release** workflow builds the Windows installer, the macOS app (one universal `.dmg`
    for Apple silicon and Intel) and the Linux packages (`.AppImage`, `.deb`, `.rpm`), with
    `latest.json`, into one **draft** release. The Windows installer and the macOS app are
