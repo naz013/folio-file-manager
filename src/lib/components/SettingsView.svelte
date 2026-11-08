@@ -5,6 +5,8 @@
     crashClear,
     crashSet,
     crashState,
+    defaultManagerSet,
+    defaultManagerState,
     listDir,
     openPath,
     tagsExport,
@@ -42,10 +44,37 @@
     onplugins: () => void;
   } = $props();
 
+  const onMac = navigator.userAgent.includes("Mac");
+
+  /** Whether folders open with Folio; null until the system has been asked. */
+  let opensFolders = $state<boolean | null>(null);
+  /** Why the last change was refused, in words. */
+  let opensFoldersError = $state("");
+  let changingOpens = $state(false);
+
+  async function setOpensFolders(on: boolean) {
+    if (changingOpens) return;
+    changingOpens = true;
+    opensFoldersError = "";
+    try {
+      opensFolders = await defaultManagerSet(on);
+    } catch (e) {
+      opensFoldersError = String(e);
+      // The switch shows what the system says, not what was asked.
+      opensFolders = await defaultManagerState().catch(() => opensFolders);
+    } finally {
+      changingOpens = false;
+    }
+  }
+
   let dialog: HTMLElement;
   onMount(() => {
     dialog.focus();
     if (isCustom) custom = settings.startLocation;
+    defaultManagerState().then(
+      (on) => (opensFolders = on),
+      () => (opensFolders = null),
+    );
   });
 
   /** What the last tags export did, in words. */
@@ -287,6 +316,39 @@
           onchange={(e) => updateSettings({ returnAfterDrop: e.currentTarget.checked })}
         />
       </div>
+    </section>
+
+    <section>
+      <h3>Folders</h3>
+
+      <div class="row">
+        <span id="opens-folders-label">Open folders with Folio</span>
+        <input
+          type="checkbox"
+          class="switch"
+          role="switch"
+          aria-labelledby="opens-folders-label"
+          checked={opensFolders === true}
+          disabled={opensFolders === null || changingOpens}
+          onchange={(e) => setOpensFolders(e.currentTarget.checked)}
+        />
+      </div>
+      <p class="note">
+        {#if onWindows}
+          A folder opened from another program, or typed in the Run box, opens in Folio. Explorer's
+          own windows, Win+E and the taskbar still open Explorer.
+        {:else if onMac}
+          A folder another app asks to open goes to Folio. Finder keeps its own windows, and Show in
+          Finder still opens Finder.
+        {:else}
+          Folio is chosen to open folders from other programs and from "Open with".
+        {/if}
+        It is off until you turn it on, only changes your own account, and turning it off puts back what
+        was there.
+      </p>
+      {#if opensFoldersError}
+        <p class="note" role="alert">{opensFoldersError}</p>
+      {/if}
     </section>
 
     {#if onWindows}

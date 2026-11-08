@@ -43,6 +43,9 @@
     "longDescription": "Folio is a fast file manager with tabs, two panes, tags, Quick Look previews and safe cleanup. Deleted files go to the Trash and can be brought back.",
     "copyright": "Folio contributors",
     "license": "AGPL-3.0-only",
+    "windows": {
+      "nsis": { "installerHooks": "./windows/installer-hooks.nsh" }
+    },
     "macOS": {
       "minimumSystemVersion": "11.0",
       "hardenedRuntime": true

@@ -502,6 +502,16 @@ export const renameMany = (plan: RenamePlan[]) => invoke<string[]>("rename_many"
 export const createFile = (parent: string, name: string) =>
   invoke<string>("create_file", { parent, name });
 export const openTerminal = (dir: string) => invoke<void>("open_terminal", { dir });
+
+/** Whether folders open with Folio (the "Open folders with Folio" setting), asked of the system. */
+export const defaultManagerState = () => invoke<boolean>("default_manager_state");
+/** Turns that setting on or off; resolves to what it is afterwards. */
+export const defaultManagerSet = (on: boolean) => invoke<boolean>("default_manager_set", { on });
+/** Folders Folio was started with (given by the system), once. */
+export const launchFolders = () => invoke<string[]>("launch_folders");
+/** Folders another start of Folio, or the system, asked this window to open. */
+export const onOpenFolders = (cb: (folders: string[]) => void): Promise<UnlistenFn> =>
+  listen<string[]>("open-folders", (e) => cb(e.payload));
 export const createFolder = (parent: string, name: string) =>
   invoke<string>("create_folder", { parent, name });
 /** Result of `copy_paths` (`commands::Copied`). */

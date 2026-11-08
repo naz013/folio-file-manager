@@ -95,6 +95,12 @@ Implemented in `platform/windows` with the `windows` crate:
 file icons & thumbnails (`IShellItemImageFactory`), native context menu (`IContextMenu`),
 OLE drag source/target, Recycle Bin. Each has a macOS/Linux counterpart in 1.1.
 
+### Open folders with Folio
+
+Opt-in, off by default (Settings → Folders). No system lets an app replace the shell's file manager, so `default_manager/` only changes where a request to open a folder goes, for the current user and with no admin rights: on Windows an "Open in Folio" verb, made the default, under `HKCU\Software\Classes\Directory` and `\Drive` (Explorer's own windows, Win+E and the taskbar stay Explorer; it refuses if another default verb is there, and the installer's uninstall hook removes it); on Linux a `folio-folders.desktop` entry for `inode/directory` set with `xdg-mime`; on macOS Launch Services' handler for `public.folder` (Finder keeps its windows). The handler it replaced is kept in the app data folder and put back when the setting is turned off, and the system is asked for the state, never a saved flag. On start the running program re-points the entry at itself if it was moved or updated.
+
+For the system to hand Folio a folder, a second start must reach the running app: `tauri-plugin-single-instance` passes the new start's folders to a window as an `open-folders` event (`launch.rs`), where each opens in a tab. The first start keeps its folders until the main window asks for them (`launch_folders`), so none are lost to a window that is still loading. Only existing folders are taken; options and anything else are ignored.
+
 ## Security
 
 - Tauri capabilities restrict the webview to the commands it needs.

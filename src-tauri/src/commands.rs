@@ -811,6 +811,29 @@ pub fn open_terminal(dir: String) -> CmdResult<()> {
     crate::platform::open_terminal(&PathBuf::from(dir))
 }
 
+/// Whether folders open with Folio now (the "Open folders with Folio" setting).
+#[tauri::command(async)]
+pub fn default_manager_state() -> CmdResult<bool> {
+    crate::default_manager::is_default()
+}
+
+/// Turns "Open folders with Folio" on or off, and says what it is afterwards.
+#[tauri::command(async)]
+pub fn default_manager_set(app: tauri::AppHandle, on: bool) -> CmdResult<bool> {
+    let data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Can't find Folio's folder: {e}"))?;
+    crate::default_manager::set_default(on, &data)?;
+    crate::default_manager::is_default()
+}
+
+/// The folders Folio was started with, once; later ones arrive as `open-folders` events.
+#[tauri::command]
+pub fn launch_folders(pending: tauri::State<'_, crate::launch::Pending>) -> Vec<String> {
+    strings(pending.take())
+}
+
 /// Starts copying `sources` into `dest` in the background; returns the job id.
 #[tauri::command(async)]
 pub fn copy_paths(

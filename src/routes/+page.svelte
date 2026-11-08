@@ -50,6 +50,8 @@
     onDirChanged,
     openPath,
     onCloseBlocked,
+    onOpenFolders,
+    launchFolders,
     onMenuAction,
     onQueueUpdate,
     openWindow,
@@ -2861,6 +2863,10 @@
       }
     });
     const unlistenMenu = onMenuAction(runMenuAction);
+    // Folders the system hands to Folio (see Settings): each opens in a tab of its own.
+    const unlistenFolders = onOpenFolders((folders) => {
+      for (const folder of folders) openTab(folder);
+    });
     const unlistenBlocked = onCloseBlocked(() =>
       notify("Operations are still running. Wait for them, or cancel them, before closing.", true),
     );
@@ -2927,6 +2933,10 @@
         : [newTab(startPath(h))];
       await activate(saved?.active ?? 0);
       restored = true;
+      // Only the first window is asked for them; the others are opened from inside the app.
+      if (getCurrentWindow().label === "main") {
+        for (const folder of await launchFolders().catch(() => [])) openTab(folder);
+      }
       // Benchmarks are optional; never let them break startup.
       const perf = await perfConfig().catch(() => null);
       if (perf?.enabled) {
@@ -2944,6 +2954,7 @@
       unlistenScan.then((u) => u());
       unlistenBlocked.then((u) => u());
       unlistenMenu.then((u) => u());
+      unlistenFolders.then((u) => u());
       unlistenDrop.then((u) => u());
       unlistenClose.then((u) => u());
     };

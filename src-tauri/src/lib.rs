@@ -10,9 +10,11 @@ mod cleanup_corpus;
 mod cleanup_temp;
 mod commands;
 mod crash;
+mod default_manager;
 mod fs;
 mod imageinfo;
 mod journal;
+mod launch;
 #[cfg_attr(
     not(windows),
     allow(
@@ -197,8 +199,20 @@ pub fn helper_entry() -> Option<i32> {
 )]
 pub fn run() {
     perf::mark_start();
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // First, so a second start hands its folders over before anything else is set up.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+        launch::deliver(
+            app,
+            launch::folders_from_args(args.into_iter().skip(1).map(Into::into)),
+        );
+    }));
+    builder
         .plugin(tauri_plugin_opener::init())
+        .manage(launch::Pending::new(launch::folders_from_args(
+            std::env::args_os().skip(1),
+        )))
         .manage(watch::DirWatcher::default())
         .manage(preview::Current::default())
         .manage(commands::Measuring::default())
@@ -262,6 +276,8 @@ pub fn run() {
                     }
                 }
             });
+            // Keeps the setting pointing at this program if it was moved or updated.
+            std::thread::spawn(default_manager::refresh);
             Ok(())
         })
         .on_window_event(|window, event| match event {
@@ -332,6 +348,9 @@ pub fn run() {
             commands::create_folder,
             commands::create_file,
             commands::open_terminal,
+            commands::default_manager_state,
+            commands::default_manager_set,
+            commands::launch_folders,
             commands::copy_paths,
             commands::move_paths,
             commands::find_conflicts,
@@ -390,11 +409,18 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app, event| {
-            if let tauri::RunEvent::Exit = event
-                && let Some(dir) = app.try_state::<commands::CrashDir>()
-            {
-                crash::end_session(&dir.0);
+        .run(|app, event| match event {
+            tauri::RunEvent::Exit => {
+                if let Some(dir) = app.try_state::<commands::CrashDir>() {
+                    crash::end_session(&dir.0);
+                }
             }
+            // macOS hands a folder opened with Folio over as an event, not an argument.
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Opened { urls } => {
+                let args = urls.iter().map(|u| std::ffi::OsString::from(u.as_str()));
+                launch::deliver(app, launch::folders_from_args(args));
+            }
+            _ => {}
         });
 }

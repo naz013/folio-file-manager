@@ -154,7 +154,7 @@ suggestions only, always a review step, always to Recycle Bin/Trash, never syste
 | Minimal settings                      | P0       | Start location, hidden files, theme, default view, spring-loading delay, after-drop behavior |
 | Accessibility                         | P1       | Screen-reader labels, focus rings, reduced motion, high contrast                             |
 | Network drives, OneDrive placeholders | P1       | Never hydrate cloud-only files for thumbnails                                                |
-| Set as default file manager           | P2       | Opt-in, off by default (fragile on Windows)                                                  |
+| Open folders with Folio               | P2       | Opt-in, off by default, per user, fully undone when turned off (Settings → Folders)          |
 | macOS & Linux builds                  | 1.1      | See [ROADMAP](ROADMAP.md)                                                                    |
 
 ## Explicitly out of scope
