@@ -1,6 +1,7 @@
 <script lang="ts">
   import FolderIcon from "./FolderIcon.svelte";
   import { binName } from "$lib/shortcuts";
+  import { driveSpace } from "$lib/driveSpace.svelte";
   import Icon, { type IconName } from "./Icon.svelte";
   import {
     BIN_PATH,
@@ -134,8 +135,12 @@
   };
 
   // Free space changes while the app is open, so look again when the window is back in front.
+  // It also looks again whenever an operation that changes free space has finished.
   $effect(() => {
+    void driveSpace.stamp;
     refreshDrives();
+  });
+  $effect(() => {
     window.addEventListener("focus", refreshDrives);
     return () => window.removeEventListener("focus", refreshDrives);
   });

@@ -1,4 +1,5 @@
 import { binPurge, type BinRef } from "$lib/api/fs";
+import { driveSpaceChanged } from "$lib/driveSpace.svelte";
 
 /**
  * The permanent delete in progress, if any. Kept outside the bin view so that leaving the
@@ -16,5 +17,6 @@ export async function purgeWithProgress(items: BinRef[]): Promise<void> {
     await binPurge(items, (done) => (purging.done = done));
   } finally {
     purging.active = false;
+    driveSpaceChanged();
   }
 }

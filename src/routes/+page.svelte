@@ -97,6 +97,7 @@
     placeTitle,
   } from "$lib/api/fs";
   import { dragScroll, scrollableAxes } from "$lib/autoscroll";
+  import { driveSpaceChanged } from "$lib/driveSpace.svelte";
   import { formatSize } from "$lib/format";
   import { editableImage, previewKind } from "$lib/preview";
   import { sizeKey, sortEntries, type SortKey, type SortState } from "$lib/sort";
@@ -1159,7 +1160,10 @@
     if (at < 0) jobs.push(job);
     else jobs[at] = job;
     if (reported.has(job.id)) return;
-    if (job.state === "done" || job.state === "failed" || job.state === "cancelled") sideRefresh++;
+    if (job.state === "done" || job.state === "failed" || job.state === "cancelled") {
+      sideRefresh++;
+      driveSpaceChanged();
+    }
     if (job.state === "done") {
       reported.add(job.id);
       reportDone(job);
