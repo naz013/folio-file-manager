@@ -1,0 +1,257 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Plugin thumbnail prototype (issue 121)</title>
+<body>
+  <h3>Plugin thumbnails: hidden-frame prototype</h3>
+  <p>
+    Serve this folder (<code>python -m http.server</code>) and open the page. It draws CSV
+    thumbnails in sandboxed frames the way a plugin would, checks every answer like Folio would, and
+    prints timings to <code>#out</code> and <code>window.__results</code>.
+  </p>
+  <pre id="out">running…</pre>
+  <div id="shots"></div>
+  <script>
+    const W = 112,
+      H = 144; // 56 x 72 at 2x, the size of Folio's page icon
+    const MAX_PNG = 32 * 1024; // a 112 x 144 flat drawing is a few KB; 32 KB is generous
+    const TIMEOUT_MS = 3000;
+    const results = {};
+    const out = (k, v) => {
+      results[k] = v;
+      document.getElementById("out").textContent = JSON.stringify(results, null, 2);
+    };
+
+    /** A small synthetic CSV for path n. The "disk" is in memory: the read cost is not measured here. */
+    const csvFor = (n) =>
+      `id,name,city,amount\n` +
+      Array.from(
+        { length: 40 },
+        (_, i) => `${i},Person ${n}-${i},City ${i % 7},${(i * 37 + n) % 1000}.50`,
+      ).join("\n");
+
+    // ---- what Folio does with an answer before it shows it ----
+    /** Reads the PNG header; returns an error text, or null when the picture is acceptable. */
+    function checkPng(buf) {
+      if (!(buf instanceof ArrayBuffer)) return "not bytes";
+      if (buf.byteLength > MAX_PNG) return "too big";
+      if (buf.byteLength < 33) return "too small";
+      const b = new Uint8Array(buf),
+        v = new DataView(buf);
+      const sig = [137, 80, 78, 71, 13, 10, 26, 10];
+      if (sig.some((x, i) => b[i] !== x)) return "not a PNG";
+      if (v.getUint32(12) !== 0x49484452) return "no IHDR";
+      if (v.getUint32(16) !== W || v.getUint32(20) !== H) return "wrong size";
+      return null;
+    }
+
+    let pageSource;
+    async function source(variant) {
+      pageSource ??= await (await fetch("http://127.0.0.1:8765/thumb-csv.js")).text();
+      return variant ?? pageSource;
+    }
+    const csp =
+      "default-src 'none'; script-src 'unsafe-inline'; img-src data:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'";
+    const docFor = (js) =>
+      `<!doctype html><meta http-equiv="Content-Security-Policy" content="${csp}"><script>${js}<\/script>`;
+
+    /** One sandboxed frame running the page, and the jobs it has been given. */
+    class Renderer {
+      constructor(js) {
+        this.jobs = new Map();
+        this.ready = new Promise((res) => (this.onready = res));
+        this.frame = document.createElement("iframe");
+        this.frame.sandbox = "allow-scripts";
+        this.frame.style.cssText = "width:0;height:0;border:0;position:absolute";
+        this.frame.srcdoc = docFor(js);
+        this.listen = (e) => {
+          if (e.source !== this.frame.contentWindow) return;
+          const m = e.data;
+          if (!m || m.folio !== 1) return;
+          if (m.event === "ready") return this.onready();
+          if (m.method === "read") {
+            // Folio's bridge answers a read for a path it handed the page.
+            const n = Number(String(m.params.path).split("/").pop());
+            this.frame.contentWindow.postMessage(
+              { folio: 1, id: m.id, result: { text: csvFor(n) } },
+              "*",
+            );
+          } else if (m.event === "thumbnail") {
+            const job = this.jobs.get(m.id);
+            if (!job) return;
+            this.jobs.delete(m.id);
+            clearTimeout(job.timer);
+            const bad = m.error ? "page error" : checkPng(m.png);
+            bad ? job.reject(new Error(bad)) : job.resolve(m.png);
+          }
+        };
+        addEventListener("message", this.listen);
+        document.body.append(this.frame);
+      }
+      render(id, path) {
+        return this.ready.then(
+          () =>
+            new Promise((resolve, reject) => {
+              const timer = setTimeout(() => {
+                this.jobs.delete(id);
+                reject(new Error("timeout"));
+              }, TIMEOUT_MS);
+              this.jobs.set(id, { resolve, reject, timer });
+              this.frame.contentWindow.postMessage(
+                { folio: 1, event: "thumbnail", id, path, width: W, height: H },
+                "*",
+              );
+            }),
+        );
+      }
+      destroy() {
+        removeEventListener("message", this.listen);
+        this.frame.remove();
+      }
+    }
+
+    const stats = (ms) => {
+      const s = [...ms].sort((a, b) => a - b);
+      const q = (p) => +s[Math.min(s.length - 1, Math.floor(s.length * p))].toFixed(2);
+      return { n: s.length, median_ms: q(0.5), p95_ms: q(0.95), max_ms: q(1) };
+    };
+
+    /** Draw `count` files with up to `limit` in flight against one persistent frame. */
+    async function persistent(count, limit) {
+      const r = new Renderer(await source());
+      await r.ready;
+      const times = [],
+        sizes = [];
+      let next = 0,
+        kept;
+      const t0 = performance.now();
+      await Promise.all(
+        Array.from({ length: limit }, async () => {
+          while (next < count) {
+            const n = next++;
+            const t = performance.now();
+            const png = await r.render(n, `/data/${n}`);
+            times.push(performance.now() - t);
+            sizes.push(png.byteLength);
+            kept ??= png;
+          }
+        }),
+      );
+      const total = performance.now() - t0;
+      r.destroy();
+      return {
+        ...stats(times),
+        total_ms: +total.toFixed(0),
+        per_file_ms: +(total / count).toFixed(2),
+        png_bytes_avg: Math.round(sizes.reduce((a, b) => a + b) / sizes.length),
+        kept,
+      };
+    }
+
+    /** A new frame for every file: the simplest isolation, and the most expensive. */
+    async function perFile(count) {
+      const js = await source();
+      const times = [];
+      const t0 = performance.now();
+      for (let n = 0; n < count; n++) {
+        const t = performance.now();
+        const r = new Renderer(js);
+        await r.render(n, `/data/${n}`);
+        times.push(performance.now() - t);
+        r.destroy();
+      }
+      return { ...stats(times), total_ms: +(performance.now() - t0).toFixed(0) };
+    }
+
+    /** What a hostile or broken page can do, and whether the host copes. */
+    async function hostile() {
+      const send = (body) =>
+        `addEventListener("message",e=>{const m=e.data;if(m&&m.event==="thumbnail"){${body}}});` +
+        `parent.postMessage({folio:1,event:"ready"},"*");`;
+      const cases = {
+        not_a_png: send(
+          `parent.postMessage({folio:1,event:"thumbnail",id:m.id,png:new TextEncoder().encode("<scr"+"ipt>alert(1)</scr"+"ipt>").buffer},"*")`,
+        ),
+        wrong_size: send(
+          `const c=new OffscreenCanvas(64,64);c.getContext("2d").fillRect(0,0,9,9);c.convertToBlob().then(b=>b.arrayBuffer()).then(p=>parent.postMessage({folio:1,event:"thumbnail",id:m.id,png:p},"*"))`,
+        ),
+        huge_answer: send(
+          `parent.postMessage({folio:1,event:"thumbnail",id:m.id,png:new ArrayBuffer(50*1024*1024)},"*")`,
+        ),
+        never_answers: send(``),
+        string_not_bytes: send(
+          `parent.postMessage({folio:1,event:"thumbnail",id:m.id,png:"data:image/png;base64,AAAA"},"*")`,
+        ),
+      };
+      const res = {};
+      for (const [name, js] of Object.entries(cases)) {
+        const r = new Renderer(js);
+        const t = performance.now();
+        try {
+          await r.render(1, "/data/1");
+          res[name] = "ACCEPTED (bad)";
+        } catch (e) {
+          res[name] = `${e.message} after ${Math.round(performance.now() - t)} ms`;
+        }
+        r.destroy();
+      }
+      return res;
+    }
+
+    /** A page that spins: does it freeze Folio's own window, and does removing the frame stop it? */
+    async function spin() {
+      let last = performance.now(),
+        worst = 0,
+        running = true;
+      const tick = () => {
+        const now = performance.now();
+        worst = Math.max(worst, now - last);
+        last = now;
+        if (running) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+      await new Promise((r) => setTimeout(r, 300));
+      const base = worst;
+      worst = 0;
+      const r = new Renderer(
+        `addEventListener("message",e=>{if(e.data&&e.data.event==="thumbnail"){const t=Date.now();while(Date.now()-t<6000);}});` +
+          `parent.postMessage({folio:1,event:"ready"},"*");`,
+      );
+      const t = performance.now();
+      let outcome;
+      try {
+        await r.render(1, "/data/1");
+        outcome = "ACCEPTED (bad)";
+      } catch (e) {
+        outcome = e.message;
+      }
+      const gaveUpAfter = Math.round(performance.now() - t);
+      r.destroy(); // the host's only way to stop it
+      await new Promise((res) => setTimeout(res, 7000));
+      running = false;
+      return {
+        idle_worst_frame_gap_ms: Math.round(base),
+        spin_worst_frame_gap_ms: Math.round(worst),
+        outcome,
+        gaveUpAfter_ms: gaveUpAfter,
+      };
+    }
+
+    (async () => {
+      out("env", { ua: navigator.userAgent, cores: navigator.hardwareConcurrency });
+      const serial = await persistent(200, 1);
+      out("persistent_frame_1_in_flight", { ...serial, kept: undefined });
+      const piped = await persistent(200, 5);
+      out("persistent_frame_5_in_flight", { ...piped, kept: undefined });
+      out("frame_per_file_50", await perFile(50));
+      out("hostile_pages", await hostile());
+      if (serial.kept) {
+        const img = new Image();
+        img.src = URL.createObjectURL(new Blob([serial.kept], { type: "image/png" }));
+        img.style.cssText = "border:1px solid #888;width:112px;height:144px";
+        document.getElementById("shots").append(img);
+      }
+      out("spinning_page", await spin());
+      out("done", true);
+    })();
+  </script>
+</body>
